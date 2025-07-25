@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎵 Intelligent Song Search</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://sdk.scdn.co/spotify-player.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header with Search Bar and Controls -->
+        <header class="search-header">
+            <div class="header-content">
+                <h1 class="app-title">🎵 Intelligent Song Search</h1>
+                
+                <!-- Search Configuration Row -->
+                <div class="search-config">
+                    <select id="search-type" class="config-dropdown">
+                        <option value="text">Text-to-Song</option>
+                        <option value="song">Song-to-Song</option>
+                    </select>
+                    
+                    <select id="embed-type" class="config-dropdown">
+                        <option value="full_profile">Full Profile</option>
+                        <option value="sound_aspect">Sound Aspect</option>
+                        <option value="meaning_aspect">Meaning Aspect</option>
+                        <option value="mood_aspect">Mood Aspect</option>
+                        <option value="tags_genres">Tags + Genres</option>
+                    </select>
+                </div>
+                
+                <!-- Search Bar -->
+                <div class="search-container">
+                    <input type="text" id="search-input" class="search-input" 
+                           placeholder="🔍 Search for music... (e.g., 'energetic dance pop', 'Billie Eilish', 'melancholic ballad')">
+                    <button id="search-btn" class="search-btn">Search</button>
+                </div>
+                
+                <!-- Suggestions Dropdown (for song-to-song search) -->
+                <div id="suggestions" class="suggestions-container" style="display: none;"></div>
+                
+                <!-- Auth Status -->
+                <div class="auth-status">
+                    <span id="auth-indicator" class="auth-indicator">○</span>
+                    <span id="auth-text">Not connected to Spotify</span>
+                    <button id="login-btn" class="login-btn" style="display: none;">Login to Spotify</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Query Song Card (only for song-to-song search) -->
+            <section id="query-section" class="query-section" style="display: none;">
+                <h2 class="section-title">🎯 Query Song</h2>
+                <div id="query-card" class="song-card query-card"></div>
+            </section>
+            
+            <!-- Search Results -->
+            <section id="results-section" class="results-section">
+                <div id="results-header" class="results-header" style="display: none;">
+                    <h2 class="section-title">🎵 Similar Songs</h2>
+                    <div class="results-info">
+                        <span id="results-count"></span>
+                        <span id="search-info"></span>
+                    </div>
+                </div>
+                
+                <div id="results-container" class="results-container">
+                    <!-- Welcome message -->
+                    <div id="welcome-message" class="welcome-message">
+                        <div class="welcome-content">
+                            <h3>Welcome to Intelligent Song Search! 🎵</h3>
+                            <p>Discover music through AI-powered similarity search:</p>
+                            <ul>
+                                <li><strong>Text-to-Song:</strong> Search with natural language (e.g., "upbeat dance pop", "melancholic indie")</li>
+                                <li><strong>Song-to-Song:</strong> Find songs similar to ones you know and love</li>
+                            </ul>
+                            <p>Choose your search type above and start exploring!</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Results will be populated here -->
+                    <div id="results-grid" class="results-grid"></div>
+                    
+                    <!-- Load More Button -->
+                    <div id="load-more-container" class="load-more-container" style="display: none;">
+                        <button id="load-more-btn" class="load-more-btn">Load More Results</button>
+                    </div>
+                </div>
+                
+                <!-- Loading indicator -->
+                <div id="loading" class="loading" style="display: none;">
+                    <div class="loading-spinner"></div>
+                    <p>Searching for similar songs...</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Spotify Web Player (Fixed at Bottom) -->
+        <footer class="player-footer">
+            <div id="spotify-player" class="spotify-player">
+                <!-- Player will be initialized here -->
+                <div class="player-content">
+                    <div class="track-info">
+                        <img id="player-cover" class="player-cover" src="" alt="Album Cover">
+                        <div class="track-details">
+                            <div id="player-title" class="player-title">No track selected</div>
+                            <div id="player-artist" class="player-artist">Connect to Spotify to play music</div>
+                        </div>
+                    </div>
+                    
+                    <div class="player-controls">
+                        <button id="prev-btn" class="control-btn">⏮</button>
+                        <button id="play-btn" class="control-btn play-btn">▶</button>
+                        <button id="next-btn" class="control-btn">⏭</button>
+                    </div>
+                    
+                    <div class="progress-container">
+                        <span id="current-time" class="time-label">0:00</span>
+                        <div class="progress-bar-container">
+                            <div id="progress-bar" class="progress-bar">
+                                <div id="progress-filled" class="progress-filled"></div>
+                            </div>
+                        </div>
+                        <span id="total-time" class="time-label">0:00</span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html> 
