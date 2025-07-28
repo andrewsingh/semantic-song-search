@@ -45,6 +45,7 @@
                     <span id="auth-indicator" class="auth-indicator">○</span>
                     <span id="auth-text">Not connected to Spotify</span>
                     <button id="login-btn" class="login-btn" style="display: none;">Login to Spotify</button>
+                    <button id="logout-btn" class="logout-btn" style="display: none;">Logout</button>
                 </div>
             </div>
         </header>
@@ -55,6 +56,36 @@
             <section id="query-section" class="query-section" style="display: none;">
                 <h2 class="section-title">🎯 Query Song</h2>
                 <div id="query-card" class="song-card query-card"></div>
+            </section>
+            
+            <!-- Export to Playlist Accordion -->
+            <section id="export-section" class="export-section" style="display: none;">
+                <div class="export-accordion">
+                    <button class="export-accordion-header" id="export-accordion-btn">
+                        <span class="export-accordion-title">📋 Export to Playlist</span>
+                        <span class="export-accordion-icon">▼</span>
+                    </button>
+                    <div class="export-accordion-content" id="export-accordion-content">
+                        <div class="export-form">
+                            <div class="export-field">
+                                <label for="playlist-name" class="export-label">Playlist Name:</label>
+                                <input type="text" id="playlist-name" class="export-input" 
+                                       placeholder="My Intelligent Search Playlist" 
+                                       value="Intelligent Song Search">
+                            </div>
+                            <div class="export-field">
+                                <label for="song-count" class="export-label">Number of Songs:</label>
+                                <input type="number" id="song-count" class="export-input" 
+                                       min="1" max="100" value="10">
+                            </div>
+                            <button id="export-btn" class="export-button">
+                                <span class="export-button-text">Create Playlist</span>
+                                <span class="export-button-loading" style="display: none;">Creating...</span>
+                            </button>
+                        </div>
+                        <div id="export-status" class="export-status" style="display: none;"></div>
+                    </div>
+                </div>
             </section>
             
             <!-- Search Results -->

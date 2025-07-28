@@ -89,7 +89,7 @@ Session(app)
 # Spotify configuration
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET') 
-SPOTIFY_SCOPES = "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state"
+SPOTIFY_SCOPES = "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-modify-public playlist-modify-private"
 
 # Validate required environment variables
 if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
@@ -400,6 +400,13 @@ def callback():
     session['token_info'] = token_info
     return redirect(url_for('index'))
 
+@app.route('/logout')
+def logout():
+    """Clear Spotify session."""
+    session.pop('token_info', None)
+    logger.info("User logged out, session cleared")
+    return redirect(url_for('index'))
+
 @app.route('/api/search_suggestions')
 def search_suggestions():
     """Get song suggestions for song-to-song search."""
@@ -549,6 +556,103 @@ def get_song():
         'meaning': song.get('meaning', ''),
         'mood': song.get('mood', '')
     })
+
+@app.route('/api/create_playlist', methods=['POST'])
+def create_playlist():
+    """Create a Spotify playlist with selected songs."""
+    token_info = session.get('token_info')
+    if not token_info:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check if token is expired and refresh if needed
+    sp_oauth = get_spotify_oauth()
+    if sp_oauth.is_token_expired(token_info):
+        try:
+            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+            session['token_info'] = token_info
+        except Exception as e:
+            logger.error(f"Failed to refresh Spotify token: {e}")
+            return jsonify({'error': 'Token refresh failed, please re-authenticate'}), 401
+    
+    try:
+        # Get request data
+        data = request.json
+        playlist_name = data.get('playlist_name', 'Intelligent Song Search Playlist')
+        song_count = data.get('song_count', 10)
+        song_spotify_ids = data.get('song_spotify_ids', [])
+        
+        # Validate inputs
+        if not playlist_name.strip():
+            return jsonify({'error': 'Playlist name cannot be empty'}), 400
+        
+        if song_count <= 0 or song_count > 100:
+            return jsonify({'error': 'Song count must be between 1 and 100'}), 400
+        
+        if not song_spotify_ids:
+            return jsonify({'error': 'No songs provided'}), 400
+        
+        # Limit songs to the requested count
+        songs_to_add = song_spotify_ids[:song_count]
+        
+        # Filter out invalid Spotify IDs
+        valid_songs = [song_id for song_id in songs_to_add if song_id and song_id.strip()]
+        
+        if not valid_songs:
+            return jsonify({'error': 'No valid Spotify track IDs provided'}), 400
+        
+        # Create Spotify client
+        sp = spotipy.Spotify(auth=token_info['access_token'])
+        
+        # Get current user info
+        user_info = sp.current_user()
+        user_id = user_info['id']
+        
+        # Create playlist
+        playlist = sp.user_playlist_create(
+            user=user_id,
+            name=playlist_name.strip(),
+            public=False,  # Create as private by default
+            description=f"Created by Intelligent Song Search - {len(valid_songs)} tracks"
+        )
+        
+        # Add tracks to playlist
+        # Convert track IDs to Spotify URIs
+        track_uris = [f"spotify:track:{track_id}" for track_id in valid_songs]
+        
+        # Add tracks in batches (Spotify API limit is 100 tracks per request)
+        batch_size = 100
+        for i in range(0, len(track_uris), batch_size):
+            batch = track_uris[i:i + batch_size]
+            sp.playlist_add_items(playlist['id'], batch)
+        
+        logger.info(f"Created playlist '{playlist_name}' with {len(valid_songs)} tracks")
+        
+        return jsonify({
+            'success': True,
+            'playlist_id': playlist['id'],
+            'playlist_url': playlist['external_urls']['spotify'],
+            'playlist_name': playlist['name'],
+            'track_count': len(valid_songs)
+        })
+        
+    except spotipy.exceptions.SpotifyException as e:
+        logger.error(f"Spotify API error: {e}")
+        if e.http_status == 401:
+            return jsonify({'error': 'Spotify authentication expired, please login again'}), 401
+        elif e.http_status == 403:
+            # Check if it's a scope/permission issue
+            error_msg = str(e).lower()
+            if 'scope' in error_msg or 'insufficient' in error_msg:
+                logger.info("Clearing session due to insufficient permissions")
+                session.pop('token_info', None)  # Clear the invalid session
+                return jsonify({'error': 'Insufficient permissions to create playlists. Please re-authenticate to grant playlist creation access.'}), 403
+            else:
+                return jsonify({'error': f'Access denied: {e.msg}'}), 403
+        else:
+            return jsonify({'error': f'Spotify API error: {e.msg}'}), 500
+    except Exception as e:
+        logger.error(f"Failed to create playlist: {e}")
+        return jsonify({'error': 'Failed to create playlist'}), 500
 
 @app.route('/api/token')
 def get_token():

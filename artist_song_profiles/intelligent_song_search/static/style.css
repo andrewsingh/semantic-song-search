@@ -202,8 +202,7 @@ body {
     color: #1DB954;
 }
 
-.login-btn {
-    background: #1DB954;
+.login-btn, .logout-btn {
     border: none;
     border-radius: 20px;
     padding: 0.5rem 1rem;
@@ -211,10 +210,23 @@ body {
     font-size: 0.85rem;
     cursor: pointer;
     transition: background 0.3s ease;
+    margin-left: 0.5rem;
+}
+
+.login-btn {
+    background: #1DB954;
+}
+
+.logout-btn {
+    background: #666;
 }
 
 .login-btn:hover {
     background: #1ed760;
+}
+
+.logout-btn:hover {
+    background: #888;
 }
 
 /* Main Content */
@@ -241,6 +253,146 @@ body {
 .query-card {
     border: 2px solid #1DB954;
     box-shadow: 0 4px 20px rgba(29, 185, 84, 0.2);
+}
+
+/* Export to Playlist Section */
+.export-section {
+    margin-bottom: 2rem;
+}
+
+.export-accordion {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(29, 185, 84, 0.2);
+    border-radius: 12px;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.export-accordion:hover {
+    border-color: rgba(29, 185, 84, 0.4);
+}
+
+.export-accordion-header {
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 1rem 1.5rem;
+    color: #eaeaea;
+    font-size: 1rem;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.export-accordion-header:hover {
+    background: rgba(29, 185, 84, 0.1);
+}
+
+.export-accordion-icon {
+    transition: transform 0.3s ease;
+    font-size: 0.8rem;
+}
+
+.export-accordion.expanded .export-accordion-icon {
+    transform: rotate(180deg);
+}
+
+.export-accordion-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+
+.export-accordion.expanded .export-accordion-content {
+    max-height: 500px;
+}
+
+.export-form {
+    padding: 1.5rem;
+    border-top: 1px solid rgba(29, 185, 84, 0.2);
+}
+
+.export-field {
+    margin-bottom: 1.5rem;
+}
+
+.export-label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: #eaeaea;
+    font-size: 0.9rem;
+}
+
+.export-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(29, 185, 84, 0.3);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: #eaeaea;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+}
+
+.export-input:focus {
+    outline: none;
+    border-color: #1DB954;
+    box-shadow: 0 0 0 3px rgba(29, 185, 84, 0.2);
+}
+
+.export-button {
+    background: linear-gradient(135deg, #1DB954, #1ed760);
+    border: none;
+    border-radius: 8px;
+    padding: 0.75rem 1.5rem;
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    min-width: 140px;
+}
+
+.export-button:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(29, 185, 84, 0.4);
+}
+
+.export-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.export-status {
+    margin-top: 1rem;
+    padding: 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.export-status.success {
+    background: rgba(29, 185, 84, 0.2);
+    border: 1px solid rgba(29, 185, 84, 0.4);
+    color: #1ed760;
+}
+
+.export-status.error {
+    background: rgba(220, 38, 127, 0.2);
+    border: 1px solid rgba(220, 38, 127, 0.4);
+    color: #ff6b9d;
+}
+
+.export-status.info {
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: #60a5fa;
 }
 
 /* Results Section */

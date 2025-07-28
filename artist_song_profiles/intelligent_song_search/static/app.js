@@ -73,6 +73,11 @@ class IntelligentSearchApp {
             window.location.href = '/login';
         });
         
+        // Logout button
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            window.location.href = '/logout';
+        });
+        
         // Player controls
         document.getElementById('play-btn').addEventListener('click', () => {
             this.togglePlayback();
@@ -94,6 +99,16 @@ class IntelligentSearchApp {
         // Auto-play toggle
         document.getElementById('autoplay-toggle').addEventListener('click', () => {
             this.toggleAutoPlay();
+        });
+        
+        // Export accordion toggle
+        document.getElementById('export-accordion-btn').addEventListener('click', () => {
+            this.toggleExportAccordion();
+        });
+        
+        // Export button
+        document.getElementById('export-btn').addEventListener('click', () => {
+            this.exportToPlaylist();
         });
         
         // Load more button
@@ -319,7 +334,15 @@ class IntelligentSearchApp {
                 </div>
             `;
             loadMoreContainer.style.display = 'none';
+            document.getElementById('export-section').style.display = 'none';
             return;
+        }
+        
+        // Show export section when results are available (only for new searches)
+        if (!isLoadMore && this.totalResultsCount > 0) {
+            document.getElementById('export-section').style.display = 'block';
+            // Update the song count input placeholder to show available results
+            this.updateSongCountHint();
         }
         
         // Add new results to the grid  
@@ -357,6 +380,12 @@ class IntelligentSearchApp {
         
         // Update load more button visibility
         this.updateLoadMoreButton();
+        
+        // Update song count hint if export section is visible
+        const exportSection = document.getElementById('export-section');
+        if (exportSection && exportSection.style.display !== 'none') {
+            this.updateSongCountHint();
+        }
     }
     
     updateLoadMoreButton() {
@@ -561,6 +590,15 @@ class IntelligentSearchApp {
         document.getElementById('results-grid').innerHTML = '';
         document.getElementById('load-more-container').style.display = 'none';
         document.getElementById('welcome-message').style.display = 'block';
+        document.getElementById('export-section').style.display = 'none';
+        
+        // Reset export accordion state
+        const accordion = document.querySelector('.export-accordion');
+        if (accordion) {
+            accordion.classList.remove('expanded');
+        }
+        this.hideExportStatus();
+        
         this.currentQuerySong = null;
         this.searchResults = [];
         this.currentSearchData = null;
@@ -638,17 +676,20 @@ class IntelligentSearchApp {
         const indicator = document.getElementById('auth-indicator');
         const text = document.getElementById('auth-text');
         const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
         
         if (isAuthenticated) {
             indicator.textContent = '●';
             indicator.className = 'auth-indicator connected';
             text.textContent = 'Connected to Spotify';
             loginBtn.style.display = 'none';
+            logoutBtn.style.display = 'inline-block';
         } else {
             indicator.textContent = '○';
             indicator.className = 'auth-indicator';
             text.textContent = 'Not connected to Spotify';
             loginBtn.style.display = 'inline-block';
+            logoutBtn.style.display = 'none';
         }
     }
     
@@ -1252,6 +1293,278 @@ class IntelligentSearchApp {
             autoPlayBtn.classList.remove('active');
             autoPlayBtn.title = 'Auto-play disabled - Click to enable';
             autoPlayBtn.style.opacity = '0.5';
+        }
+    }
+    
+    toggleExportAccordion() {
+        const accordion = document.querySelector('.export-accordion');
+        const content = document.getElementById('export-accordion-content');
+        const icon = document.querySelector('.export-accordion-icon');
+        
+        accordion.classList.toggle('expanded');
+        
+        if (accordion.classList.contains('expanded')) {
+            console.log('🎵 Export accordion expanded');
+            
+            // Check if user is authenticated when opening accordion
+            if (!this.accessToken) {
+                this.showExportStatus(
+                    'Please <a href="/login" style="color: #1ed760; text-decoration: underline;">login to Spotify</a> to export playlists.',
+                    'error'
+                );
+            } else {
+                // Clear any previous status messages
+                this.hideExportStatus();
+            }
+        } else {
+            console.log('🎵 Export accordion collapsed');
+            // Hide status when closing accordion
+            this.hideExportStatus();
+        }
+    }
+    
+    async exportToPlaylist() {
+        const playlistNameInput = document.getElementById('playlist-name');
+        const songCountInput = document.getElementById('song-count');
+        const exportBtn = document.getElementById('export-btn');
+        const exportStatus = document.getElementById('export-status');
+        const exportButtonText = document.querySelector('.export-button-text');
+        const exportButtonLoading = document.querySelector('.export-button-loading');
+        
+        // Get input values
+        const playlistName = playlistNameInput.value.trim();
+        const songCount = parseInt(songCountInput.value);
+        
+        // Validate inputs
+        if (!playlistName) {
+            this.showExportStatus('Please enter a playlist name.', 'error');
+            return;
+        }
+        
+        if (isNaN(songCount) || songCount < 1 || songCount > 100) {
+            this.showExportStatus('Number of songs must be between 1 and 100.', 'error');
+            return;
+        }
+        
+        // Additional check for extremely large requests when auto-loading is involved
+        if (songCount > this.searchResults.length && songCount > 50 && this.hasMoreResults) {
+            const proceed = confirm(
+                `You requested ${songCount} songs but only ${this.searchResults.length} are currently loaded.\n\n` +
+                `This will automatically load more results, which may take some time.\n\n` +
+                `Continue with auto-loading?`
+            );
+            if (!proceed) {
+                return;
+            }
+        }
+        
+        if (!this.searchResults || this.searchResults.length === 0) {
+            this.showExportStatus('No search results available to export.', 'error');
+            return;
+        }
+        
+        // Check authentication
+        if (!this.accessToken) {
+            console.log('🎵 No access token available for export');
+            this.showExportStatus('Please <a href="/login" style="color: #1ed760; text-decoration: underline;">login to Spotify</a> first.', 'error');
+            return;
+        }
+        
+        console.log('🎵 Access token available, proceeding with export');
+        
+        // Check if we need to load more results
+        if (songCount > this.searchResults.length && this.hasMoreResults) {
+            console.log(`🎵 Requested ${songCount} songs but only have ${this.searchResults.length}. Auto-loading more results...`);
+            
+            // Show loading message
+            this.showExportStatus(`Loading more results to reach ${songCount} songs...`, 'info');
+            
+            // Auto-load more results until we have enough
+            await this.autoLoadMoreForExport(songCount);
+        }
+        
+        // Prepare song IDs for export
+        const songsToExport = this.searchResults.slice(0, songCount);
+        const spotifyIds = songsToExport
+            .map(song => song.spotify_id)
+            .filter(id => id && id.trim()); // Filter out empty/null IDs
+        
+        if (spotifyIds.length === 0) {
+            this.showExportStatus('No valid Spotify tracks found in search results.', 'error');
+            return;
+        }
+        
+        if (spotifyIds.length < songCount) {
+            console.warn(`🎵 Only ${spotifyIds.length} of ${songCount} songs have valid Spotify IDs`);
+            if (spotifyIds.length < this.searchResults.length) {
+                this.showExportStatus(
+                    `Note: Only ${spotifyIds.length} of the first ${songCount} songs have valid Spotify IDs. ` +
+                    `Proceeding with ${spotifyIds.length} tracks.`,
+                    'info'
+                );
+                // Brief pause to show the info message
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        }
+        
+        // Show loading state
+        exportBtn.disabled = true;
+        exportButtonText.style.display = 'none';
+        exportButtonLoading.style.display = 'inline';
+        this.hideExportStatus();
+        
+        try {
+            console.log(`🎵 Creating playlist "${playlistName}" with ${spotifyIds.length} songs`);
+            
+            // Create AbortController for timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+            
+            const response = await fetch('/api/create_playlist', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    playlist_name: playlistName,
+                    song_count: songCount,
+                    song_spotify_ids: spotifyIds
+                }),
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            const data = await response.json();
+            
+            if (response.ok && data.success) {
+                const requestedText = data.track_count < songCount ? 
+                    ` (${songCount} requested)` : '';
+                const message = `
+                    ✅ Playlist created successfully!<br>
+                    <strong>${data.playlist_name}</strong><br>
+                    ${data.track_count} tracks added${requestedText}<br>
+                    <a href="${data.playlist_url}" target="_blank" style="color: #1ed760; text-decoration: underline; font-weight: bold;">
+                        🎵 Open in Spotify ↗
+                    </a>
+                `;
+                this.showExportStatus(message, 'success');
+                console.log('🎵 Playlist created:', data);
+            } else {
+                // Handle specific error cases
+                if (response.status === 403 && data.error && 
+                    (data.error.includes('permissions') || data.error.includes('Insufficient'))) {
+                    // Clear the access token and prompt for re-authentication
+                    console.log('🎵 Insufficient permissions detected, clearing auth state');
+                    this.accessToken = null;
+                    this.updateAuthStatus(false);
+                    
+                    // Re-check auth status since backend may have cleared session
+                    setTimeout(() => this.checkAuthStatus(), 1000);
+                    
+                    this.showExportStatus(
+                        '🔐 Playlist creation requires additional permissions.<br>' +
+                        'Your current login doesn\'t have playlist creation access.<br>' +
+                        '<strong>The session has been cleared.</strong><br>' +
+                        '<a href="/login" style="color: #1ed760; text-decoration: underline; font-weight: bold;">Click here to re-authenticate</a> ' +
+                        'with playlist permissions.',
+                        'error'
+                    );
+                    return;
+                } else if (response.status === 401) {
+                    // Token expired or invalid
+                    this.accessToken = null;
+                    this.updateAuthStatus(false);
+                    this.showExportStatus(
+                        'Your Spotify session has expired. Please <a href="/login" style="color: #1ed760; text-decoration: underline;">login again</a>.',
+                        'error'
+                    );
+                    return;
+                }
+                throw new Error(data.error || 'Failed to create playlist');
+            }
+            
+        } catch (error) {
+            console.error('🎵 Export error:', error);
+            
+            let errorMessage = 'Failed to create playlist. Please try again.';
+            if (error.name === 'AbortError') {
+                errorMessage = 'Request timed out. Please check your connection and try again.';
+            } else if (error.message) {
+                errorMessage = error.message;
+            }
+            
+            this.showExportStatus(errorMessage, 'error');
+        } finally {
+            // Reset button state
+            exportBtn.disabled = false;
+            exportButtonText.style.display = 'inline';
+            exportButtonLoading.style.display = 'none';
+        }
+    }
+    
+    showExportStatus(message, type) {
+        const exportStatus = document.getElementById('export-status');
+        exportStatus.innerHTML = message;
+        exportStatus.className = `export-status ${type}`;
+        exportStatus.style.display = 'block';
+        
+        // Auto-hide success messages after 10 seconds
+        if (type === 'success') {
+            setTimeout(() => {
+                this.hideExportStatus();
+            }, 10000);
+        }
+    }
+    
+    hideExportStatus() {
+        const exportStatus = document.getElementById('export-status');
+        exportStatus.style.display = 'none';
+    }
+    
+    async autoLoadMoreForExport(targetCount) {
+        // Keep loading more results until we have enough songs or no more results available
+        while (this.searchResults.length < targetCount && this.hasMoreResults) {
+            console.log(`🎵 Auto-loading more results: have ${this.searchResults.length}, need ${targetCount}`);
+            
+            try {
+                await this.loadMoreResults();
+                // Update the hint after loading more results
+                this.updateSongCountHint();
+                // Brief pause to prevent overwhelming the server
+                await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (error) {
+                console.error('🎵 Failed to auto-load more results:', error);
+                break;
+            }
+        }
+        
+        if (this.searchResults.length < targetCount && !this.hasMoreResults) {
+            console.log(`🎵 Reached end of results: have ${this.searchResults.length}, requested ${targetCount}`);
+            this.showExportStatus(
+                `Only ${this.searchResults.length} songs available in total. Proceeding with all available songs.`,
+                'info'
+            );
+            // Brief pause to show the info message
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        } else {
+            console.log(`🎵 Successfully loaded ${this.searchResults.length} results for export`);
+        }
+    }
+    
+    updateSongCountHint() {
+        const songCountInput = document.getElementById('song-count');
+        if (songCountInput) {
+            const availableText = this.hasMoreResults ? 
+                `${this.searchResults.length} loaded, ${this.totalResultsCount} total` :
+                `${this.searchResults.length} available`;
+            songCountInput.title = `Currently ${availableText}`;
+            
+            // Update placeholder text
+            const label = document.querySelector('label[for="song-count"]');
+            if (label) {
+                label.textContent = `Number of Songs (${availableText}):`;
+            }
         }
     }
 }
