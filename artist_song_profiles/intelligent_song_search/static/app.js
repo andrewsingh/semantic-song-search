@@ -292,12 +292,27 @@ class IntelligentSearchApp {
             card.dataset.spotifyId = song.spotify_id; // Set the spotify ID for the updatePlayingCards function
             card.innerHTML = this.createSongCardHTML(song, { 
                 rank: startIndex + index + 1, 
-                similarity: song.similarity 
+                similarity: song.similarity,
+                fieldValue: song.field_value,
+                embedType: data.embed_type
             });
             
-            card.addEventListener('click', () => {
-                this.playSong(song);
+            // Add click listener for playing song (but not on accordion elements)
+            card.addEventListener('click', (e) => {
+                // Don't play song if clicking on accordion elements
+                if (!e.target.closest('.card-accordion')) {
+                    this.playSong(song);
+                }
             });
+            
+            // Add accordion toggle functionality
+            const accordionToggle = card.querySelector('.accordion-toggle');
+            if (accordionToggle) {
+                accordionToggle.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent song play when clicking accordion
+                    this.toggleAccordion(accordionToggle);
+                });
+            }
             
             resultsGrid.appendChild(card);
         });
@@ -324,7 +339,7 @@ class IntelligentSearchApp {
     }
     
     createSongCardHTML(song, options = {}) {
-        const { rank, similarity, isQuery = false } = options;
+        const { rank, similarity, isQuery = false, fieldValue = null, embedType = null } = options;
         
         let metadataHTML = '';
         if (rank && similarity !== undefined) {
@@ -346,6 +361,27 @@ class IntelligentSearchApp {
             `;
         }
         
+        // Accordion content based on embedding type
+        let accordionHTML = '';
+        if (fieldValue !== null && fieldValue !== undefined && embedType && !isQuery) {
+            const accordionContent = this.formatFieldValueForDisplay(fieldValue, embedType);
+            const accordionTitle = this.getAccordionTitle(embedType);
+            
+            accordionHTML = `
+                <div class="card-accordion">
+                    <button class="accordion-toggle" aria-expanded="false">
+                        <span class="accordion-title">${accordionTitle}</span>
+                        <span class="accordion-icon">▼</span>
+                    </button>
+                    <div class="accordion-content">
+                        <div class="accordion-content-inner">
+                            ${accordionContent}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
         return `
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
@@ -357,7 +393,115 @@ class IntelligentSearchApp {
             </div>
             ${metadataHTML}
             ${tagsHTML}
+            ${accordionHTML}
         `;
+    }
+    
+    formatFieldValueForDisplay(fieldValue, embedType) {
+        /**
+         * Format field value content for accordion display based on embedding type
+         */
+        // Handle null/undefined values
+        if (fieldValue === null || fieldValue === undefined) {
+            return '<div class="generic-content"><em>No content available</em></div>';
+        }
+        
+        const escapedValue = escapeHtml(String(fieldValue)); // Ensure it's a string
+        
+        switch (embedType) {
+            case 'full_profile':
+                // Format the full profile with proper line breaks and structure
+                return `<div class="profile-content">${escapedValue.replace(/\n/g, '<br>')}</div>`;
+                
+            case 'sound_aspect':
+                return `<div class="aspect-content sound-aspect">${escapedValue}</div>`;
+                
+            case 'meaning_aspect':
+                return `<div class="aspect-content meaning-aspect">${escapedValue}</div>`;
+                
+            case 'mood_aspect':
+                return `<div class="aspect-content mood-aspect">${escapedValue}</div>`;
+                
+            case 'tags_genres':
+                // Display tags and genres as a nicely formatted list
+                // Handle empty or invalid strings gracefully
+                if (!fieldValue || typeof fieldValue !== 'string') {
+                    return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
+                }
+                
+                const items = String(fieldValue).split(',').map(item => item.trim()).filter(item => item);
+                
+                if (items.length === 0) {
+                    return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
+                }
+                
+                return `
+                    <div class="tags-genres-content">
+                        ${items.map(item => `<span class="tag-genre-item">${escapeHtml(item)}</span>`).join('')}
+                    </div>
+                `;
+                
+            default:
+                return `<div class="generic-content">${escapedValue}</div>`;
+        }
+    }
+    
+    getAccordionTitle(embedType) {
+        /**
+         * Get display title for accordion based on embedding type
+         */
+        switch (embedType) {
+            case 'full_profile':
+                return 'Full Profile';
+            case 'sound_aspect':
+                return 'Sound Description';
+            case 'meaning_aspect':
+                return 'Meaning & Lyrics';
+            case 'mood_aspect':
+                return 'Mood & Feeling';
+            case 'tags_genres':
+                return 'All Tags & Genres';
+            default:
+                return 'Details';
+        }
+    }
+    
+    toggleAccordion(toggleButton) {
+        /**
+         * Toggle accordion open/closed state
+         */
+        if (!toggleButton) {
+            console.error('toggleAccordion: toggleButton is null');
+            return;
+        }
+        
+        const isExpanded = toggleButton.getAttribute('aria-expanded') === 'true';
+        const accordionContent = toggleButton.nextElementSibling;
+        const accordionIcon = toggleButton.querySelector('.accordion-icon');
+        
+        if (!accordionContent) {
+            console.error('toggleAccordion: accordionContent not found');
+            return;
+        }
+        
+        if (!accordionIcon) {
+            console.error('toggleAccordion: accordionIcon not found');
+            return;
+        }
+        
+        if (isExpanded) {
+            // Collapse
+            toggleButton.setAttribute('aria-expanded', 'false');
+            accordionContent.style.maxHeight = '0px';
+            accordionIcon.textContent = '▼';
+            toggleButton.classList.remove('expanded');
+        } else {
+            // Expand
+            toggleButton.setAttribute('aria-expanded', 'true');
+            accordionContent.style.maxHeight = accordionContent.scrollHeight + 'px';
+            accordionIcon.textContent = '▲';
+            toggleButton.classList.add('expanded');
+        }
     }
     
     showLoading(show) {

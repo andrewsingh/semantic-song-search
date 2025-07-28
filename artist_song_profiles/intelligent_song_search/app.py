@@ -137,6 +137,13 @@ class MusicSearchEngine:
         logger.info("Loading embeddings...")
         self.embeddings_data = np.load(self.embeddings_file, allow_pickle=True)
         logger.info(f"Loaded {len(self.embeddings_data['embeddings'])} embeddings")
+        
+        # Check if field_values exists (for backwards compatibility)
+        if 'field_values' not in self.embeddings_data:
+            logger.warning("Embeddings file does not contain field_values - accordion functionality will be disabled")
+            # Create placeholder field_values array
+            self.embeddings_data = dict(self.embeddings_data)  # Convert to regular dict for modification
+            self.embeddings_data['field_values'] = np.array(['N/A'] * len(self.embeddings_data['embeddings']), dtype=object)
     
     def _build_indices(self):
         """Build indices for each embedding type."""
@@ -272,11 +279,12 @@ class MusicSearchEngine:
             logger.error(f"Error getting text embedding: {e}")
             raise
     
-    def similarity_search(self, query_embedding: np.ndarray, embed_type: str, k: int = 20, offset: int = 0) -> Tuple[List[Tuple[int, float]], int]:
+    def similarity_search(self, query_embedding: np.ndarray, embed_type: str, k: int = 20, offset: int = 0) -> Tuple[List[Tuple[int, float, str]], int]:
         """Perform similarity search using cosine similarity.
         
         Returns:
-            Tuple[List[Tuple[int, float]], int]: (paginated_results, total_count)
+            Tuple[List[Tuple[int, float, str]], int]: (paginated_results_with_field_values, total_count)
+            Each result tuple contains: (song_idx, similarity, field_value)
         """
         if embed_type not in self.embedding_indices:
             return [], 0
@@ -284,6 +292,7 @@ class MusicSearchEngine:
         indices = self.embedding_indices[embed_type]
         embeddings = indices['embeddings']
         song_indices = indices['song_indices']
+        field_values = indices['field_values']  # Get the field values for accordion display
         
         # Normalize embeddings for cosine similarity
         query_norm_value = np.linalg.norm(query_embedding)
@@ -313,7 +322,8 @@ class MusicSearchEngine:
         for idx in paginated_indices:
             song_idx = song_indices[idx]
             similarity = similarities[idx]
-            results.append((int(song_idx), float(similarity)))  # Convert both to native Python types
+            field_value = field_values[idx]  # Get the original text that was embedded
+            results.append((int(song_idx), float(similarity), str(field_value)))  # Convert all to native Python types
         
         return results, total_count
 
@@ -464,21 +474,37 @@ def search():
         
         # Format results
         formatted_results = []
-        for result_song_idx, similarity in results:
-            song = search_engine.songs[result_song_idx]
-            metadata = song.get('metadata', {})
-            
-            formatted_results.append({
-                'song_idx': int(result_song_idx),  # Convert numpy.int64 to native Python int
-                'song': song['original_song'],
-                'artist': song['original_artist'],
-                'album': metadata.get('album_name', ''),
-                'cover_url': metadata.get('cover_url', ''),
-                'spotify_id': metadata.get('song_id', ''),
-                'similarity': float(similarity),  # Convert numpy.float64 to native Python float
-                'genres': song.get('genres', []),
-                'tags': song.get('tags', [])
-            })
+        for result in results:
+            try:
+                # Handle both old format (song_idx, similarity) and new format (song_idx, similarity, field_value)
+                if len(result) == 3:
+                    result_song_idx, similarity, field_value = result
+                elif len(result) == 2:
+                    result_song_idx, similarity = result
+                    field_value = "N/A"  # Fallback for backwards compatibility
+                    logger.warning("Old format results detected - using fallback field_value")
+                else:
+                    logger.error(f"Unexpected result format: {result}")
+                    continue
+                    
+                song = search_engine.songs[result_song_idx]
+                metadata = song.get('metadata', {})
+                
+                formatted_results.append({
+                    'song_idx': int(result_song_idx),  # Convert numpy.int64 to native Python int
+                    'song': song['original_song'],
+                    'artist': song['original_artist'],
+                    'album': metadata.get('album_name', ''),
+                    'cover_url': metadata.get('cover_url', ''),
+                    'spotify_id': metadata.get('song_id', ''),
+                    'similarity': float(similarity),  # Convert numpy.float64 to native Python float
+                    'field_value': field_value, # Include the original field value
+                    'genres': song.get('genres', []),
+                    'tags': song.get('tags', [])
+                })
+            except (ValueError, IndexError, KeyError) as e:
+                logger.error(f"Error processing search result {result}: {e}")
+                continue
         
         return jsonify({
             'results': formatted_results,

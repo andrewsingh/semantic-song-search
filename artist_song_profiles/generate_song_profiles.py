@@ -23,7 +23,7 @@ else:
     MAX_CONCURRENCY = 3 # max(5, min(20, int(RATE_LIMIT_RPM / 10)))
 
 MAX_RETRIES      = 3
-RETRY_BACKOFF_SEC = max(1, int(60 / RATE_LIMIT_RPM * 10))  # scales w/ quota
+RETRY_BACKOFF_SEC = max(1, int(60 / RATE_LIMIT_RPM * 2))  # Reduce from *10 to *2
 
 print(f"Rate limit settings: {RATE_LIMIT_RPM} RPM, {MAX_CONCURRENCY} concurrent requests")
 

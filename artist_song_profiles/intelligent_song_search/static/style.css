@@ -418,6 +418,116 @@ body {
     font-size: 0.75rem;
 }
 
+/* Accordion Styles */
+.card-accordion {
+    margin-top: 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.accordion-toggle {
+    width: 100%;
+    background: none;
+    border: none;
+    color: #eaeaea;
+    padding: 0.75rem 0;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.accordion-toggle:hover {
+    color: #1DB954;
+}
+
+.accordion-toggle.expanded {
+    color: #1DB954;
+}
+
+.accordion-title {
+    flex: 1;
+    text-align: left;
+}
+
+.accordion-icon {
+    font-size: 0.8rem;
+    transition: transform 0.3s ease;
+    margin-left: 0.5rem;
+}
+
+.accordion-toggle.expanded .accordion-icon {
+    transform: rotate(180deg);
+}
+
+.accordion-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+
+.accordion-content-inner {
+    padding: 0 0 1rem 0;
+    color: #ccc;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+/* Field Value Content Styling */
+.profile-content {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 1rem;
+    border-radius: 8px;
+    border-left: 3px solid #1DB954;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+}
+
+.aspect-content {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.75rem;
+    border-radius: 8px;
+    border-left: 3px solid #1DB954;
+}
+
+.sound-aspect {
+    border-left-color: #ff6b6b;
+}
+
+.meaning-aspect {
+    border-left-color: #4ecdc4;
+}
+
+.mood-aspect {
+    border-left-color: #ffe66d;
+}
+
+.tags-genres-content {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.tag-genre-item {
+    background: rgba(29, 185, 84, 0.2);
+    color: #1ed760;
+    padding: 0.3rem 0.6rem;
+    border-radius: 15px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid rgba(29, 185, 84, 0.3);
+}
+
+.generic-content {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.75rem;
+    border-radius: 8px;
+    border-left: 3px solid #666;
+}
+
 /* Loading */
 .loading {
     text-align: center;
