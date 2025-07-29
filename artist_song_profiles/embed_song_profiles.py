@@ -51,9 +51,6 @@ print(f"Rate limit settings: {RATE_LIMIT_RPM} RPM, {MAX_CONCURRENCY} concurrent 
 
 def format_full_profile(profile: Dict) -> str:
     """Format a complete song profile for song-to-song search."""
-    song = profile['original_song']
-    artist = profile['original_artist']
-    
     # Format genres and tags as comma-separated strings
     genres_str = ', '.join(profile.get('genres', []))
     tags_str = ', '.join(profile.get('tags', []))
@@ -63,9 +60,7 @@ def format_full_profile(profile: Dict) -> str:
     meaning = profile.get('meaning', 'N/A')
     mood = profile.get('mood', 'N/A')
     
-    return f"""Song: {song}
-Artist: {artist}
-Genres: {genres_str}
+    return f"""Genres: {genres_str}
 Tags: {tags_str}
 Sound:
 {sound}
@@ -77,12 +72,8 @@ Mood:
 
 def format_aspect_embedding(profile: Dict, aspect: str) -> str:
     """Format individual aspect (sound/meaning/mood) for song-to-song search."""
-    song = profile['original_song']
-    artist = profile['original_artist']
     aspect_value = profile.get(aspect, 'N/A')
-    
-    aspect_title = aspect.capitalize()
-    return f'{aspect_title} of "{song}" by {artist}: {aspect_value}'
+    return aspect_value
 
 
 def format_tags_genres(profile: Dict) -> str:
