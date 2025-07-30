@@ -18,7 +18,7 @@ from openai import AsyncOpenAI, RateLimitError, APIError
 from tqdm import tqdm
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
-RATE_LIMIT_RPM   = 2000                 # <-- edit this if your quota changes
+RATE_LIMIT_RPM   = 3000                 # <-- edit this if your quota changes
 SAFETY_FACTOR    = 0.80                 # 20% head-room
 RPS              = RATE_LIMIT_RPM / 60  # requests per second
 MAX_CONCURRENCY  = max(1, int(RPS * SAFETY_FACTOR))
