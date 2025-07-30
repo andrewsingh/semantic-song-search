@@ -8,6 +8,7 @@ import argparse, asyncio, math, time
 from pathlib import Path
 from tqdm import tqdm
 import os
+from song_profile import SongProfile
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
 RATE_LIMIT_RPM   = 50                  # <-- edit this if your quota changes
@@ -20,7 +21,7 @@ if RATE_LIMIT_RPM >= 100:
     MAX_CONCURRENCY = max(1, int(RPS * SAFETY_FACTOR))
 else:
     # For lower rate limits, use a more generous formula
-    MAX_CONCURRENCY = 3 # max(5, min(20, int(RATE_LIMIT_RPM / 10)))
+    MAX_CONCURRENCY = 4 # max(5, min(20, int(RATE_LIMIT_RPM / 10)))
 
 MAX_RETRIES      = 3
 RETRY_BACKOFF_SEC = max(1, int(60 / RATE_LIMIT_RPM * 2))  # Reduce from *10 to *2
@@ -54,16 +55,6 @@ cli_args = parser.parse_args()
 # ─────────────────────────────── PROMPT TEMPLATE ──────────────────────────────
 PROMPT_TEMPLATE = Path(cli_args.prompt).read_text(encoding="utf-8").strip()
 
-# ─────────────────────────────── OUTPUT SCHEMA ──────────────────────────────
-class SongProfile(BaseModel):
-    song: str
-    artist: str
-    familiar: bool
-    genres: List[str] | None
-    sound: str | None
-    meaning: str | None
-    mood: str | None
-    tags: List[str] | None
 
 
 def get_formatted_prompt(song, artist):
