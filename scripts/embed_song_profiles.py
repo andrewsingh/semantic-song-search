@@ -209,8 +209,98 @@ async def process_embedding_task(task_idx: int, song_idx: int, field_type: str, 
     embedding = await get_embedding(text_value)
     return task_idx, embedding
 
-def load_existing_embeddings(output_file: str) -> Tuple[List[Dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Load existing embeddings from file, keeping data as numpy arrays."""
+def load_existing_embeddings(output_base: str) -> Tuple[List[Dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load existing embeddings from separate files by embedding type."""
+    embedding_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+    
+    # Check if we're using old combined format or new separate format
+    output_path = Path(output_base)
+    if output_path.is_file() and output_path.suffix == '.npz':
+        # Old combined format - load as before for backwards compatibility
+        print(f"Detected old combined format, loading from: {output_base}")
+        return load_existing_embeddings_combined(output_base)
+    
+    # New separate format - output_base should be a directory or base name
+    if output_path.is_dir():
+        base_dir = output_path
+        base_name = ""
+    else:
+        base_dir = output_path.parent
+        base_name = output_path.stem + "_"
+    
+    print(f"Loading existing embeddings from separate files in: {base_dir}")
+    
+    all_embeddings = []
+    all_song_indices = []
+    all_field_types = []
+    all_field_values = []
+    songs_metadata = None
+    
+    total_loaded = 0
+    
+    for embed_type in embedding_types:
+        embed_file = base_dir / f"{base_name}{embed_type}_embeddings.npz"
+        
+        if not embed_file.exists():
+            print(f"  {embed_type}: No existing file found ({embed_file.name})")
+            continue
+            
+        try:
+            # Check file size
+            file_size = embed_file.stat().st_size
+            file_size_mb = file_size / (1024 * 1024)
+            print(f"  {embed_type}: Loading {file_size_mb:.1f}MB...")
+            
+            data = np.load(embed_file, allow_pickle=True)
+            
+            # Load songs metadata from first file (should be consistent across all files)
+            if songs_metadata is None:
+                songs_metadata = [
+                    {'song': data['songs'][i], 'artist': data['artists'][i]} 
+                    for i in range(len(data['songs']))
+                ]
+                print(f"  Loaded metadata for {len(songs_metadata)} songs")
+            
+            # Load embeddings for this type
+            embeddings = data['embeddings'].astype(np.float32)
+            song_indices = data['song_indices'].astype(int)
+            field_values = data['field_values']
+            
+            # Create field_types array for this embedding type
+            field_types = np.array([embed_type] * len(embeddings), dtype=object)
+            
+            all_embeddings.append(embeddings)
+            all_song_indices.append(song_indices)
+            all_field_types.append(field_types)
+            all_field_values.append(field_values)
+            
+            total_loaded += len(embeddings)
+            print(f"  {embed_type}: Loaded {len(embeddings)} embeddings")
+            
+        except Exception as e:
+            print(f"  {embed_type}: Warning - Could not load ({e})")
+            continue
+    
+    if total_loaded == 0:
+        print("No existing embeddings found, starting fresh...")
+        empty_embeddings = np.empty((0, 3072), dtype=np.float32)
+        empty_indices = np.array([], dtype=int)
+        empty_types = np.array([], dtype=object)
+        empty_values = np.array([], dtype=object)
+        return [], empty_embeddings, empty_indices, empty_types, empty_values
+    
+    # Combine all loaded embeddings
+    combined_embeddings = np.concatenate(all_embeddings, axis=0)
+    combined_song_indices = np.concatenate(all_song_indices, axis=0)
+    combined_field_types = np.concatenate(all_field_types, axis=0)
+    combined_field_values = np.concatenate(all_field_values, axis=0)
+    
+    print(f"✅ Loading complete! {total_loaded} total embeddings from {len([t for t in embedding_types if (base_dir / f'{base_name}{t}_embeddings.npz').exists()])} embedding files")
+    
+    return songs_metadata, combined_embeddings, combined_song_indices, combined_field_types, combined_field_values
+
+def load_existing_embeddings_combined(output_file: str) -> Tuple[List[Dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load existing embeddings from single combined file (backwards compatibility)."""
     if not Path(output_file).exists():
         empty_embeddings = np.empty((0, 3072), dtype=np.float32)
         empty_indices = np.array([], dtype=int)
@@ -222,7 +312,7 @@ def load_existing_embeddings(output_file: str) -> Tuple[List[Dict], np.ndarray, 
         # Check file size first
         file_size = Path(output_file).stat().st_size
         file_size_mb = file_size / (1024 * 1024)
-        print(f"Loading existing embeddings file ({file_size_mb:.1f}MB)...")
+        print(f"Loading combined embeddings file ({file_size_mb:.1f}MB)...")
         
         data = np.load(output_file, allow_pickle=True)
         
@@ -257,60 +347,108 @@ def save_song_embeddings(songs_metadata: List[Dict],
                         song_indices: np.ndarray,
                         field_types: np.ndarray,
                         field_values: np.ndarray,
-                        output_file: str):
-    """Save all song embeddings and metadata in organized numpy format."""
+                        output_base: str):
+    """Save song embeddings to separate files by embedding type."""
     
     # Create songs metadata arrays
     song_names = np.array([meta['song'] for meta in songs_metadata])
     artist_names = np.array([meta['artist'] for meta in songs_metadata])
     
-    # Ensure output directory exists
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Determine output directory and base name
+    output_path = Path(output_base)
+    if output_path.suffix == '.npz':
+        # If given a .npz file path, use the directory and stem as base
+        base_dir = output_path.parent
+        base_name = output_path.stem + "_"
+    elif output_path.is_dir() or not output_path.suffix:
+        # If given a directory or base name without extension
+        base_dir = output_path if output_path.is_dir() else output_path.parent
+        base_name = "" if output_path.is_dir() else output_path.name + "_"
+    else:
+        # Fallback: treat as directory
+        base_dir = output_path.parent
+        base_name = output_path.stem + "_"
     
-    # Save everything in one organized .npz file
-    np.savez_compressed(
-        output_file,
-        # Song metadata
-        songs=song_names,
-        artists=artist_names,
-        # Embedding data
-        embeddings=embeddings,
-        song_indices=song_indices,
-        field_types=field_types,
-        field_values=field_values
-    )
+    # Ensure output directory exists
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Group embeddings by type and save to separate files
+    embedding_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+    saved_files = []
+    
+    for embed_type in embedding_types:
+        # Find embeddings of this type
+        mask = field_types == embed_type
+        
+        if not mask.any():
+            continue  # Skip if no embeddings of this type
+        
+        # Extract embeddings for this type
+        type_embeddings = embeddings[mask]
+        type_song_indices = song_indices[mask]
+        type_field_values = field_values[mask]
+        
+        # Create output filename
+        output_file = base_dir / f"{base_name}{embed_type}_embeddings.npz"
+        
+        # Save to separate file
+        np.savez_compressed(
+            output_file,
+            # Song metadata (same for all files)
+            songs=song_names,
+            artists=artist_names,
+            # Embedding data (filtered for this type)
+            embeddings=type_embeddings,
+            song_indices=type_song_indices,
+            field_values=type_field_values
+        )
+        
+        saved_files.append((embed_type, output_file, len(type_embeddings)))
+    
+    return saved_files
 
 def print_save_summary(songs_metadata: List[Dict], 
                       embeddings: np.ndarray,
                       song_indices: np.ndarray,
                       field_types: np.ndarray,
                       field_values: np.ndarray,
-                      output_file: str):
-    """Print summary of saved embeddings."""
-    print(f"\n{'='*50}")
+                      saved_files: List[Tuple]):
+    """Print summary of saved embeddings to separate files."""
+    print(f"\n{'='*60}")
     print("EMBEDDINGS SAVED SUCCESSFULLY")
-    print(f"{'='*50}")
-    print(f"Output file: {output_file}")
+    print(f"{'='*60}")
     print(f"Total songs: {len(songs_metadata)}")
     print(f"Total embeddings: {len(embeddings)}")
     if len(embeddings) > 0:
         print(f"Embedding dimension: {embeddings.shape[1]}")
     
-    # Show field type breakdown
+    print(f"\nSaved to {len(saved_files)} separate files:")
+    total_size_mb = 0
+    for embed_type, file_path, count in saved_files:
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        total_size_mb += file_size_mb
+        print(f"  {embed_type}: {count} embeddings → {file_path.name} ({file_size_mb:.1f}MB)")
+    
+    print(f"\nTotal file size: {total_size_mb:.1f}MB")
+    
+    # Show breakdown by field type for verification
     unique_types, counts = np.unique(field_types, return_counts=True)
-    
-    print(f"\nEmbeddings by field type:")
+    print(f"\nEmbedding verification:")
     for field_type, count in zip(unique_types, counts):
-        print(f"  {field_type}: {count}")
+        print(f"  {field_type}: {count} embeddings")
     
-    print(f"\nTo load embeddings:")
-    print(f"  data = np.load('{output_file}')")
-    print(f"  songs = data['songs']")
-    print(f"  embeddings = data['embeddings']")
-    print(f"  song_indices = data['song_indices']")
-    print(f"  field_types = data['field_types']")
-    print(f"  field_values = data['field_values']")
+    if saved_files:
+        base_dir = saved_files[0][1].parent
+        print(f"\nFiles saved to: {base_dir}")
+        print(f"\nTo load embeddings:")
+        print(f"  # Load specific embedding type:")
+        print(f"  data = np.load('{saved_files[0][1]}')")
+        print(f"  # Or use the updated embed_song_profiles.py with directory/base path")
+        print(f"  python embed_song_profiles.py -i input.jsonl -o {base_dir}/")
+    else:
+        print(f"\nNo files were saved (no embeddings to save)")
+    
+    print(f"{'='*60}")
 
 # ──────────────────────────────── MAIN DRIVER ────────────────────────────────
 async def main(input_file: str, output_file: str, num_entries: int = None, batch_size: int = 50):
@@ -426,15 +564,16 @@ async def main(input_file: str, output_file: str, num_entries: int = None, batch
             final_field_types = np.concatenate([final_field_types, new_field_types])
             final_field_values = np.concatenate([final_field_values, new_field_values])
         
-        save_song_embeddings(
+        saved_files = save_song_embeddings(
             all_songs_metadata, final_embeddings, final_song_indices,
             final_field_types, final_field_values, output_file
         )
-        print(f"Saved batch {batch_num + 1}/{total_batches} - Total: {len(all_songs_metadata)} songs, {len(final_embeddings)} embeddings")
+        print(f"Saved batch {batch_num + 1}/{total_batches} - Total: {len(all_songs_metadata)} songs, {len(final_embeddings)} embeddings to {len(saved_files)} files")
 
+    # Use the last saved_files for summary (no need to save again)
     print_save_summary(
         all_songs_metadata, final_embeddings, final_song_indices,
-        final_field_types, final_field_values, output_file
+        final_field_types, final_field_values, saved_files
     )
 
 if __name__ == "__main__":
@@ -442,7 +581,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--input", required=True, 
                         help="Input JSONL file with song profiles")
     parser.add_argument("-o", "--output", required=True, 
-                        help="Output .npz file for embeddings")
+                        help="Output directory or base path for separate embedding files (will create 5 .npz files by embedding type)")
     parser.add_argument("-n", "--num_entries", type=int, default=None, 
                         help="Process only first N entries (for testing)")
     parser.add_argument("-b", "--batch_size", type=int, default=50,

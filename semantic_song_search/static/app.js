@@ -1,4 +1,4 @@
-// Intelligent Song Search App JavaScript
+// Semantic Song Search App JavaScript
 
 // Utility function to escape HTML and prevent XSS
 function escapeHtml(text) {
@@ -711,7 +711,7 @@ class IntelligentSearchApp {
         console.log('✅ Spotify SDK loaded, creating player...');
         
         const player = new window.Spotify.Player({
-            name: 'Intelligent Song Search',
+            name: 'Semantic Song Search',
             getOAuthToken: cb => { 
                 console.log('🔑 Token requested by Spotify SDK');
                 cb(this.accessToken); 

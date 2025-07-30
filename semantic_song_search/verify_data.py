@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verify that data files are accessible and properly formatted for the intelligent song search app.
+Verify that data files are accessible and properly formatted for the semantic song search app.
 """
 import os
 import json
@@ -11,7 +11,7 @@ from pathlib import Path
 def parse_arguments():
     """Parse command line arguments for data file paths."""
     parser = argparse.ArgumentParser(
-        description="Verify data files for Intelligent Song Search app",
+        description="Verify data files for Semantic Song Search app",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -43,7 +43,7 @@ Examples:
 
 def verify_data_files(songs_file: str, embeddings_file: str):
     """Verify that all required data files exist and are properly formatted."""
-    print("🔍 Verifying data files for Intelligent Song Search...")
+    print("🔍 Verifying data files for Semantic Song Search...")
     print(f"  Songs file: {songs_file}")
     print(f"  Embeddings file: {embeddings_file}")
     
@@ -136,7 +136,7 @@ def verify_data_files(songs_file: str, embeddings_file: str):
         return False
     
     print("\n🎉 All data verification checks passed!")
-    print("The intelligent song search app should work correctly with this data.")
+    print("The semantic song search app should work correctly with this data.")
     
     return True
 
@@ -167,7 +167,7 @@ def check_environment():
     return True
 
 if __name__ == "__main__":
-    print("🎵 Intelligent Song Search - Data Verification\n")
+    print("🎵 Semantic Song Search - Data Verification\n")
     
     args = parse_arguments()
     
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     env_ok = check_environment()
     
     if data_ok and env_ok:
-        print("\n🚀 Ready to run the intelligent song search app!")
+        print("\n🚀 Ready to run the semantic song search app!")
         print("Run: python app.py")
         if args.songs != str(Path(__file__).parent.parent / 'pop_eval_set_v0' / 'pop_eval_set_v0_results_enriched.json') or \
            args.embeddings != str(Path(__file__).parent.parent / 'pop_eval_set_v0' / 'pop_eval_set_v0_embeddings.npz'):

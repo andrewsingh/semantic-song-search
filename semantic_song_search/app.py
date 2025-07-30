@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Intelligent Song Search App
+Semantic Song Search App
 Supports both text-to-song and song-to-song search with multiple embedding types.
 """
 import os
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def parse_arguments():
     """Parse command line arguments for data file paths."""
     parser = argparse.ArgumentParser(
-        description="Intelligent Song Search - AI-powered music discovery with Spotify integration",
+        description="Semantic Song Search and Playlist Creation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -52,7 +52,7 @@ Examples:
         '-e', '--embeddings',
         type=str,
         default=str(default_embeddings_file),
-        help=f'Path to embeddings NPZ file (default: {default_embeddings_file})'
+        help=f'Path to embeddings file/directory (supports combined .npz file or directory with separate embedding files) (default: {default_embeddings_file})'
     )
     
     parser.add_argument(
@@ -133,17 +133,222 @@ class MusicSearchEngine:
         
         logger.info(f"Loaded {len(self.songs)} songs")
         
-        # Load embeddings
-        logger.info("Loading embeddings...")
-        self.embeddings_data = np.load(self.embeddings_file, allow_pickle=True)
-        logger.info(f"Loaded {len(self.embeddings_data['embeddings'])} embeddings")
+        # Load embeddings (support both old combined and new separate formats)
+        self.embeddings_data = self._load_embeddings_data()
+    
+    def _load_embeddings_data(self):
+        """Load embeddings data from either combined file or separate files by type."""
+        embeddings_path = Path(self.embeddings_file)
         
-        # Check if field_values exists (for backwards compatibility)
-        if 'field_values' not in self.embeddings_data:
-            logger.warning("Embeddings file does not contain field_values - accordion functionality will be disabled")
-            # Create placeholder field_values array
-            self.embeddings_data = dict(self.embeddings_data)  # Convert to regular dict for modification
-            self.embeddings_data['field_values'] = np.array(['N/A'] * len(self.embeddings_data['embeddings']), dtype=object)
+        # Check if it's a single combined file (old format)
+        if embeddings_path.is_file() and embeddings_path.suffix == '.npz':
+            logger.info(f"Loading embeddings from combined file: {embeddings_path}")
+            data = np.load(self.embeddings_file, allow_pickle=True)
+            logger.info(f"Loaded {len(data['embeddings'])} embeddings")
+            
+            # Check if field_values exists (for backwards compatibility)
+            if 'field_values' not in data:
+                logger.warning("Embeddings file does not contain field_values - accordion functionality will be disabled")
+                # Create placeholder field_values array
+                data = dict(data)  # Convert to regular dict for modification
+                data['field_values'] = np.array(['N/A'] * len(data['embeddings']), dtype=object)
+            
+            # CRITICAL: Also reconcile indices for old combined format
+            logger.info("Reconciling song indices between combined embeddings and JSON song list...")
+            data = dict(data)  # Ensure we can modify
+            
+            (reconciled_indices, valid_mask) = self._reconcile_song_indices(
+                data['song_indices'], data['songs'], data['artists']
+            )
+            
+            # Filter all arrays to keep only valid embeddings
+            if valid_mask is not None:
+                data['embeddings'] = data['embeddings'][valid_mask]
+                data['field_types'] = data['field_types'][valid_mask]
+                data['field_values'] = data['field_values'][valid_mask]
+            
+            data['song_indices'] = reconciled_indices
+            
+            return data
+        
+        # New separate files format
+        logger.info(f"Loading embeddings from separate files in: {embeddings_path}")
+        
+        # Determine directory and base name
+        if embeddings_path.is_dir():
+            base_dir = embeddings_path
+            base_name = ""
+        else:
+            base_dir = embeddings_path.parent
+            # Try to infer base name from the provided path
+            if embeddings_path.stem.endswith('_embeddings'):
+                # Handle cases like "pop_eval_set_v0_embeddings" -> "pop_eval_set_v0_"
+                base_name = embeddings_path.stem.replace('_embeddings', '') + "_"
+            else:
+                base_name = embeddings_path.stem + "_"
+        
+        embedding_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+        
+        all_embeddings = []
+        all_song_indices = []
+        all_field_types = []
+        all_field_values = []
+        songs_data = None
+        artists_data = None
+        
+        total_loaded = 0
+        
+        for embed_type in embedding_types:
+            embed_file = base_dir / f"{base_name}{embed_type}_embeddings.npz"
+            
+            if not embed_file.exists():
+                logger.warning(f"Embedding file not found: {embed_file}")
+                continue
+                
+            try:
+                data = np.load(embed_file, allow_pickle=True)
+                
+                # Load songs metadata from first file (should be consistent across all files)
+                if songs_data is None:
+                    songs_data = data['songs']
+                    artists_data = data['artists']
+                    logger.info(f"Loaded metadata for {len(songs_data)} songs")
+                
+                # Load embeddings for this type
+                embeddings = data['embeddings']
+                song_indices = data['song_indices']
+                field_values = data['field_values']
+                
+                # Create field_types array for this embedding type
+                field_types = np.array([embed_type] * len(embeddings), dtype=object)
+                
+                all_embeddings.append(embeddings)
+                all_song_indices.append(song_indices)
+                all_field_types.append(field_types)
+                all_field_values.append(field_values)
+                
+                total_loaded += len(embeddings)
+                logger.info(f"Loaded {len(embeddings)} {embed_type} embeddings")
+                
+            except Exception as e:
+                logger.error(f"Error loading {embed_type} embeddings: {e}")
+                continue
+        
+        if total_loaded == 0:
+            raise FileNotFoundError(f"No embedding files found in {base_dir}")
+        
+        # Combine all loaded embeddings
+        combined_embeddings = np.concatenate(all_embeddings, axis=0)
+        combined_song_indices = np.concatenate(all_song_indices, axis=0)
+        combined_field_types = np.concatenate(all_field_types, axis=0)
+        combined_field_values = np.concatenate(all_field_values, axis=0)
+        
+        # CRITICAL: Reconcile song indices between embeddings and app's song list
+        # The embeddings' song_indices refer to positions in songs_data, but we need them
+        # to refer to positions in self.songs (loaded from JSON)
+        logger.info("Reconciling song indices between embeddings and JSON song list...")
+        
+        (reconciled_song_indices, valid_mask) = self._reconcile_song_indices(
+            combined_song_indices, songs_data, artists_data
+        )
+        
+        # Filter all arrays to keep only valid embeddings
+        if valid_mask is not None:
+            combined_embeddings = combined_embeddings[valid_mask]
+            combined_field_types = combined_field_types[valid_mask]
+            combined_field_values = combined_field_values[valid_mask]
+        
+        combined_data = {
+            'songs': songs_data,
+            'artists': artists_data,
+            'embeddings': combined_embeddings,
+            'song_indices': reconciled_song_indices,  # Use reconciled indices
+            'field_types': combined_field_types,
+            'field_values': combined_field_values
+        }
+        
+        logger.info(f"Successfully loaded {total_loaded} total embeddings from {len(all_embeddings)} embedding files")
+        
+        return combined_data
+    
+    def _reconcile_song_indices(self, embedding_song_indices: np.ndarray, 
+                               embedding_songs: np.ndarray, embedding_artists: np.ndarray) -> tuple:
+        """
+        Reconcile song indices between embeddings data and app's song list.
+        
+        The embeddings contain song_indices that refer to positions in the embeddings' own
+        songs/artists arrays. We need to map these to positions in self.songs (from JSON).
+        
+        Args:
+            embedding_song_indices: Original indices from embeddings (refer to embedding_songs positions)
+            embedding_songs: Song names from embeddings file
+            embedding_artists: Artist names from embeddings file
+            
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: (reconciled_indices, valid_mask)
+            - reconciled_indices: New indices that refer to positions in self.songs
+            - valid_mask: Boolean mask indicating which embeddings to keep
+        """
+        logger.info(f"Reconciling {len(embedding_song_indices)} embedding indices...")
+        
+        # Create mapping from embedding song index to app song index
+        embedding_to_app_index = {}
+        missing_songs = []
+        
+        for emb_idx in range(len(embedding_songs)):
+            song_name = embedding_songs[emb_idx]
+            artist_name = embedding_artists[emb_idx]
+            song_key = (song_name, artist_name)
+            
+            if song_key in self.song_lookup:
+                app_idx = self.song_lookup[song_key]
+                embedding_to_app_index[emb_idx] = app_idx
+            else:
+                missing_songs.append(f"'{song_name}' by '{artist_name}'")
+                embedding_to_app_index[emb_idx] = -1  # Mark as missing
+        
+        if missing_songs:
+            logger.warning(f"Found {len(missing_songs)} songs in embeddings that are not in JSON file:")
+            for i, song in enumerate(missing_songs[:5]):  # Show first 5
+                logger.warning(f"  - {song}")
+            if len(missing_songs) > 5:
+                logger.warning(f"  ... and {len(missing_songs) - 5} more")
+        
+        # Create valid mask first to identify which embeddings to keep
+        valid_mask = []
+        skipped_embeddings = 0
+        
+        for i, orig_idx in enumerate(embedding_song_indices):
+            if orig_idx in embedding_to_app_index:
+                app_idx = embedding_to_app_index[orig_idx]
+                if app_idx >= 0:  # Valid mapping
+                    valid_mask.append(True)
+                else:  # Missing song
+                    valid_mask.append(False)
+                    skipped_embeddings += 1
+            else:
+                logger.error(f"Invalid embedding song index: {orig_idx}")
+                valid_mask.append(False)
+                skipped_embeddings += 1
+        
+        if skipped_embeddings > 0:
+            logger.warning(f"Skipped {skipped_embeddings} embeddings due to missing songs in JSON file")
+        
+        valid_mask_array = np.array(valid_mask, dtype=bool)
+        
+        # Now create reconciled indices only for valid embeddings
+        reconciled_indices = []
+        for i, orig_idx in enumerate(embedding_song_indices):
+            if valid_mask_array[i]:  # Only process valid embeddings
+                app_idx = embedding_to_app_index[orig_idx]
+                reconciled_indices.append(app_idx)
+        
+        reconciled_array = np.array(reconciled_indices, dtype=int)
+        
+        logger.info(f"Successfully reconciled {len(reconciled_array)} embedding indices (filtered {skipped_embeddings} invalid)")
+        
+        # Return None for valid_mask if no embeddings were skipped
+        return reconciled_array, valid_mask_array if skipped_embeddings > 0 else None
     
     def _build_indices(self):
         """Build indices for each embedding type."""
@@ -353,9 +558,24 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None):
             logger.error(f"Songs file not found: {songs_path}")
             raise FileNotFoundError(f"Songs file not found: {songs_path}")
         
-        if not Path(embeddings_path).exists():
-            logger.error(f"Embeddings file not found: {embeddings_path}")
-            raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
+        # For embeddings, validate based on format (file vs directory/base path)
+        embeddings_path_obj = Path(embeddings_path)
+        if embeddings_path_obj.is_file():
+            # Old combined format - file must exist
+            if not embeddings_path_obj.exists():
+                logger.error(f"Embeddings file not found: {embeddings_path}")
+                raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
+        else:
+            # New separate format - directory or parent directory should exist
+            if embeddings_path_obj.is_dir():
+                # Path is a directory - it exists, validation will happen in _load_embeddings_data
+                pass
+            elif embeddings_path_obj.parent.exists():
+                # Path is a base name - parent directory exists, validation will happen in _load_embeddings_data
+                pass
+            else:
+                logger.error(f"Embeddings path not found: {embeddings_path}")
+                raise FileNotFoundError(f"Embeddings path not found: {embeddings_path}")
         
         logger.info(f"Initializing search engine with:")
         logger.info(f"  Songs file: {songs_path}")
@@ -577,7 +797,7 @@ def create_playlist():
     try:
         # Get request data
         data = request.json
-        playlist_name = data.get('playlist_name', 'Intelligent Song Search Playlist')
+        playlist_name = data.get('playlist_name', 'Semantic Song Search Playlist')
         song_count = data.get('song_count', 10)
         song_spotify_ids = data.get('song_spotify_ids', [])
         
@@ -612,7 +832,7 @@ def create_playlist():
             user=user_id,
             name=playlist_name.strip(),
             public=False,  # Create as private by default
-            description=f"Created by Intelligent Song Search - {len(valid_songs)} tracks"
+            description=f"Created by Semantic Song Search - {len(valid_songs)} tracks"
         )
         
         # Add tracks to playlist
@@ -678,7 +898,7 @@ if __name__ == '__main__':
     args = parse_arguments()
     
     # Print startup information
-    logger.info("Starting Intelligent Song Search application...")
+    logger.info("Starting Semantic Song Search application...")
     logger.info(f"Server will run on: http://{args.host}:{args.port}")
     logger.info(f"Debug mode: {'enabled' if args.debug else 'disabled'}")
     
