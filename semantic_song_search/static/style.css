@@ -652,12 +652,22 @@ body {
 }
 
 .card-title {
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 600;
     color: #fff;
-    margin-bottom: 0.25rem;
-    line-height: 1.2;
-    /* Dynamic sizing will be handled by JavaScript */
+    margin-bottom: 0.4rem;
+    line-height: 1.3;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+}
+
+/* Slightly smaller font in manual selection mode due to less space */
+.results-container.manual-selection-mode .card-title {
+    font-size: 0.95rem;
 }
 
 .card-artist {

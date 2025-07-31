@@ -153,10 +153,7 @@ class IntelligentSearchApp {
             this.loadMoreResults();
         });
         
-        // Re-adjust font sizes on window resize
-        window.addEventListener('resize', () => {
-            setTimeout(() => this.adjustSongTitleFontSize(), 100);
-        });
+
     }
     
     handleSearchTypeChange(searchType) {
@@ -540,9 +537,6 @@ class IntelligentSearchApp {
         if (exportSection && exportSection.style.display !== 'none') {
             this.updateSongCountHint();
         }
-        
-        // Apply dynamic font sizing to song titles
-        setTimeout(() => this.adjustSongTitleFontSize(), 0);
     }
     
     updateLoadMoreButton() {
@@ -651,65 +645,7 @@ class IntelligentSearchApp {
         `;
     }
     
-    adjustSongTitleFontSize() {
-        const songCards = document.querySelectorAll('.song-card:not(.query-card)');
-        
-        songCards.forEach(card => {
-            const titleElement = card.querySelector('.card-title');
-            if (!titleElement) return;
-            
-            const originalText = titleElement.textContent;
-            // Account for play button padding only in manual selection mode
-            const paddingOffset = this.isManualSelectionMode ? 40 : 0;
-            const containerWidth = titleElement.parentElement.clientWidth - paddingOffset;
-            
-            // Reset to default styles
-            titleElement.style.fontSize = '1.1rem';
-            titleElement.style.overflow = 'visible';
-            titleElement.style.textOverflow = 'initial';
-            titleElement.style.whiteSpace = 'normal';
-            
-            // Create a temporary element to measure text width
-            const tempElement = document.createElement('span');
-            tempElement.style.visibility = 'hidden';
-            tempElement.style.position = 'absolute';
-            tempElement.style.whiteSpace = 'nowrap';
-            tempElement.style.fontFamily = getComputedStyle(titleElement).fontFamily;
-            tempElement.style.fontWeight = getComputedStyle(titleElement).fontWeight;
-            tempElement.textContent = originalText;
-            document.body.appendChild(tempElement);
-            
-            // Try different font sizes from 1.1rem down to 0.8rem
-            const fontSizes = [1.1, 1.0, 0.95, 0.9, 0.85, 0.8];
-            let bestFontSize = 1.1;
-            
-            for (const fontSize of fontSizes) {
-                tempElement.style.fontSize = `${fontSize}rem`;
-                if (tempElement.offsetWidth <= containerWidth) {
-                    bestFontSize = fontSize;
-                    break;
-                }
-            }
-            
-            // Apply the best font size
-            if (bestFontSize < 1.1) {
-                titleElement.style.fontSize = `${bestFontSize}rem`;
-            }
-            
-            // If even the smallest font is too big, use ellipsis as fallback
-            if (bestFontSize === 0.8) {
-                tempElement.style.fontSize = '0.8rem';
-                if (tempElement.offsetWidth > containerWidth) {
-                    titleElement.style.overflow = 'hidden';
-                    titleElement.style.textOverflow = 'ellipsis';
-                    titleElement.style.whiteSpace = 'nowrap';
-                }
-            }
-            
-            // Clean up
-            document.body.removeChild(tempElement);
-        });
-    }
+
     
     formatTagsGenresFromSong(song) {
         /**
@@ -1063,9 +999,6 @@ class IntelligentSearchApp {
         
         // Update export form display
         this.updateExportFormDisplay();
-        
-        // Re-adjust font sizes since available space changed due to play button visibility
-        setTimeout(() => this.adjustSongTitleFontSize(), 0);
         
         // Event listeners don't need to be re-attached - they handle both modes dynamically
     }
