@@ -2,3 +2,5 @@ prompts/*
 notebooks/*
 data/*
 semantic_song_search/design_doc.md
+*__pycache__*
+.cache
