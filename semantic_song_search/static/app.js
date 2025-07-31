@@ -30,6 +30,10 @@ class IntelligentSearchApp {
         this.isFiltered = false;
         this.originalSearchResults = []; // Store unfiltered results for client-side filtering
         
+        // Manual song selection
+        this.isManualSelectionMode = false;
+        this.selectedSongs = new Set(); // Set of song indices that are selected
+        
         // Auto-play queue management
         this.currentSongIndex = -1;  // Index in search results
         this.isAutoPlayEnabled = true;  // Could make this configurable later
@@ -118,6 +122,11 @@ class IntelligentSearchApp {
             this.exportToPlaylist();
         });
         
+        // Manual selection toggle
+        document.getElementById('manual-selection-toggle').addEventListener('change', (e) => {
+            this.toggleManualSelection(e.target.checked);
+        });
+        
         // Top artists filter checkbox
         document.getElementById('top-artists-filter').addEventListener('change', async (e) => {
             console.log(`🎛️ Top artists filter checkbox changed: ${e.target.checked ? 'CHECKED' : 'UNCHECKED'}`);
@@ -141,6 +150,11 @@ class IntelligentSearchApp {
         // Load more button
         document.getElementById('load-more-btn').addEventListener('click', () => {
             this.loadMoreResults();
+        });
+        
+        // Re-adjust font sizes on window resize
+        window.addEventListener('resize', () => {
+            setTimeout(() => this.adjustSongTitleFontSize(), 100);
         });
     }
     
@@ -245,6 +259,16 @@ class IntelligentSearchApp {
         this.searchResults = [];
         this.originalSearchResults = [];
         
+        // Reset manual selection for new searches
+        this.isManualSelectionMode = false;
+        this.selectedSongs.clear();
+        const manualSelectionToggle = document.getElementById('manual-selection-toggle');
+        if (manualSelectionToggle) {
+            manualSelectionToggle.checked = false;
+        }
+        // Update export form to show number input instead of selection info
+        this.updateExportFormDisplay();
+        
         // Reset queue when starting a new search
         if (isNewSearch) {
             console.log('🎵 New search detected, resetting queue');
@@ -343,6 +367,14 @@ class IntelligentSearchApp {
             this.currentOffset = data.pagination.offset + data.pagination.limit;
             this.hasMoreResults = data.pagination.has_more;
             
+            // Auto-select new songs if manual selection is enabled
+            if (this.isManualSelectionMode) {
+                data.results.forEach(song => {
+                    this.selectedSongs.add(song.song_idx);
+                });
+                console.log(`🎯 Auto-selected ${data.results.length} new songs for manual selection mode`);
+            }
+            
             // Check if we have client-side filtering active
             const topArtistsFilter = document.getElementById('top-artists-filter');
             if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
@@ -352,6 +384,12 @@ class IntelligentSearchApp {
                 // No filtering - just add new results and display
                 this.searchResults = [...this.searchResults, ...data.results];
                 this.displayResults(data, true);
+                
+                // Update manual selection state for newly loaded cards if needed
+                if (this.isManualSelectionMode) {
+                    this.updateAllCardSelections();
+                    this.updateExportFormDisplay(); // Update export form with new selection count
+                }
             }
             
             console.log('🎵 Loaded more results, queue now has', this.searchResults.length, 'songs');
@@ -378,12 +416,8 @@ class IntelligentSearchApp {
         const resultsGrid = document.getElementById('results-grid');
         const loadMoreContainer = document.getElementById('load-more-container');
         
-        // Update header (show current results count)
-        if (this.isFiltered) {
-            resultsCount.textContent = `${this.searchResults.length} results (filtered by top artists)`;
-        } else {
-            resultsCount.textContent = `${this.searchResults.length} results`;
-        }
+        // Update header (show current results count with new formatting)
+        this.updateResultsCount();
         
         searchInfo.textContent = `${data.search_type} search • ${data.embed_type.replace('_', ' ')}`;
         resultsHeader.style.display = 'flex';
@@ -396,7 +430,7 @@ class IntelligentSearchApp {
         // Handle empty results case
         if (!isLoadMore && this.searchResults.length === 0) {
             const message = this.isFiltered ? 
-                'No songs found matching your top artists. Try searching without the filter or adding more listening history to Spotify.' :
+                'No songs found matching your filters. Try searching without filters or adding more listening history to Spotify.' :
                 'No results found. Try adjusting your search terms or selecting a different embedding type.';
             
             resultsGrid.innerHTML = `
@@ -421,22 +455,27 @@ class IntelligentSearchApp {
         const startIndex = isLoadMore ? this.searchResults.length - data.results.length : 0;
         data.results.forEach((song, index) => {
             const card = document.createElement('div');
-            card.className = 'song-card';
+            let cardClasses = 'song-card';
+            
+            // Add selection-related classes
+            if (this.isManualSelectionMode) {
+                cardClasses += ' selectable';
+                if (this.selectedSongs.has(song.song_idx)) {
+                    cardClasses += ' selected';
+                }
+            }
+            
+            card.className = cardClasses;
             card.dataset.spotifyId = song.spotify_id; // Set the spotify ID for the updatePlayingCards function
             card.innerHTML = this.createSongCardHTML(song, { 
                 rank: startIndex + index + 1, 
                 similarity: song.similarity,
                 fieldValue: song.field_value,
-                embedType: data.embed_type
+                embedType: data.embed_type,
+                isSelected: this.selectedSongs.has(song.song_idx)
             });
             
-            // Add click listener for playing song (but not on accordion elements)
-            card.addEventListener('click', (e) => {
-                // Don't play song if clicking on accordion elements
-                if (!e.target.closest('.card-accordion')) {
-                    this.playSong(song);
-                }
-            });
+            // Don't add the old click listener here - we'll handle it in attachSongCardEventListeners
             
             // Add accordion toggle functionality
             const accordionToggle = card.querySelector('.accordion-toggle');
@@ -450,6 +489,17 @@ class IntelligentSearchApp {
             resultsGrid.appendChild(card);
         });
         
+        // Ensure results container has correct CSS class for manual selection mode
+        const resultsContainer = document.getElementById('results-container');
+        if (this.isManualSelectionMode) {
+            resultsContainer.classList.add('manual-selection-mode');
+        } else {
+            resultsContainer.classList.remove('manual-selection-mode');
+        }
+        
+        // Attach event listeners for song cards (handles both normal and selection modes)
+        this.attachSongCardEventListeners();
+        
         // Update load more button visibility
         this.updateLoadMoreButton();
         
@@ -458,6 +508,9 @@ class IntelligentSearchApp {
         if (exportSection && exportSection.style.display !== 'none') {
             this.updateSongCountHint();
         }
+        
+        // Apply dynamic font sizing to song titles
+        setTimeout(() => this.adjustSongTitleFontSize(), 0);
     }
     
     updateLoadMoreButton() {
@@ -478,7 +531,7 @@ class IntelligentSearchApp {
     }
     
     createSongCardHTML(song, options = {}) {
-        const { rank, similarity, isQuery = false, fieldValue = null, embedType = null } = options;
+        const { rank, similarity, isQuery = false, fieldValue = null, embedType = null, isSelected = false } = options;
         
         let metadataHTML = '';
         if (rank && similarity !== undefined) {
@@ -521,7 +574,23 @@ class IntelligentSearchApp {
             `;
         }
         
+        // Always include checkbox, CSS will control visibility
+        let checkboxHTML = '';
+        if (!isQuery) {
+            checkboxHTML = `<input type="checkbox" class="song-card-checkbox" ${isSelected ? 'checked' : ''}>`;
+        }
+        
+        let playButtonHTML = '';
+        if (!isQuery && song.spotify_id) {
+            playButtonHTML = `<button class="song-play-btn" title="Play song">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            </button>`;
+        }
+        
         return `
+            ${checkboxHTML}
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
@@ -529,11 +598,72 @@ class IntelligentSearchApp {
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
+                ${playButtonHTML}
             </div>
             ${metadataHTML}
             ${tagsHTML}
             ${accordionHTML}
         `;
+    }
+    
+    adjustSongTitleFontSize() {
+        const songCards = document.querySelectorAll('.song-card:not(.query-card)');
+        
+        songCards.forEach(card => {
+            const titleElement = card.querySelector('.card-title');
+            if (!titleElement) return;
+            
+            const originalText = titleElement.textContent;
+            // Account for play button padding only in manual selection mode
+            const paddingOffset = this.isManualSelectionMode ? 40 : 0;
+            const containerWidth = titleElement.parentElement.clientWidth - paddingOffset;
+            
+            // Reset to default styles
+            titleElement.style.fontSize = '1.1rem';
+            titleElement.style.overflow = 'visible';
+            titleElement.style.textOverflow = 'initial';
+            titleElement.style.whiteSpace = 'normal';
+            
+            // Create a temporary element to measure text width
+            const tempElement = document.createElement('span');
+            tempElement.style.visibility = 'hidden';
+            tempElement.style.position = 'absolute';
+            tempElement.style.whiteSpace = 'nowrap';
+            tempElement.style.fontFamily = getComputedStyle(titleElement).fontFamily;
+            tempElement.style.fontWeight = getComputedStyle(titleElement).fontWeight;
+            tempElement.textContent = originalText;
+            document.body.appendChild(tempElement);
+            
+            // Try different font sizes from 1.1rem down to 0.8rem
+            const fontSizes = [1.1, 1.0, 0.95, 0.9, 0.85, 0.8];
+            let bestFontSize = 1.1;
+            
+            for (const fontSize of fontSizes) {
+                tempElement.style.fontSize = `${fontSize}rem`;
+                if (tempElement.offsetWidth <= containerWidth) {
+                    bestFontSize = fontSize;
+                    break;
+                }
+            }
+            
+            // Apply the best font size
+            if (bestFontSize < 1.1) {
+                titleElement.style.fontSize = `${bestFontSize}rem`;
+            }
+            
+            // If even the smallest font is too big, use ellipsis as fallback
+            if (bestFontSize === 0.8) {
+                tempElement.style.fontSize = '0.8rem';
+                if (tempElement.offsetWidth > containerWidth) {
+                    titleElement.style.overflow = 'hidden';
+                    titleElement.style.textOverflow = 'ellipsis';
+                    titleElement.style.whiteSpace = 'nowrap';
+                }
+            }
+            
+            // Clean up
+            document.body.removeChild(tempElement);
+        });
     }
     
     formatFieldValueForDisplay(fieldValue, embedType) {
@@ -680,6 +810,16 @@ class IntelligentSearchApp {
         this.hasMoreResults = false;
         this.isFiltered = false;
         
+        // Reset manual selection
+        this.isManualSelectionMode = false;
+        this.selectedSongs.clear();
+        const manualSelectionToggle = document.getElementById('manual-selection-toggle');
+        if (manualSelectionToggle) {
+            manualSelectionToggle.checked = false;
+        }
+        // Update export form to show number input instead of selection info
+        this.updateExportFormDisplay();
+        
         // Reset auto-play queue
         this.resetAutoPlayQueue();
     }
@@ -754,7 +894,7 @@ class IntelligentSearchApp {
         const loginBtn = document.getElementById('login-btn');
         const logoutBtn = document.getElementById('logout-btn');
         const topArtistsFilter = document.getElementById('top-artists-filter');
-        const topArtistsStatus = document.getElementById('top-artists-status');
+        const topArtistsText = document.getElementById('top-artists-text');
         
         if (isAuthenticated) {
             indicator.textContent = '●';
@@ -765,8 +905,7 @@ class IntelligentSearchApp {
             
             // Enable top artists filter
             topArtistsFilter.disabled = false;
-            topArtistsStatus.textContent = 'Click to load';
-            topArtistsStatus.className = 'filter-status';
+            topArtistsText.textContent = 'Only Top Artists';
         } else {
             indicator.textContent = '○';
             indicator.className = 'auth-indicator';
@@ -777,10 +916,225 @@ class IntelligentSearchApp {
             // Disable and reset top artists filter
             topArtistsFilter.disabled = true;
             topArtistsFilter.checked = false;
-            topArtistsStatus.textContent = 'Login required';
-            topArtistsStatus.className = 'filter-status';
+            topArtistsText.textContent = 'Only Top Artists';
             this.topArtists = [];
             this.topArtistsLoaded = false;
+        }
+    }
+    
+    toggleManualSelection(enabled) {
+        console.log(`🎯 Manual selection toggled: ${enabled ? 'ON' : 'OFF'}`);
+        
+        this.isManualSelectionMode = enabled;
+        const resultsContainer = document.getElementById('results-container');
+        
+        if (enabled) {
+            // Select all current songs by default
+            this.selectedSongs.clear();
+            this.searchResults.forEach((song, index) => {
+                this.selectedSongs.add(song.song_idx);
+            });
+            console.log(`🎯 Selected ${this.selectedSongs.size} songs by default`);
+            
+            // Show checkboxes and enable selection styling with CSS class
+            resultsContainer.classList.add('manual-selection-mode');
+            this.updateAllCardSelections();
+        } else {
+            // Clear selections when disabled
+            this.selectedSongs.clear();
+            console.log(`🎯 Cleared all selections`);
+            
+            // Hide checkboxes and disable selection styling
+            resultsContainer.classList.remove('manual-selection-mode');
+            this.clearAllCardSelections();
+        }
+        
+        // Update results count display to show/hide selection count
+        this.updateResultsCount();
+        
+        // Update export form display
+        this.updateExportFormDisplay();
+        
+        // Re-adjust font sizes since available space changed due to play button visibility
+        setTimeout(() => this.adjustSongTitleFontSize(), 0);
+        
+        // Event listeners don't need to be re-attached - they handle both modes dynamically
+    }
+    
+    updateAllCardSelections() {
+        const resultsGrid = document.getElementById('results-grid');
+        const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
+        
+        songCards.forEach((card, index) => {
+            if (index < this.searchResults.length) {
+                const song = this.searchResults[index];
+                const isSelected = this.selectedSongs.has(song.song_idx);
+                
+                // Update checkbox state
+                const checkbox = card.querySelector('.song-card-checkbox');
+                if (checkbox) {
+                    checkbox.checked = isSelected;
+                }
+                
+                // Update card styling
+                card.classList.add('selectable');
+                if (isSelected) {
+                    card.classList.add('selected');
+                } else {
+                    card.classList.remove('selected');
+                }
+            }
+        });
+    }
+    
+    clearAllCardSelections() {
+        const resultsGrid = document.getElementById('results-grid');
+        const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
+        
+        songCards.forEach(card => {
+            // Clear checkbox state
+            const checkbox = card.querySelector('.song-card-checkbox');
+            if (checkbox) {
+                checkbox.checked = false;
+            }
+            
+            // Remove selection styling
+            card.classList.remove('selectable', 'selected');
+        });
+    }
+    
+    // refreshSongCards method removed - no longer needed with CSS-based optimization
+    
+    attachSongCardEventListeners() {
+        const resultsGrid = document.getElementById('results-grid');
+        const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
+        
+        songCards.forEach((card, index) => {
+            if (index < this.searchResults.length) {
+                const song = this.searchResults[index];
+                
+                // Smart event listener that handles both modes dynamically
+                card.addEventListener('click', (e) => {
+                    // Don't handle if clicking on the checkbox directly
+                    if (e.target.type === 'checkbox') return;
+                    
+                    // Don't handle if clicking on accordion elements
+                    if (e.target.closest('.card-accordion')) return;
+                    
+                    // Don't handle if clicking on the play button
+                    if (e.target.closest('.song-play-btn')) return;
+                    
+                    if (this.isManualSelectionMode) {
+                        // Manual selection mode: single click toggles selection
+                        this.toggleSongSelection(song.song_idx, index);
+                    } else {
+                        // Normal mode: single click plays
+                        this.playSong(song);
+                    }
+                });
+                
+                // Handle play button clicks (always plays regardless of mode)
+                const playButton = card.querySelector('.song-play-btn');
+                if (playButton) {
+                    playButton.addEventListener('click', (e) => {
+                        e.stopPropagation(); // Prevent card click
+                        this.playSong(song);
+                    });
+                }
+                
+                // Handle checkbox clicks directly (always present but hidden via CSS)
+                const checkbox = card.querySelector('.song-card-checkbox');
+                if (checkbox) {
+                    checkbox.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this.toggleSongSelection(song.song_idx, index);
+                    });
+                }
+            }
+        });
+    }
+    
+    updateExportFormDisplay() {
+        const songCountField = document.getElementById('song-count-field');
+        const manualSelectionInfo = document.getElementById('manual-selection-info');
+        const selectedSongsCount = document.getElementById('selected-songs-count');
+        
+        if (this.isManualSelectionMode) {
+            // Hide number input, show selection info
+            songCountField.style.display = 'none';
+            manualSelectionInfo.style.display = 'flex';
+            
+            // Update selected count
+            const count = this.selectedSongs.size;
+            selectedSongsCount.textContent = `${count} song${count === 1 ? '' : 's'} selected`;
+        } else {
+            // Show number input, hide selection info
+            songCountField.style.display = 'flex';
+            manualSelectionInfo.style.display = 'none';
+        }
+    }
+    
+    updateResultsCount() {
+        const resultsCount = document.getElementById('results-count');
+        if (!resultsCount) return;
+        
+        let resultsText = `${this.searchResults.length}`;
+        
+        // Add "filtered" if any filters are active
+        if (this.isFiltered) {
+            resultsText += ' filtered';
+        }
+        
+        resultsText += ' results';
+        
+        // Add selected count if manual selection is active
+        if (this.isManualSelectionMode) {
+            const selectedCount = this.selectedSongs.size;
+            resultsText += ` (${selectedCount} selected)`;
+        }
+        
+        resultsCount.textContent = resultsText;
+    }
+    
+    // attachAccordionEventListeners method removed - accordion listeners are now attached in displayResults directly
+    
+    toggleSongSelection(songIdx, cardIndex) {
+        if (this.selectedSongs.has(songIdx)) {
+            this.selectedSongs.delete(songIdx);
+            console.log(`🎯 Deselected song ${songIdx}`);
+        } else {
+            this.selectedSongs.add(songIdx);
+            console.log(`🎯 Selected song ${songIdx}`);
+        }
+        
+        // Update the card's visual state
+        this.updateSongCardSelection(cardIndex, this.selectedSongs.has(songIdx));
+        
+        console.log(`🎯 Total selected: ${this.selectedSongs.size} songs`);
+        
+        // Update results count display to reflect new selection
+        this.updateResultsCount();
+        
+        // Update export form display to reflect new selection count
+        this.updateExportFormDisplay();
+    }
+    
+    updateSongCardSelection(cardIndex, isSelected) {
+        const resultsGrid = document.getElementById('results-grid');
+        const cards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
+        const card = cards[cardIndex];
+        
+        if (card) {
+            const checkbox = card.querySelector('.song-card-checkbox');
+            if (checkbox) {
+                checkbox.checked = isSelected;
+            }
+            
+            if (isSelected) {
+                card.classList.add('selected');
+            } else {
+                card.classList.remove('selected');
+            }
         }
     }
     
@@ -795,6 +1149,9 @@ class IntelligentSearchApp {
             console.log(`🔍 Showing all ${this.originalSearchResults.length} original results (filter disabled or no top artists)`);
             this.searchResults = [...this.originalSearchResults];
             this.isFiltered = false;
+            
+            // Manual selection state is preserved as-is when filter is disabled
+            // No need to auto-select - user's manual selections remain unchanged
         } else {
             // Filter to only show songs by top artists
             const topArtistsSet = new Set(this.topArtists.map(artist => artist.toLowerCase()));
@@ -835,6 +1192,12 @@ class IntelligentSearchApp {
         };
         
         this.displayResults(mockData, false);
+        
+        // Sync manual selection state after filtering re-creates the cards
+        if (this.isManualSelectionMode) {
+            this.updateAllCardSelections();
+            this.updateExportFormDisplay(); // Update export form with current selection count
+        }
     }
     
     async loadTopArtists() {
@@ -842,9 +1205,7 @@ class IntelligentSearchApp {
             return; // Already loaded
         }
         
-        const topArtistsStatus = document.getElementById('top-artists-status');
-        topArtistsStatus.textContent = 'Loading...';
-        topArtistsStatus.className = 'filter-status';
+        const topArtistsText = document.getElementById('top-artists-text');
         
         try {
             const response = await fetch('/api/top_artists');
@@ -854,18 +1215,15 @@ class IntelligentSearchApp {
                 this.topArtists = data.top_artists;
                 this.topArtistsLoaded = true;
                 if (data.count === 0) {
-                    topArtistsStatus.textContent = 'No top artists found';
-                    topArtistsStatus.className = 'filter-status error';
+                    topArtistsText.textContent = 'Only Top Artists (0)';
                     console.log('⚠️ User has no top artists - may have new account or insufficient listening history');
                 } else {
-                    topArtistsStatus.textContent = `${data.count} artists loaded`;
-                    topArtistsStatus.className = 'filter-status loaded';
+                    topArtistsText.textContent = `Only Top Artists (${data.count})`;
                     console.log(`✅ Loaded ${data.count} top artists`);
                 }
             } else {
                 console.error('Failed to load top artists:', data.error);
-                topArtistsStatus.textContent = 'Load failed';
-                topArtistsStatus.className = 'filter-status error';
+                topArtistsText.textContent = 'Only Top Artists';
                 
                 // If authentication error, disable the filter
                 if (response.status === 401 || response.status === 403) {
@@ -875,21 +1233,14 @@ class IntelligentSearchApp {
                     
                     // Special handling for scope insufficient error
                     if (data.requires_reauth) {
-                        topArtistsStatus.textContent = 'Logout & login required';
-                        topArtistsStatus.title = 'Your current session lacks the required permissions. Please logout and login again.';
-                        // Show more helpful error message
                         this.showError('Top artists filter requires additional permissions. Please logout and login again to enable this feature.');
-                        // Auto-logout the user since the backend cleared their session
                         this.updateAuthStatus(false);
-                    } else {
-                        topArtistsStatus.textContent = 'Re-login required';
                     }
                 }
             }
         } catch (error) {
             console.error('Error loading top artists:', error);
-            topArtistsStatus.textContent = 'Load failed';
-            topArtistsStatus.className = 'filter-status error';
+            topArtistsText.textContent = 'Only Top Artists';
         }
     }
     
@@ -1533,7 +1884,7 @@ class IntelligentSearchApp {
         
         // Get input values
         const playlistName = playlistNameInput.value.trim();
-        const songCount = parseInt(songCountInput.value);
+        let songCount;
         
         // Validate inputs
         if (!playlistName) {
@@ -1541,25 +1892,40 @@ class IntelligentSearchApp {
             return;
         }
         
-        if (isNaN(songCount) || songCount < 1 || songCount > 100) {
-            this.showExportStatus('Number of songs must be between 1 and 100.', 'error');
-            return;
-        }
-        
-        // Additional check for extremely large requests when auto-loading is involved
-        if (songCount > this.searchResults.length && songCount > 50 && this.hasMoreResults) {
-            const proceed = confirm(
-                `You requested ${songCount} songs but only ${this.searchResults.length} are currently loaded.\n\n` +
-                `This will automatically load more results, which may take some time.\n\n` +
-                `Continue with auto-loading?`
-            );
-            if (!proceed) {
+        if (this.isManualSelectionMode) {
+            // In manual selection mode, use the number of selected songs
+            songCount = this.selectedSongs.size;
+            console.log(`🎯 Manual selection mode: exporting ${songCount} selected songs`);
+        } else {
+            // In normal mode, validate the song count input
+            songCount = parseInt(songCountInput.value);
+            
+            if (isNaN(songCount) || songCount < 1 || songCount > 100) {
+                this.showExportStatus('Number of songs must be between 1 and 100.', 'error');
                 return;
+            }
+            
+            // Additional check for extremely large requests when auto-loading is involved
+            if (songCount > this.searchResults.length && songCount > 50 && this.hasMoreResults) {
+                const proceed = confirm(
+                    `You requested ${songCount} songs but only ${this.searchResults.length} are currently loaded.\n\n` +
+                    `This will automatically load more results, which may take some time.\n\n` +
+                    `Continue with auto-loading?`
+                );
+                if (!proceed) {
+                    return;
+                }
             }
         }
         
         if (!this.searchResults || this.searchResults.length === 0) {
             this.showExportStatus('No search results available to export.', 'error');
+            return;
+        }
+        
+        // Additional validation for manual selection mode
+        if (this.isManualSelectionMode && this.selectedSongs.size === 0) {
+            this.showExportStatus('No songs selected. Please check at least one song to export.', 'error');
             return;
         }
         
@@ -1584,7 +1950,28 @@ class IntelligentSearchApp {
         }
         
         // Prepare song IDs for export
-        const songsToExport = this.searchResults.slice(0, songCount);
+        let songsToExport;
+        if (this.isManualSelectionMode) {
+            // In manual selection mode, export only selected songs
+            const selectedSongsInResults = this.searchResults.filter(song => this.selectedSongs.has(song.song_idx));
+            
+            if (songCount > selectedSongsInResults.length) {
+                console.log(`🎯 User requested ${songCount} songs but only ${selectedSongsInResults.length} are selected and available`);
+                this.showExportStatus(
+                    `You requested ${songCount} songs but only ${selectedSongsInResults.length} are selected. ` +
+                    `Proceeding with ${selectedSongsInResults.length} tracks.`,
+                    'info'
+                );
+            }
+            
+            songsToExport = selectedSongsInResults.slice(0, songCount);
+            console.log(`🎯 Manual selection mode: exporting ${songsToExport.length} selected songs out of ${this.selectedSongs.size} total selected`);
+        } else {
+            // Normal mode: export first N songs  
+            songsToExport = this.searchResults.slice(0, songCount);
+            console.log(`🎵 Normal mode: exporting first ${songsToExport.length} songs`);
+        }
+        
         const spotifyIds = songsToExport
             .map(song => song.spotify_id)
             .filter(id => id && id.trim()); // Filter out empty/null IDs

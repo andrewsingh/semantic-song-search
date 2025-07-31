@@ -84,9 +84,7 @@ body {
 /* Filter Option */
 .filter-option {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 0.25rem;
 }
 
 .filter-checkbox-label {
@@ -118,26 +116,6 @@ body {
     height: 16px;
     margin: 0;
     accent-color: #1db954;
-}
-
-.filter-status {
-    font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.6);
-    text-align: center;
-}
-
-.filter-status.loaded {
-    color: #1db954;
-}
-
-.filter-status.error {
-    color: #ff6b6b;
-    cursor: help;
-}
-
-.filter-status.error[title] {
-    text-decoration: underline;
-    text-decoration-style: dotted;
 }
 
 /* Search Container */
@@ -405,6 +383,13 @@ body {
     box-shadow: 0 0 0 3px rgba(29, 185, 84, 0.2);
 }
 
+.export-info-text {
+    color: #1db954;
+    font-weight: 500;
+    font-size: 0.9rem;
+    margin-left: 0.5rem; /* Add space between label and count */
+}
+
 .export-button {
     background: linear-gradient(135deg, #1DB954, #1ed760);
     border: none;
@@ -456,6 +441,13 @@ body {
     color: #60a5fa;
 }
 
+.export-field-hint {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 0.25rem;
+    display: block;
+}
+
 /* Results Section */
 .results-header {
     display: flex;
@@ -463,6 +455,25 @@ body {
     align-items: center;
     margin-bottom: 2rem;
     flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.results-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+}
+
+.results-left {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+}
+
+.results-filters {
+    display: flex;
+    align-items: center;
     gap: 1rem;
 }
 
@@ -540,25 +551,86 @@ body {
     background: rgba(29, 185, 84, 0.1);
 }
 
-.song-card.playing::after {
-    content: '♪';
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    color: #1DB954;
-    font-size: 1.2rem;
-    animation: pulse 1.5s infinite;
+/* Removed pulsing music icon - play button serves this purpose now */
+
+/* Song Selection Styles */
+.song-card.selectable {
+    position: relative;
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+.song-card.selectable.selected {
+    border-color: #1DB954;
+    border-width: 2px;
+    box-shadow: 0 0 0 1px rgba(29, 185, 84, 0.2);
 }
+
+.song-card-checkbox {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    width: 18px;
+    height: 18px;
+    accent-color: #1db954;
+    cursor: pointer;
+    z-index: 10;
+    display: none; /* Hidden by default */
+}
+
+/* Show checkboxes only in manual selection mode */
+.results-container.manual-selection-mode .song-card-checkbox {
+    display: block;
+}
+
+.results-container.manual-selection-mode .song-play-btn {
+    display: flex;
+}
+
+/* Adjust card header spacing only in manual selection mode */
+.results-container.manual-selection-mode .song-card .card-header {
+    margin-left: 2rem; /* Make room for checkbox */
+}
+
+
 
 .card-header {
     display: flex;
     gap: 1rem;
     margin-bottom: 1rem;
+    position: relative; /* For absolute positioning of play button */
+}
+
+.song-play-btn {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 32px;
+    height: 32px;
+    border: 1px solid #1db954;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    color: #1db954;
+    display: none; /* Hidden by default */
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 2;
+}
+
+.song-play-btn svg {
+    width: 12px;
+    height: 12px;
+    margin-left: 1px; /* Slight offset to visually center the triangle */
+}
+
+.song-play-btn:hover {
+    background: rgba(29, 185, 84, 0.8);
+    color: white;
+    transform: scale(1.1);
+}
+
+.song-play-btn:active {
+    transform: scale(0.95);
 }
 
 .card-cover {
@@ -574,14 +646,18 @@ body {
     min-width: 0;
 }
 
+/* Reserve space for play button only in manual selection mode */
+.results-container.manual-selection-mode .card-info {
+    padding-right: 40px; /* Reserve space for play button (32px + 8px margin) */
+}
+
 .card-title {
     font-size: 1.1rem;
     font-weight: 600;
     color: #fff;
     margin-bottom: 0.25rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.2;
+    /* Dynamic sizing will be handled by JavaScript */
 }
 
 .card-artist {

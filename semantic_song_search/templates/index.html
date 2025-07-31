@@ -29,14 +29,6 @@
                         <option value="tags_genres">Tags + Genres</option>
                     </select>
                     
-                    <div class="filter-option">
-                        <label class="filter-checkbox-label">
-                            <input type="checkbox" id="top-artists-filter" class="filter-checkbox" disabled>
-                            <span class="checkmark"></span>
-                            <span class="filter-text">Only Top Artists</span>
-                        </label>
-                        <span id="top-artists-status" class="filter-status">Login required</span>
-                    </div>
                 </div>
                 
                 <!-- Search Bar -->
@@ -82,10 +74,14 @@
                                        placeholder="My Intelligent Search Playlist" 
                                        value="Semantic Song Search">
                             </div>
-                            <div class="export-field">
+                            <div id="song-count-field" class="export-field">
                                 <label for="song-count" class="export-label">Number of Songs:</label>
                                 <input type="number" id="song-count" class="export-input" 
                                        min="1" max="100" value="10">
+                            </div>
+                            <div id="manual-selection-info" class="export-field" style="display: none;">
+                                <span class="export-label">Selected Songs:</span>
+                                <span id="selected-songs-count" class="export-info-text">0 songs selected</span>
                             </div>
                             <button id="export-btn" class="export-button">
                                 <span class="export-button-text">Create Playlist</span>
@@ -100,10 +96,30 @@
             <!-- Search Results -->
             <section id="results-section" class="results-section">
                 <div id="results-header" class="results-header" style="display: none;">
-                    <h2 class="section-title">🎵 Similar Songs</h2>
-                    <div class="results-info">
-                        <span id="results-count"></span>
-                        <span id="search-info"></span>
+                    <div class="results-controls">
+                        <div class="results-left">
+                            <h2 class="section-title">Similar Songs</h2>
+                            <div class="results-filters">
+                                <div class="filter-option">
+                                    <label class="filter-checkbox-label">
+                                        <input type="checkbox" id="manual-selection-toggle" class="filter-checkbox">
+                                        <span class="checkmark"></span>
+                                        <span class="filter-text">Manual Selection</span>
+                                    </label>
+                                </div>
+                                <div class="filter-option">
+                                    <label class="filter-checkbox-label">
+                                        <input type="checkbox" id="top-artists-filter" class="filter-checkbox" disabled>
+                                        <span class="checkmark"></span>
+                                        <span id="top-artists-text" class="filter-text">Only Top Artists</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="results-info">
+                            <span id="results-count"></span>
+                            <span id="search-info"></span>
+                        </div>
                     </div>
                 </div>
                 
