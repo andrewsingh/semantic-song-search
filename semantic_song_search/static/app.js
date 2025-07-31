@@ -23,6 +23,13 @@ class IntelligentSearchApp {
         this.currentTrack = null;
         this.isPlayerReady = false;
         
+        // Top artists filter
+        this.topArtists = [];
+        this.topArtistsLoaded = false;
+        this.isAuthenticated = false;
+        this.isFiltered = false;
+        this.originalSearchResults = []; // Store unfiltered results for client-side filtering
+        
         // Auto-play queue management
         this.currentSongIndex = -1;  // Index in search results
         this.isAutoPlayEnabled = true;  // Could make this configurable later
@@ -111,6 +118,26 @@ class IntelligentSearchApp {
             this.exportToPlaylist();
         });
         
+        // Top artists filter checkbox
+        document.getElementById('top-artists-filter').addEventListener('change', async (e) => {
+            console.log(`🎛️ Top artists filter checkbox changed: ${e.target.checked ? 'CHECKED' : 'UNCHECKED'}`);
+            console.log(`🎛️ Current state - topArtistsLoaded: ${this.topArtistsLoaded}, isAuthenticated: ${this.isAuthenticated}, top artists count: ${this.topArtists.length}`);
+            
+            // If checked and we don't have top artists yet, load them
+            if (e.target.checked && !this.topArtistsLoaded && this.isAuthenticated) {
+                console.log(`🎛️ Loading top artists because checkbox was checked but not loaded yet...`);
+                await this.loadTopArtists();
+            }
+            
+            // If we have existing search results, filter them client-side instead of re-running the search
+            if (this.searchResults.length > 0) {
+                console.log(`🔄 Filter toggled to ${e.target.checked ? 'ON' : 'OFF'}, filtering ${this.searchResults.length} existing results client-side...`);
+                this.applyClientSideFilter();
+            } else {
+                console.log(`🔄 No existing results to filter - searchResults.length: ${this.searchResults.length}`);
+            }
+        });
+        
         // Load more button
         document.getElementById('load-more-btn').addEventListener('click', () => {
             this.loadMoreResults();
@@ -194,16 +221,29 @@ class IntelligentSearchApp {
         const searchType = document.getElementById('search-type').value;
         const embedType = document.getElementById('embed-type').value;
         const query = document.getElementById('search-input').value.trim();
+        const topArtistsFilter = document.getElementById('top-artists-filter');
+        let filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
         if (!query) return;
         
-        // Create a search identifier based on actual search parameters
+        // If top artists filter is enabled but not loaded, load them first
+        if (filterTopArtists && !this.topArtistsLoaded) {
+            await this.loadTopArtists();
+            // If loading failed, uncheck the filter and continue without it
+            if (!this.topArtistsLoaded) {
+                topArtistsFilter.checked = false;
+                filterTopArtists = false; // Update the variable to reflect the unchecked state
+            }
+        }
+        
+        // Create a search identifier based on actual search parameters (excluding filter since it's now client-side)
         const newSearchId = `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`;
         const isNewSearch = this.searchResultsId !== newSearchId;
         
         // Reset pagination for new searches
         this.currentOffset = 0;
         this.searchResults = [];
+        this.originalSearchResults = [];
         
         // Reset queue when starting a new search
         if (isNewSearch) {
@@ -222,6 +262,7 @@ class IntelligentSearchApp {
                 query: query,
                 k: 20,
                 offset: 0
+                // Note: No longer sending filter_top_artists since we do client-side filtering
             };
             
             if (searchType === 'song' && this.currentQuerySong) {
@@ -245,10 +286,20 @@ class IntelligentSearchApp {
             
             const data = await response.json();
             this.searchResults = data.results;
+            this.originalSearchResults = [...data.results]; // Store original unfiltered results for client-side filtering
             this.currentOffset = data.pagination.offset + data.pagination.limit;
             this.totalResultsCount = data.pagination.total_count;
             this.hasMoreResults = data.pagination.has_more;
-            this.displayResults(data, false);
+            this.isFiltered = false; // Reset since server doesn't filter anymore
+            
+            // Apply client-side filter if checkbox is currently checked
+            const topArtistsFilter = document.getElementById('top-artists-filter');
+            if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
+                console.log('🔍 Auto-applying client-side filter after search because checkbox is checked');
+                this.applyClientSideFilter();
+            } else {
+                this.displayResults(data, false);
+            }
             
         } catch (error) {
             console.error('Search error:', error);
@@ -286,10 +337,22 @@ class IntelligentSearchApp {
             
             const data = await response.json();
             const previousResultsCount = this.searchResults.length;
-            this.searchResults = [...this.searchResults, ...data.results];
+            
+            // Add new results to original unfiltered results
+            this.originalSearchResults = [...this.originalSearchResults, ...data.results];
             this.currentOffset = data.pagination.offset + data.pagination.limit;
             this.hasMoreResults = data.pagination.has_more;
-            this.displayResults(data, true);
+            
+            // Check if we have client-side filtering active
+            const topArtistsFilter = document.getElementById('top-artists-filter');
+            if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
+                console.log('🔍 Re-applying client-side filter after loading more results');
+                this.applyClientSideFilter();
+            } else {
+                // No filtering - just add new results and display
+                this.searchResults = [...this.searchResults, ...data.results];
+                this.displayResults(data, true);
+            }
             
             console.log('🎵 Loaded more results, queue now has', this.searchResults.length, 'songs');
             console.log('🎵 Added', data.results.length, 'new songs to queue (was', previousResultsCount, ')');
@@ -315,8 +378,13 @@ class IntelligentSearchApp {
         const resultsGrid = document.getElementById('results-grid');
         const loadMoreContainer = document.getElementById('load-more-container');
         
-        // Update header (show total results, not just current batch)
-        resultsCount.textContent = `${this.searchResults.length} of ${this.totalResultsCount} results`;
+        // Update header (show current results count)
+        if (this.isFiltered) {
+            resultsCount.textContent = `${this.searchResults.length} results (filtered by top artists)`;
+        } else {
+            resultsCount.textContent = `${this.searchResults.length} results`;
+        }
+        
         searchInfo.textContent = `${data.search_type} search • ${data.embed_type.replace('_', ' ')}`;
         resultsHeader.style.display = 'flex';
         
@@ -326,11 +394,15 @@ class IntelligentSearchApp {
         }
         
         // Handle empty results case
-        if (!isLoadMore && this.totalResultsCount === 0) {
+        if (!isLoadMore && this.searchResults.length === 0) {
+            const message = this.isFiltered ? 
+                'No songs found matching your top artists. Try searching without the filter or adding more listening history to Spotify.' :
+                'No results found. Try adjusting your search terms or selecting a different embedding type.';
+            
             resultsGrid.innerHTML = `
                 <div class="no-results-message">
                     <h3>No results found</h3>
-                    <p>Try adjusting your search terms or selecting a different embedding type.</p>
+                    <p>${message}</p>
                 </div>
             `;
             loadMoreContainer.style.display = 'none';
@@ -339,7 +411,7 @@ class IntelligentSearchApp {
         }
         
         // Show export section when results are available (only for new searches)
-        if (!isLoadMore && this.totalResultsCount > 0) {
+        if (!isLoadMore && this.searchResults.length > 0) {
             document.getElementById('export-section').style.display = 'block';
             // Update the song count input placeholder to show available results
             this.updateSongCountHint();
@@ -601,10 +673,12 @@ class IntelligentSearchApp {
         
         this.currentQuerySong = null;
         this.searchResults = [];
+        this.originalSearchResults = [];
         this.currentSearchData = null;
         this.currentOffset = 0;
         this.totalResultsCount = 0;
         this.hasMoreResults = false;
+        this.isFiltered = false;
         
         // Reset auto-play queue
         this.resetAutoPlayQueue();
@@ -673,10 +747,14 @@ class IntelligentSearchApp {
     }
     
     updateAuthStatus(isAuthenticated) {
+        this.isAuthenticated = isAuthenticated;
+        
         const indicator = document.getElementById('auth-indicator');
         const text = document.getElementById('auth-text');
         const loginBtn = document.getElementById('login-btn');
         const logoutBtn = document.getElementById('logout-btn');
+        const topArtistsFilter = document.getElementById('top-artists-filter');
+        const topArtistsStatus = document.getElementById('top-artists-status');
         
         if (isAuthenticated) {
             indicator.textContent = '●';
@@ -684,12 +762,134 @@ class IntelligentSearchApp {
             text.textContent = 'Connected to Spotify';
             loginBtn.style.display = 'none';
             logoutBtn.style.display = 'inline-block';
+            
+            // Enable top artists filter
+            topArtistsFilter.disabled = false;
+            topArtistsStatus.textContent = 'Click to load';
+            topArtistsStatus.className = 'filter-status';
         } else {
             indicator.textContent = '○';
             indicator.className = 'auth-indicator';
             text.textContent = 'Not connected to Spotify';
             loginBtn.style.display = 'inline-block';
             logoutBtn.style.display = 'none';
+            
+            // Disable and reset top artists filter
+            topArtistsFilter.disabled = true;
+            topArtistsFilter.checked = false;
+            topArtistsStatus.textContent = 'Login required';
+            topArtistsStatus.className = 'filter-status';
+            this.topArtists = [];
+            this.topArtistsLoaded = false;
+        }
+    }
+    
+    applyClientSideFilter() {
+        const topArtistsFilter = document.getElementById('top-artists-filter');
+        const filterEnabled = topArtistsFilter.checked && !topArtistsFilter.disabled;
+        
+        console.log(`🔍 Applying client-side filter - enabled: ${filterEnabled}, top artists count: ${this.topArtists.length}`);
+        
+        if (!filterEnabled || !this.topArtistsLoaded || this.topArtists.length === 0) {
+            // Show all original results
+            console.log(`🔍 Showing all ${this.originalSearchResults.length} original results (filter disabled or no top artists)`);
+            this.searchResults = [...this.originalSearchResults];
+            this.isFiltered = false;
+        } else {
+            // Filter to only show songs by top artists
+            const topArtistsSet = new Set(this.topArtists.map(artist => artist.toLowerCase()));
+            console.log(`🔍 Filtering with top artists:`, Array.from(topArtistsSet).slice(0, 5), '...');
+            
+            const filteredOut = [];
+            this.searchResults = this.originalSearchResults.filter(song => {
+                const artistName = song.artist.toLowerCase().trim();
+                const isMatch = topArtistsSet.has(artistName);
+                if (!isMatch) {
+                    filteredOut.push(`"${song.song}" by "${song.artist}"`);
+                }
+                return isMatch;
+            });
+            
+            if (filteredOut.length > 0) {
+                console.log(`🔍 Filtered out ${filteredOut.length} songs:`, filteredOut.slice(0, 3), filteredOut.length > 3 ? '...' : '');
+            }
+            
+            this.isFiltered = true;
+            console.log(`🔍 Filter results: ${this.searchResults.length} out of ${this.originalSearchResults.length} songs kept`);
+        }
+        
+        // Update the display with filtered results
+        const mockData = {
+            results: this.searchResults,
+            search_type: this.currentSearchData?.search_type || 'text',
+            embed_type: this.currentSearchData?.embed_type || 'full_profile',
+            query: this.currentSearchData?.query || '',
+            pagination: {
+                offset: 0,
+                limit: this.searchResults.length,
+                total_count: this.isFiltered ? null : this.originalSearchResults.length,
+                has_more: false, // No more results since we're showing all filtered results
+                is_filtered: this.isFiltered,
+                returned_count: this.searchResults.length
+            }
+        };
+        
+        this.displayResults(mockData, false);
+    }
+    
+    async loadTopArtists() {
+        if (this.topArtistsLoaded) {
+            return; // Already loaded
+        }
+        
+        const topArtistsStatus = document.getElementById('top-artists-status');
+        topArtistsStatus.textContent = 'Loading...';
+        topArtistsStatus.className = 'filter-status';
+        
+        try {
+            const response = await fetch('/api/top_artists');
+            const data = await response.json();
+            
+            if (response.ok) {
+                this.topArtists = data.top_artists;
+                this.topArtistsLoaded = true;
+                if (data.count === 0) {
+                    topArtistsStatus.textContent = 'No top artists found';
+                    topArtistsStatus.className = 'filter-status error';
+                    console.log('⚠️ User has no top artists - may have new account or insufficient listening history');
+                } else {
+                    topArtistsStatus.textContent = `${data.count} artists loaded`;
+                    topArtistsStatus.className = 'filter-status loaded';
+                    console.log(`✅ Loaded ${data.count} top artists`);
+                }
+            } else {
+                console.error('Failed to load top artists:', data.error);
+                topArtistsStatus.textContent = 'Load failed';
+                topArtistsStatus.className = 'filter-status error';
+                
+                // If authentication error, disable the filter
+                if (response.status === 401 || response.status === 403) {
+                    const topArtistsFilter = document.getElementById('top-artists-filter');
+                    topArtistsFilter.checked = false;
+                    topArtistsFilter.disabled = true;
+                    
+                    // Special handling for scope insufficient error
+                    if (data.requires_reauth) {
+                        topArtistsStatus.textContent = 'Logout & login required';
+                        topArtistsStatus.title = 'Your current session lacks the required permissions. Please logout and login again.';
+                        // Show more helpful error message
+                        this.showError('Top artists filter requires additional permissions. Please logout and login again to enable this feature.');
+                        // Auto-logout the user since the backend cleared their session
+                        this.updateAuthStatus(false);
+                    } else {
+                        topArtistsStatus.textContent = 'Re-login required';
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error loading top artists:', error);
+            topArtistsStatus.textContent = 'Load failed';
+            topArtistsStatus.className = 'filter-status error';
         }
     }
     
@@ -1555,9 +1755,19 @@ class IntelligentSearchApp {
     updateSongCountHint() {
         const songCountInput = document.getElementById('song-count');
         if (songCountInput) {
-            const availableText = this.hasMoreResults ? 
-                `${this.searchResults.length} loaded, ${this.totalResultsCount} total` :
-                `${this.searchResults.length} available`;
+            let availableText;
+            if (this.isFiltered) {
+                // When filtering is active
+                availableText = this.hasMoreResults ? 
+                    `${this.searchResults.length} loaded (filtered)` :
+                    `${this.searchResults.length} available (filtered)`;
+            } else {
+                // Normal case - just show current count, with "more available" if applicable
+                availableText = this.hasMoreResults ? 
+                    `${this.searchResults.length} loaded, more available` :
+                    `${this.searchResults.length} available`;
+            }
+            
             songCountInput.title = `Currently ${availableText}`;
             
             // Update placeholder text

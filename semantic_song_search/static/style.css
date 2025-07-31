@@ -53,6 +53,8 @@ body {
     gap: 1rem;
     justify-content: center;
     margin-bottom: 1.5rem;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 .config-dropdown {
@@ -77,6 +79,65 @@ body {
 .config-dropdown option {
     background: #1a1a1f;
     color: #eaeaea;
+}
+
+/* Filter Option */
+.filter-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.filter-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    user-select: none;
+    color: #fff;
+    font-size: 0.9rem;
+}
+
+.filter-checkbox-label input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+}
+
+.filter-checkbox-label input[type="checkbox"]:disabled + .checkmark {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.filter-checkbox-label input[type="checkbox"]:disabled ~ .filter-text {
+    color: rgba(255, 255, 255, 0.5);
+    cursor: not-allowed;
+}
+
+.filter-checkbox {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #1db954;
+}
+
+.filter-status {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    text-align: center;
+}
+
+.filter-status.loaded {
+    color: #1db954;
+}
+
+.filter-status.error {
+    color: #ff6b6b;
+    cursor: help;
+}
+
+.filter-status.error[title] {
+    text-decoration: underline;
+    text-decoration-style: dotted;
 }
 
 /* Search Container */

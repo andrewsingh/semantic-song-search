@@ -89,7 +89,7 @@ Session(app)
 # Spotify configuration
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET') 
-SPOTIFY_SCOPES = "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-modify-public playlist-modify-private"
+SPOTIFY_SCOPES = "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-modify-public playlist-modify-private user-top-read"
 
 # Validate required environment variables
 if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
@@ -669,6 +669,7 @@ def search():
     song_idx = data.get('song_idx')  # For song-to-song search
     k = data.get('k', 20)
     offset = data.get('offset', 0)  # For pagination
+    # Note: Top artists filtering is now handled client-side for better performance
     
     # Validate pagination parameters
     if k <= 0 or k > 100:  # Reasonable limits
@@ -699,8 +700,9 @@ def search():
         else:
             return jsonify({'error': 'Invalid search_type'}), 400
         
-        # Format results
+        # Format results (filtering now handled client-side)
         formatted_results = []
+        
         for result in results:
             try:
                 # Handle both old format (song_idx, similarity) and new format (song_idx, similarity, field_value)
@@ -733,6 +735,7 @@ def search():
                 logger.error(f"Error processing search result {result}: {e}")
                 continue
         
+        # Return results (filtering now handled client-side for better performance)
         return jsonify({
             'results': formatted_results,
             'search_type': search_type,
@@ -742,7 +745,8 @@ def search():
                 'offset': offset,
                 'limit': k,
                 'total_count': total_count,
-                'has_more': offset + k < total_count
+                'has_more': offset + k < total_count,
+                'returned_count': len(formatted_results)
             }
         })
         
@@ -892,6 +896,83 @@ def get_token():
             return jsonify({'error': 'Token refresh failed, please re-authenticate'}), 401
     
     return jsonify({'access_token': token_info['access_token']})
+
+@app.route('/api/top_artists')
+def get_top_artists():
+    """Get user's top artists across all time ranges."""
+    token_info = session.get('token_info')
+    if not token_info:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    # Check if token is expired and refresh if needed
+    sp_oauth = get_spotify_oauth()
+    if sp_oauth.is_token_expired(token_info):
+        try:
+            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+            session['token_info'] = token_info
+        except Exception as e:
+            logger.error(f"Failed to refresh Spotify token: {e}")
+            return jsonify({'error': 'Token refresh failed, please re-authenticate'}), 401
+    
+    try:
+        # Create Spotify client
+        sp = spotipy.Spotify(auth=token_info['access_token'])
+        
+        # Get top artists for all time ranges
+        time_ranges = ['short_term', 'medium_term', 'long_term']
+        all_top_artists = set()  # Use set to automatically deduplicate
+        
+        for time_range in time_ranges:
+            try:
+                results = sp.current_user_top_artists(limit=50, time_range=time_range)
+                if results and 'items' in results:
+                    for artist in results['items']:
+                        # Ensure artist has a name field before processing
+                        if artist and 'name' in artist and artist['name']:
+                            # Store artist name in lowercase for case-insensitive matching
+                            all_top_artists.add(artist['name'].strip().lower())
+                    logger.info(f"Retrieved {len(results['items'])} top artists for {time_range}")
+                else:
+                    logger.warning(f"Unexpected response format for {time_range}: {results}")
+            except Exception as e:
+                logger.warning(f"Failed to get top artists for {time_range}: {e}")
+                continue
+        
+        # Convert back to list for JSON serialization
+        top_artists_list = list(all_top_artists)
+        
+        logger.info(f"Retrieved {len(top_artists_list)} unique top artists across all time ranges")
+        
+        # Handle case where user has no top artists
+        if len(top_artists_list) == 0:
+            logger.warning("User has no top artists - they may have a new account or insufficient listening history")
+        
+        return jsonify({
+            'top_artists': top_artists_list,
+            'count': len(top_artists_list)
+        })
+        
+    except spotipy.exceptions.SpotifyException as e:
+        logger.error(f"Spotify API error: {e}")
+        if e.http_status == 401:
+            return jsonify({'error': 'Spotify authentication expired, please login again'}), 401
+        elif e.http_status == 403:
+            # Check if it's a scope/permission issue
+            error_msg = str(e).lower()
+            if 'scope' in error_msg or 'insufficient' in error_msg:
+                logger.info("Clearing session due to insufficient permissions for top artists")
+                session.pop('token_info', None)  # Clear the invalid session
+                return jsonify({
+                    'error': 'Insufficient permissions to access top artists. Please logout and login again to grant the required permissions.',
+                    'requires_reauth': True
+                }), 403
+            else:
+                return jsonify({'error': f'Access denied: {e.msg}'}), 403
+        else:
+            return jsonify({'error': f'Spotify API error: {e.msg}'}), 500
+    except Exception as e:
+        logger.error(f"Failed to get top artists: {e}")
+        return jsonify({'error': 'Failed to retrieve top artists'}), 500
 
 if __name__ == '__main__':
     # Parse command line arguments
