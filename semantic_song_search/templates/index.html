@@ -8,11 +8,11 @@
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
 </head>
 <body>
-    <div class="app-container">
+    <div class="app-container" data-debug-mode="{% if debug_mode %}true{% else %}false{% endif %}">
         <!-- Header with Search Bar and Controls -->
         <header class="search-header">
             <div class="header-content">
-                <h1 class="app-title">🎵 Semantic Song Search</h1>
+                <h1 class="app-title">Semantic Song Search</h1>
                 
                 <!-- Search Configuration Row -->
                 <div class="search-config">

@@ -810,6 +810,26 @@ body {
     border: 1px solid rgba(29, 185, 84, 0.3);
 }
 
+.tag-item {
+    background: rgba(29, 185, 84, 0.2);
+    color: #1ed760;
+    padding: 0.3rem 0.6rem;
+    border-radius: 15px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid rgba(29, 185, 84, 0.3);
+}
+
+.genre-item {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+    padding: 0.3rem 0.6rem;
+    border-radius: 15px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
 .generic-content {
     background: rgba(255, 255, 255, 0.05);
     padding: 0.75rem;

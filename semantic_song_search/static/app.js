@@ -453,6 +453,8 @@ class IntelligentSearchApp {
         // Clear results grid only for new searches, not for load more
         if (!isLoadMore) {
             resultsGrid.innerHTML = '';
+            // Reset listener tracking for new searches
+            this.resetEventListenerTracking();
         }
         
         // Handle empty results case
@@ -526,7 +528,9 @@ class IntelligentSearchApp {
         }
         
         // Attach event listeners for song cards (handles both normal and selection modes)
-        this.attachSongCardEventListeners();
+        // For load more, only attach listeners to new cards starting from startIndex
+        const listenerStartIndex = isLoadMore ? startIndex : 0;
+        this.attachSongCardEventListeners(listenerStartIndex);
         
         // Update load more button visibility
         this.updateLoadMoreButton();
@@ -581,11 +585,24 @@ class IntelligentSearchApp {
             `;
         }
         
-        // Accordion content based on embedding type
+        // Accordion content based on debug mode and embedding type
         let accordionHTML = '';
-        if (fieldValue !== null && fieldValue !== undefined && embedType && !isQuery) {
-            const accordionContent = this.formatFieldValueForDisplay(fieldValue, embedType);
-            const accordionTitle = this.getAccordionTitle(embedType);
+        if (!isQuery) {
+            let accordionContent, accordionTitle;
+            
+            // In debug mode, show the field value for the search embedding type
+            // In production mode, always show tags + genres
+            const appContainer = document.querySelector('.app-container');
+            const debugMode = appContainer && appContainer.dataset.debugMode === 'true';
+            if (debugMode && fieldValue !== null && fieldValue !== undefined && embedType) {
+                accordionContent = this.formatFieldValueForDisplay(fieldValue, embedType);
+                accordionTitle = this.getAccordionTitle(embedType);
+            } else {
+                // Production mode - always show tags + genres
+                const tagsGenresObj = this.formatTagsGenresFromSong(song);
+                accordionContent = this.formatTagsGenresForDisplay(tagsGenresObj);
+                accordionTitle = this.getAccordionTitle('tags_genres');
+            }
             
             accordionHTML = `
                 <div class="card-accordion">
@@ -692,6 +709,61 @@ class IntelligentSearchApp {
             // Clean up
             document.body.removeChild(tempElement);
         });
+    }
+    
+    formatTagsGenresFromSong(song) {
+        /**
+         * Extract and clean tags and genres from song object
+         * Returns an object with separate tags and genres arrays
+         */
+        if (!song) {
+            return { tags: [], genres: [] };
+        }
+        
+        const rawTags = song.tags || [];
+        const rawGenres = song.genres || [];
+        
+        // Clean and filter tags
+        const cleanTags = rawTags
+            .filter(item => item != null) // Remove null/undefined
+            .map(item => String(item).trim()) // Convert to string and trim
+            .filter(item => item.length > 0); // Remove empty strings
+        
+        // Clean and filter genres
+        const cleanGenres = rawGenres
+            .filter(item => item != null) // Remove null/undefined
+            .map(item => String(item).trim()) // Convert to string and trim
+            .filter(item => item.length > 0); // Remove empty strings
+        
+        // Remove duplicates within each category
+        const uniqueTags = [...new Set(cleanTags)];
+        const uniqueGenres = [...new Set(cleanGenres)];
+        
+        return { tags: uniqueTags, genres: uniqueGenres };
+    }
+    
+    formatTagsGenresForDisplay(tagsGenresObj) {
+        /**
+         * Format tags and genres with different styling
+         * Takes an object with tags and genres arrays
+         */
+        if (!tagsGenresObj || (!tagsGenresObj.tags.length && !tagsGenresObj.genres.length)) {
+            return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
+        }
+        
+        const tagElements = tagsGenresObj.tags.map(tag => 
+            `<span class="tag-item">${escapeHtml(tag)}</span>`
+        ).join('');
+        
+        const genreElements = tagsGenresObj.genres.map(genre => 
+            `<span class="genre-item">${escapeHtml(genre)}</span>`
+        ).join('');
+        
+        return `
+            <div class="tags-genres-content">
+                ${tagElements}${genreElements}
+            </div>
+        `;
     }
     
     formatFieldValueForDisplay(fieldValue, embedType) {
@@ -848,8 +920,17 @@ class IntelligentSearchApp {
         // Update export form to show number input instead of selection info
         this.updateExportFormDisplay();
         
+        // Reset event listener tracking
+        this.resetEventListenerTracking();
+        
         // Reset auto-play queue
         this.resetAutoPlayQueue();
+    }
+    
+    resetEventListenerTracking() {
+        // This method doesn't need to do anything since we clear the DOM
+        // but it's here for clarity and potential future use
+        console.log('🔄 Event listener tracking reset');
     }
     
     // Reset auto-play queue state
@@ -933,7 +1014,7 @@ class IntelligentSearchApp {
             
             // Enable top artists filter
             topArtistsFilter.disabled = false;
-            topArtistsText.textContent = 'Only Top Artists';
+            topArtistsText.textContent = 'Only My Top Artists';
         } else {
             indicator.textContent = '○';
             indicator.className = 'auth-indicator';
@@ -944,7 +1025,7 @@ class IntelligentSearchApp {
             // Disable and reset top artists filter
             topArtistsFilter.disabled = true;
             topArtistsFilter.checked = false;
-            topArtistsText.textContent = 'Only Top Artists';
+            topArtistsText.textContent = 'Only My Top Artists';
             this.topArtists = [];
             this.topArtistsLoaded = false;
         }
@@ -1033,53 +1114,61 @@ class IntelligentSearchApp {
     
     // refreshSongCards method removed - no longer needed with CSS-based optimization
     
-    attachSongCardEventListeners() {
+    attachSongCardEventListeners(startIndex = 0) {
         const resultsGrid = document.getElementById('results-grid');
         const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
         
-        songCards.forEach((card, index) => {
-            if (index < this.searchResults.length) {
-                const song = this.searchResults[index];
-                
-                // Smart event listener that handles both modes dynamically
-                card.addEventListener('click', (e) => {
-                    // Don't handle if clicking on the checkbox directly
-                    if (e.target.type === 'checkbox') return;
-                    
-                    // Don't handle if clicking on accordion elements
-                    if (e.target.closest('.card-accordion')) return;
-                    
-                    // Don't handle if clicking on the play button
-                    if (e.target.closest('.song-play-btn')) return;
-                    
-                    if (this.isManualSelectionMode) {
-                        // Manual selection mode: single click toggles selection
-                        this.toggleSongSelection(song.song_idx, index);
-                    } else {
-                        // Normal mode: single click plays
-                        this.playSong(song);
-                    }
-                });
-                
-                // Handle play button clicks (always plays regardless of mode)
-                const playButton = card.querySelector('.song-play-btn');
-                if (playButton) {
-                    playButton.addEventListener('click', (e) => {
-                        e.stopPropagation(); // Prevent card click
-                        this.playSong(song);
-                    });
-                }
-                
-                // Handle checkbox clicks directly (always present but hidden via CSS)
-                const checkbox = card.querySelector('.song-card-checkbox');
-                if (checkbox) {
-                    checkbox.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.toggleSongSelection(song.song_idx, index);
-                    });
-                }
+        // Only attach listeners to cards starting from startIndex to avoid duplicates
+        for (let index = startIndex; index < songCards.length && index < this.searchResults.length; index++) {
+            const card = songCards[index];
+            const song = this.searchResults[index];
+            
+            // Check if listeners are already attached to avoid duplicates
+            if (card.dataset.listenersAttached === 'true') {
+                continue;
             }
-        });
+            
+            // Mark card as having listeners attached
+            card.dataset.listenersAttached = 'true';
+            
+            // Smart event listener that handles both modes dynamically
+            card.addEventListener('click', (e) => {
+                // Don't handle if clicking on the checkbox directly
+                if (e.target.type === 'checkbox') return;
+                
+                // Don't handle if clicking on accordion elements
+                if (e.target.closest('.card-accordion')) return;
+                
+                // Don't handle if clicking on the play button
+                if (e.target.closest('.song-play-btn')) return;
+                
+                if (this.isManualSelectionMode) {
+                    // Manual selection mode: single click toggles selection
+                    this.toggleSongSelection(song.song_idx, index);
+                } else {
+                    // Normal mode: single click plays
+                    this.playSong(song);
+                }
+            });
+            
+            // Handle play button clicks (always plays regardless of mode)
+            const playButton = card.querySelector('.song-play-btn');
+            if (playButton) {
+                playButton.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent card click
+                    this.playSong(song);
+                });
+            }
+            
+            // Handle checkbox clicks directly (always present but hidden via CSS)
+            const checkbox = card.querySelector('.song-card-checkbox');
+            if (checkbox) {
+                checkbox.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.toggleSongSelection(song.song_idx, index);
+                });
+            }
+        }
     }
     
     updateExportFormDisplay() {
@@ -1243,15 +1332,15 @@ class IntelligentSearchApp {
                 this.topArtists = data.top_artists;
                 this.topArtistsLoaded = true;
                 if (data.count === 0) {
-                    topArtistsText.textContent = 'Only Top Artists (0)';
+                    topArtistsText.textContent = 'Only My Top Artists (0)';
                     console.log('⚠️ User has no top artists - may have new account or insufficient listening history');
                 } else {
-                    topArtistsText.textContent = `Only Top Artists (${data.count})`;
+                    topArtistsText.textContent = `Only My Top Artists (${data.count})`;
                     console.log(`✅ Loaded ${data.count} top artists`);
                 }
             } else {
                 console.error('Failed to load top artists:', data.error);
-                topArtistsText.textContent = 'Only Top Artists';
+                topArtistsText.textContent = 'Only My Top Artists';
                 
                 // If authentication error, disable the filter
                 if (response.status === 401 || response.status === 403) {
@@ -1268,7 +1357,7 @@ class IntelligentSearchApp {
             }
         } catch (error) {
             console.error('Error loading top artists:', error);
-            topArtistsText.textContent = 'Only Top Artists';
+            topArtistsText.textContent = 'Only My Top Artists';
         }
     }
     

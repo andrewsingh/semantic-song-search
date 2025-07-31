@@ -602,7 +602,9 @@ def get_spotify_oauth():
 def index():
     """Main page."""
     init_search_engine()
-    return render_template('index.html')
+    # Pass debug flag to template
+    debug_mode = getattr(args, 'debug', False) if args else False
+    return render_template('index.html', debug_mode=debug_mode)
 
 @app.route('/login')
 def login():
