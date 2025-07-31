@@ -11,7 +11,7 @@ class SemanticSearchApp {
     constructor() {
         this.currentQuery = null;
         this.currentQuerySong = null;
-        this.currentSearchType = null;
+        this.currentSearchType = 'text'; // Initialize to match HTML default
         this.searchResults = [];
         this.currentSearchData = null;
         this.currentOffset = 0;
@@ -54,15 +54,39 @@ class SemanticSearchApp {
     init() {
         this.bindEventListeners();
         this.checkAuthStatus();
+        
+        // Ensure currentSearchType is synced with the initial HTML state
+        this.currentSearchType = this.getSearchType();
+        
         // Don't initialize player here - it will be initialized when needed in playSong()
         // this.initSpotifyPlayer();
     }
     
+    // Helper function to get current search type from segmented control
+    getSearchType() {
+        try {
+            const checkedRadio = document.querySelector('input[name="search-type"]:checked');
+            return checkedRadio ? checkedRadio.value : 'text';
+        } catch (error) {
+            console.warn('Error getting search type from segmented control:', error);
+            return 'text'; // Safe fallback
+        }
+    }
+    
     bindEventListeners() {
-        // Search type change
-        document.getElementById('search-type').addEventListener('change', (e) => {
-            this.handleSearchTypeChange(e.target.value);
-        });
+        // Search type change - segmented control
+        const searchTypeRadios = document.querySelectorAll('input[name="search-type"]');
+        if (searchTypeRadios.length > 0) {
+            searchTypeRadios.forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        this.handleSearchTypeChange(e.target.value);
+                    }
+                });
+            });
+        } else {
+            console.warn('Search type radio buttons not found in DOM');
+        }
         
         // Embedding type change - auto-rerun search if results exist
         document.getElementById('embed-type').addEventListener('change', (e) => {
@@ -162,6 +186,9 @@ class SemanticSearchApp {
         const querySection = document.getElementById('query-section');
         const searchInput = document.getElementById('search-input');
         
+        // Update current search type immediately
+        this.currentSearchType = searchType;
+        
         if (searchType === 'song') {
             searchInput.placeholder = "🔍 Search for a song or artist... (e.g., 'Billie Eilish', 'Bad Guy')";
             this.clearResults();
@@ -188,7 +215,7 @@ class SemanticSearchApp {
         const hasQuery = query.length > 0;
         
         // For song-to-song searches, also check if we have a selected query song
-        const searchType = document.getElementById('search-type').value;
+        const searchType = this.getSearchType();
         const hasValidQuery = hasQuery || (searchType === 'song' && this.currentQuerySong);
         
         if (hasResults && hasValidQuery) {
@@ -201,7 +228,7 @@ class SemanticSearchApp {
     }
     
     async handleSearchInput(query) {
-        const searchType = document.getElementById('search-type').value;
+        const searchType = this.getSearchType();
         const suggestionsContainer = document.getElementById('suggestions');
         
         if (searchType === 'song' && query.trim().length > 2) {
@@ -258,7 +285,7 @@ class SemanticSearchApp {
     }
     
     async handleSearch() {
-        const searchType = document.getElementById('search-type').value;
+        const searchType = this.getSearchType();
         const embedType = document.getElementById('embed-type').value;
         const query = document.getElementById('search-input').value.trim();
         const topArtistsFilter = document.getElementById('top-artists-filter');

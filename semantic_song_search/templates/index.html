@@ -16,10 +16,18 @@
                 
                 <!-- Search Configuration Row -->
                 <div class="search-config">
-                    <select id="search-type" class="config-dropdown">
-                        <option value="text">Text-to-Song</option>
-                        <option value="song">Song-to-Song</option>
-                    </select>
+                    <div class="segmented-control" id="search-type-control" role="radiogroup" aria-label="Search mode selection">
+                        <input type="radio" id="search-type-text" name="search-type" value="text" checked>
+                        <label for="search-type-text" class="segment-label">
+                            <span class="segment-icon" aria-hidden="true">📝</span>
+                            <span class="segment-text">Text-to-Song</span>
+                        </label>
+                        <input type="radio" id="search-type-song" name="search-type" value="song">
+                        <label for="search-type-song" class="segment-label">
+                            <span class="segment-icon" aria-hidden="true">🎵</span>
+                            <span class="segment-text">Song-to-Song</span>
+                        </label>
+                    </div>
                     
                     <select id="embed-type" class="config-dropdown">
                         <option value="tags_genres">Tags + Genres</option>
