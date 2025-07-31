@@ -105,11 +105,6 @@ class SemanticSearchApp {
             }
         });
         
-        // Search button
-        document.getElementById('search-btn').addEventListener('click', () => {
-            this.handleSearch();
-        });
-        
         // Login button
         document.getElementById('login-btn').addEventListener('click', () => {
             window.location.href = '/login';
@@ -595,18 +590,38 @@ class SemanticSearchApp {
         if (rank && similarity !== undefined) {
             metadataHTML = `
                 <div class="card-metadata">
-                    <span>#${rank}</span>
+                    <span class="card-rank">#${rank}</span>
                     <span class="similarity-score">${(similarity * 100).toFixed(1)}%</span>
                 </div>
             `;
         }
         
         let tagsHTML = '';
+        let playButtonHTML = '';
+        if (!isQuery && song.spotify_id) {
+            playButtonHTML = `<button class="song-play-btn" title="Play song">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            </button>`;
+        }
+        
         if (song.tags && song.tags.length > 0) {
             const displayTags = song.tags.slice(0, 3);
             tagsHTML = `
                 <div class="card-tags">
-                    ${displayTags.map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
+                    <div class="tags-container">
+                        ${displayTags.map(tag => `<span class="tag-item">${escapeHtml(tag)}</span>`).join('')}
+                    </div>
+                    ${playButtonHTML}
+                </div>
+            `;
+        } else if (playButtonHTML) {
+            // If no tags but we have a play button, still create the tags container
+            tagsHTML = `
+                <div class="card-tags">
+                    <div class="tags-container"></div>
+                    ${playButtonHTML}
                 </div>
             `;
         }
@@ -651,15 +666,16 @@ class SemanticSearchApp {
             checkboxHTML = `<input type="checkbox" class="song-card-checkbox" ${isSelected ? 'checked' : ''}>`;
         }
         
-        let playButtonHTML = '';
-        if (!isQuery && song.spotify_id) {
-            playButtonHTML = `<button class="song-play-btn" title="Play song">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M8 5v14l11-7z"/>
-                </svg>
-            </button>`;
+        let footerHTML = '';
+        if (rank && similarity !== undefined) {
+            footerHTML = `
+                <div class="card-footer">
+                    <span class="card-rank">#${rank}</span>
+                    <span class="similarity-score">${(similarity * 100).toFixed(1)}%</span>
+                </div>
+            `;
         }
-        
+
         return `
             ${checkboxHTML}
             <div class="card-header">
@@ -669,11 +685,10 @@ class SemanticSearchApp {
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
-                ${playButtonHTML}
             </div>
-            ${metadataHTML}
             ${tagsHTML}
             ${accordionHTML}
+            ${footerHTML}
         `;
     }
     
