@@ -22,6 +22,7 @@ class IntelligentSearchApp {
         this.accessToken = null;
         this.currentTrack = null;
         this.isPlayerReady = false;
+        this.playerInitPromise = null; // Promise for player initialization
         
         // Top artists filter
         this.topArtists = [];
@@ -52,7 +53,8 @@ class IntelligentSearchApp {
     init() {
         this.bindEventListeners();
         this.checkAuthStatus();
-        this.initSpotifyPlayer();
+        // Don't initialize player here - it will be initialized when needed in playSong()
+        // this.initSpotifyPlayer();
         this.updateAutoPlayUI();  // Initialize auto-play button state
     }
     
@@ -1250,103 +1252,132 @@ class IntelligentSearchApp {
         
         if (!this.accessToken) {
             console.log('❌ No access token, skipping player initialization');
-            return;
+            return Promise.reject(new Error('No access token'));
         }
         
         if (!window.Spotify) {
             console.log('⏳ Spotify SDK not loaded, retrying in 1 second...');
-            setTimeout(() => this.initSpotifyPlayer(), 1000);
-            return;
+            return new Promise((resolve, reject) => {
+                setTimeout(() => {
+                    this.initSpotifyPlayer().then(resolve).catch(reject);
+                }, 1000);
+            });
+        }
+        
+        // Return existing promise if initialization is already in progress
+        if (this.playerInitPromise) {
+            console.log('🎧 Player initialization already in progress, returning existing promise');
+            return this.playerInitPromise;
         }
         
         console.log('✅ Spotify SDK loaded, creating player...');
         
-        const player = new window.Spotify.Player({
-            name: 'Semantic Song Search',
-            getOAuthToken: cb => { 
-                console.log('🔑 Token requested by Spotify SDK');
-                cb(this.accessToken); 
-            },
-            volume: 0.5
-        });
-        
-        // Error handling
-        player.addListener('initialization_error', ({ message }) => {
-            console.error('❌ Failed to initialize:', message);
-        });
-        
-        player.addListener('authentication_error', ({ message }) => {
-            console.error('❌ Failed to authenticate:', message);
-            this.updateAuthStatus(false);
-        });
-        
-        player.addListener('account_error', ({ message }) => {
-            console.error('❌ Failed to validate Spotify account:', message);
-        });
-        
-        player.addListener('playback_error', ({ message }) => {
-            console.error('❌ Failed to perform playback:', message);
-        });
-        
-        // Playback status updates
-        player.addListener('player_state_changed', (state) => {
-            console.log('🎵 Player state changed:', state);
-            if (!state) return;
+        // Create a promise for player initialization
+        this.playerInitPromise = new Promise((resolve, reject) => {
+            const player = new window.Spotify.Player({
+                name: 'Semantic Song Search',
+                getOAuthToken: cb => { 
+                    console.log('🔑 Token requested by Spotify SDK');
+                    cb(this.accessToken); 
+                },
+                volume: 0.5
+            });
             
-            // Debug logging for auto-play troubleshooting
-            if (state.track_window.current_track) {
-                console.log('🎵 State details:', {
-                    paused: state.paused,
-                    position: state.position,
-                    duration: state.duration,
-                    loading: state.loading,
-                    trackId: state.track_window.current_track.id,
-                    autoPlayEnabled: this.isAutoPlayEnabled,
-                    currentIndex: this.currentSongIndex,
-                    manualSkip: this.isManualSkip,
-                    timeSinceLastAdvance: Date.now() - this.lastAutoAdvanceTime
-                });
-            }
+            // Error handling
+            player.addListener('initialization_error', ({ message }) => {
+                console.error('❌ Failed to initialize:', message);
+                this.playerInitPromise = null;
+                reject(new Error(`Initialization error: ${message}`));
+            });
             
-            this.updatePlayerUI(state);
-            this.updatePlayingCards(state.track_window.current_track);
+            player.addListener('authentication_error', ({ message }) => {
+                console.error('❌ Failed to authenticate:', message);
+                this.updateAuthStatus(false);
+                this.playerInitPromise = null;
+                reject(new Error(`Authentication error: ${message}`));
+            });
             
-            // Auto-play next song when current track ends
-            this.handleAutoPlayCheck(state);
+            player.addListener('account_error', ({ message }) => {
+                console.error('❌ Failed to validate Spotify account:', message);
+                this.playerInitPromise = null;
+                reject(new Error(`Account error: ${message}`));
+            });
+            
+            player.addListener('playback_error', ({ message }) => {
+                console.error('❌ Failed to perform playback:', message);
+            });
+            
+            // Playback status updates
+            player.addListener('player_state_changed', (state) => {
+                console.log('🎵 Player state changed:', state);
+                if (!state) return;
+                
+                // Debug logging for auto-play troubleshooting
+                if (state.track_window.current_track) {
+                    console.log('🎵 State details:', {
+                        paused: state.paused,
+                        position: state.position,
+                        duration: state.duration,
+                        loading: state.loading,
+                        trackId: state.track_window.current_track.id,
+                        autoPlayEnabled: this.isAutoPlayEnabled,
+                        currentIndex: this.currentSongIndex,
+                        manualSkip: this.isManualSkip,
+                        timeSinceLastAdvance: Date.now() - this.lastAutoAdvanceTime
+                    });
+                }
+                
+                this.updatePlayerUI(state);
+                this.updatePlayingCards(state.track_window.current_track);
+                
+                // Auto-play next song when current track ends
+                this.handleAutoPlayCheck(state);
+            });
+            
+            // Ready
+            player.addListener('ready', ({ device_id }) => {
+                console.log('✅ Player ready with Device ID:', device_id);
+                this.deviceId = device_id;
+                this.spotifyPlayer = player;
+                this.isPlayerReady = true;
+                this.playerInitPromise = null; // Clear the promise since we're done
+                
+                // Start backup auto-play checker (disabled for now to avoid interference)
+                // this.startAutoPlayChecker();
+                
+                resolve(device_id);
+            });
+            
+            // Not Ready
+            player.addListener('not_ready', ({ device_id }) => {
+                console.log('❌ Device ID has gone offline:', device_id);
+                this.isPlayerReady = false;
+                
+                // Stop backup checker when player goes offline
+                if (this.autoPlayCheckInterval) {
+                    clearInterval(this.autoPlayCheckInterval);
+                    this.autoPlayCheckInterval = null;
+                }
+            });
+            
+            // Connect to the player!
+            console.log('🔗 Connecting to Spotify...');
+            player.connect().then(success => {
+                if (success) {
+                    console.log('✅ Successfully connected to Spotify Web Playback SDK');
+                } else {
+                    console.error('❌ Failed to connect to Spotify Web Playback SDK');
+                    this.playerInitPromise = null;
+                    reject(new Error('Failed to connect to Spotify Web Playback SDK'));
+                }
+            }).catch(error => {
+                console.error('❌ Error connecting to Spotify:', error);
+                this.playerInitPromise = null;
+                reject(error);
+            });
         });
         
-        // Ready
-        player.addListener('ready', ({ device_id }) => {
-            console.log('✅ Player ready with Device ID:', device_id);
-            this.deviceId = device_id;
-            this.spotifyPlayer = player;
-            this.isPlayerReady = true;
-            
-            // Start backup auto-play checker (disabled for now to avoid interference)
-            // this.startAutoPlayChecker();
-        });
-        
-        // Not Ready
-        player.addListener('not_ready', ({ device_id }) => {
-            console.log('❌ Device ID has gone offline:', device_id);
-            this.isPlayerReady = false;
-            
-            // Stop backup checker when player goes offline
-            if (this.autoPlayCheckInterval) {
-                clearInterval(this.autoPlayCheckInterval);
-                this.autoPlayCheckInterval = null;
-            }
-        });
-        
-        // Connect to the player!
-        console.log('🔗 Connecting to Spotify...');
-        player.connect().then(success => {
-            if (success) {
-                console.log('✅ Successfully connected to Spotify Web Playback SDK');
-            } else {
-                console.error('❌ Failed to connect to Spotify Web Playback SDK');
-            }
-        });
+        return this.playerInitPromise;
     }
     
     async playSong(song, isAutoAdvance = false) {
@@ -1374,16 +1405,20 @@ class IntelligentSearchApp {
         console.log('🎵 Device ID?', this.deviceId);
         console.log('🎵 Spotify ID?', song.spotify_id);
         
-        if (!this.isPlayerReady || !song.spotify_id) {
-            console.log('❌ Player not ready or no Spotify ID');
-            console.log('   - Player ready:', this.isPlayerReady);
-            console.log('   - Spotify ID:', song.spotify_id);
-            
-            if (!this.isPlayerReady) {
-                console.log('🔄 Attempting to reinitialize player...');
-                this.initSpotifyPlayer();
-            }
+        if (!song.spotify_id) {
+            console.log('❌ No Spotify ID for song');
             return;
+        }
+        
+        if (!this.isPlayerReady) {
+            console.log('🔄 Player not ready, initializing and waiting...');
+            try {
+                await this.initSpotifyPlayer();
+                console.log('✅ Player initialization completed, proceeding with playback');
+            } catch (error) {
+                console.error('❌ Failed to initialize player:', error);
+                return;
+            }
         }
         
         this.isPlayingSong = true;
@@ -2174,7 +2209,5 @@ document.addEventListener('DOMContentLoaded', () => {
 // Handle Spotify Web Playback SDK ready callback
 window.onSpotifyWebPlaybackSDKReady = () => {
     console.log('Spotify Web Playback SDK is ready');
-    if (window.app && window.app.accessToken) {
-        window.app.initSpotifyPlayer();
-    }
+    // Player will be initialized when needed in playSong() - no need to initialize here
 }; 
