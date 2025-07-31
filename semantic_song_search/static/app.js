@@ -11,6 +11,7 @@ class IntelligentSearchApp {
     constructor() {
         this.currentQuery = null;
         this.currentQuerySong = null;
+        this.currentSearchType = null;
         this.searchResults = [];
         this.currentSearchData = null;
         this.currentOffset = 0;
@@ -300,6 +301,10 @@ class IntelligentSearchApp {
             this.searchResultsId = newSearchId;
             this.resetAutoPlayQueue();
         }
+        
+        // Store current search parameters for playlist name auto-population
+        this.currentQuery = query;
+        this.currentSearchType = searchType;
         
         this.showLoading(true);
         this.hideWelcomeMessage();
@@ -1913,6 +1918,39 @@ class IntelligentSearchApp {
     
 
     
+    generatePlaylistName() {
+        if (!this.currentSearchType || !this.currentQuery) {
+            return 'Semantic Song Search';
+        }
+        
+        if (this.currentSearchType === 'text') {
+            // For text-to-song queries, use the query text
+            const query = this.currentQuery.trim();
+            if (query.length <= 100) {
+                return query;
+            } else {
+                // Truncate to 97 chars + "..."
+                return query.substring(0, 97) + '...';
+            }
+        } else if (this.currentSearchType === 'song' && this.currentQuerySong) {
+            // For song-to-song queries, use "{song name} vibes"
+            const songName = this.currentQuerySong.song || '';
+            const suffix = ' vibes';
+            const maxSongNameLength = 100 - suffix.length;
+            
+            if (songName.length <= maxSongNameLength) {
+                return songName + suffix;
+            } else {
+                // Truncate song name to fit, keeping " vibes" intact
+                const truncatedSongName = songName.substring(0, maxSongNameLength - 3) + '...';
+                return truncatedSongName + suffix;
+            }
+        }
+        
+        // Fallback
+        return 'Semantic Song Search';
+    }
+    
     toggleExportAccordion() {
         const accordion = document.querySelector('.export-accordion');
         const content = document.getElementById('export-accordion-content');
@@ -1922,6 +1960,14 @@ class IntelligentSearchApp {
         
         if (accordion.classList.contains('expanded')) {
             console.log('🎵 Export accordion expanded');
+            
+            // Auto-populate playlist name based on current search
+            const playlistNameInput = document.getElementById('playlist-name');
+            if (playlistNameInput) {
+                const autoName = this.generatePlaylistName();
+                playlistNameInput.value = autoName;
+                console.log('🎵 Auto-populated playlist name:', autoName);
+            }
             
             // Check if user is authenticated when opening accordion
             if (!this.accessToken) {
