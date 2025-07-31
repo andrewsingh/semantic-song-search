@@ -37,7 +37,7 @@ class IntelligentSearchApp {
         
         // Auto-play queue management
         this.currentSongIndex = -1;  // Index in search results
-        this.isAutoPlayEnabled = true;  // Could make this configurable later
+        this.isAutoPlayEnabled = true;  // Auto-play always enabled
         this.searchResultsId = null;  // To detect result changes
         this.isManualSkip = false;  // Track if user manually skipped
         this.lastTrackId = null;  // Track last played track for auto-advance detection
@@ -55,13 +55,17 @@ class IntelligentSearchApp {
         this.checkAuthStatus();
         // Don't initialize player here - it will be initialized when needed in playSong()
         // this.initSpotifyPlayer();
-        this.updateAutoPlayUI();  // Initialize auto-play button state
     }
     
     bindEventListeners() {
         // Search type change
         document.getElementById('search-type').addEventListener('change', (e) => {
             this.handleSearchTypeChange(e.target.value);
+        });
+        
+        // Embedding type change - auto-rerun search if results exist
+        document.getElementById('embed-type').addEventListener('change', (e) => {
+            this.handleEmbedTypeChange(e.target.value);
         });
         
         // Search input
@@ -107,11 +111,6 @@ class IntelligentSearchApp {
         // Progress bar
         document.getElementById('progress-bar').addEventListener('click', (e) => {
             this.seekToPosition(e);
-        });
-        
-        // Auto-play toggle
-        document.getElementById('autoplay-toggle').addEventListener('click', () => {
-            this.toggleAutoPlay();
         });
         
         // Export accordion toggle
@@ -173,6 +172,33 @@ class IntelligentSearchApp {
             suggestionsContainer.style.display = 'none';
             querySection.style.display = 'none';
             this.clearResults();
+        }
+    }
+    
+    handleEmbedTypeChange(embedType) {
+        console.log(`🎛️ Embedding type changed to: ${embedType}`);
+        
+        // Don't auto-rerun if we're currently loading more results
+        if (this.isLoadingMore) {
+            console.log(`🔄 Not auto-rerunning search - currently loading more results`);
+            return;
+        }
+        
+        // Check if we have existing search results and a query to re-run
+        const query = document.getElementById('search-input').value.trim();
+        const hasResults = this.searchResults.length > 0;
+        const hasQuery = query.length > 0;
+        
+        // For song-to-song searches, also check if we have a selected query song
+        const searchType = document.getElementById('search-type').value;
+        const hasValidQuery = hasQuery || (searchType === 'song' && this.currentQuerySong);
+        
+        if (hasResults && hasValidQuery) {
+            console.log(`🔄 Auto-rerunning search with new embedding type: ${embedType}`);
+            // Auto-rerun the search with the new embedding type
+            this.handleSearch();
+        } else {
+            console.log(`🔄 Not auto-rerunning search - hasResults: ${hasResults}, hasValidQuery: ${hasValidQuery}, searchType: ${searchType}`);
         }
     }
     
@@ -1863,24 +1889,7 @@ class IntelligentSearchApp {
         return `${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
     
-    toggleAutoPlay() {
-        this.isAutoPlayEnabled = !this.isAutoPlayEnabled;
-        console.log('🎵 Auto-play toggled:', this.isAutoPlayEnabled ? 'enabled' : 'disabled');
-        this.updateAutoPlayUI();
-    }
-    
-    updateAutoPlayUI() {
-        const autoPlayBtn = document.getElementById('autoplay-toggle');
-        if (this.isAutoPlayEnabled) {
-            autoPlayBtn.classList.add('active');
-            autoPlayBtn.title = 'Auto-play enabled - Click to disable';
-            autoPlayBtn.style.opacity = '1';
-        } else {
-            autoPlayBtn.classList.remove('active');
-            autoPlayBtn.title = 'Auto-play disabled - Click to enable';
-            autoPlayBtn.style.opacity = '0.5';
-        }
-    }
+
     
     toggleExportAccordion() {
         const accordion = document.querySelector('.export-accordion');

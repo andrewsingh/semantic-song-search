@@ -937,21 +937,7 @@ body {
     background: #1ed760;
 }
 
-.autoplay-btn {
-    font-size: 1rem;
-    transition: all 0.3s ease;
-    opacity: 0.5;
-}
 
-.autoplay-btn.active {
-    color: #1DB954;
-    opacity: 1;
-}
-
-.autoplay-btn:hover {
-    color: #fff;
-    background: rgba(29, 185, 84, 0.2);
-}
 
 .progress-container {
     display: flex;
