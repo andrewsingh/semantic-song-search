@@ -104,7 +104,7 @@ if not os.getenv('OPENAI_API_KEY'):
     logger.warning("OPENAI_API_KEY not set. Text-to-song search will not work.")
 
 class MusicSearchEngine:
-    """Core search engine for intelligent music search."""
+    """Core search engine for semantic music search."""
     
     def __init__(self, songs_file: str, embeddings_file: str):
         self.songs_file = songs_file

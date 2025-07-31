@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate text embeddings for song profiles using OpenAI's text-embedding-3-large model.
-Creates 5 embeddings per song optimized for intelligent music search:
+Creates 5 embeddings per song optimized for semantic music search:
 
 SONG-TO-SONG SEARCH (4 embeddings):
   1. Full profile: Complete song information formatted as structured text

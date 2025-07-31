@@ -7,7 +7,7 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-class IntelligentSearchApp {
+class SemanticSearchApp {
     constructor() {
         this.currentQuery = null;
         this.currentQuerySong = null;
@@ -2280,7 +2280,7 @@ class IntelligentSearchApp {
 
 // Initialize the app when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new IntelligentSearchApp();
+    window.app = new SemanticSearchApp();
 });
 
 // Handle Spotify Web Playback SDK ready callback
