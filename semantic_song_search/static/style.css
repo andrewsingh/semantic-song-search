@@ -38,7 +38,7 @@ body {
 
 .app-title {
     text-align: center;
-    font-size: 2rem;
+    font-size: 2.4rem;
     font-weight: 700;
     margin-bottom: 1.5rem;
     background: linear-gradient(135deg, #1DB954, #1ed760);
@@ -559,27 +559,39 @@ body {
 /* Welcome Message */
 .welcome-message {
     text-align: center;
-    padding: 4rem 2rem;
+    padding: 0.25rem 2rem;
     background: rgba(255, 255, 255, 0.02);
     border-radius: 16px;
     border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .welcome-content h3 {
-    font-size: 1.8rem;
+    font-size: 1.75rem;
     margin-bottom: 1rem;
     color: #fff;
 }
 
+.welcome-content h4 {
+    text-align: left;
+    font-size: 1.4rem;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+    color: #fff;
+    font-weight: 600;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 .welcome-content p {
-    color: #b3b3b3;
+    color: #ccc;
     margin-bottom: 1rem;
-    font-size: 1.1rem;
+    font-size: 1.2rem;
 }
 
 .welcome-content ul {
     text-align: left;
-    max-width: 600px;
+    max-width: 640px;
     margin: 0 auto 1.5rem;
     color: #ccc;
 }
@@ -1108,7 +1120,7 @@ body {
     }
     
     .app-title {
-        font-size: 1.5rem;
+        font-size: 1.8rem;
     }
     
     .search-config {

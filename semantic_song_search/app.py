@@ -804,7 +804,7 @@ def create_playlist():
         # Get request data
         data = request.json
         playlist_name = data.get('playlist_name', 'Semantic Song Search Playlist')
-        song_count = data.get('song_count', 10)
+        song_count = data.get('song_count', 20)
         song_spotify_ids = data.get('song_spotify_ids', [])
         
         # Validate inputs
