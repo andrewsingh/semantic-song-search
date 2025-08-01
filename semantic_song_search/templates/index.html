@@ -109,14 +109,12 @@
                                 <div class="filter-option">
                                     <label class="filter-checkbox-label">
                                         <input type="checkbox" id="manual-selection-toggle" class="filter-checkbox">
-                                        <span class="checkmark"></span>
                                         <span class="filter-text">Manual Selection</span>
                                     </label>
                                 </div>
                                 <div class="filter-option">
                                     <label class="filter-checkbox-label">
                                         <input type="checkbox" id="top-artists-filter" class="filter-checkbox" disabled>
-                                        <span class="checkmark"></span>
                                         <span id="top-artists-text" class="filter-text">Only My Top Artists</span>
                                     </label>
                                 </div>
@@ -125,6 +123,12 @@
                         <div class="results-info">
                             <span id="results-count"></span>
                             <span id="search-info"></span>
+                            <div class="results-spotify-attribution">
+                                <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer" class="results-spotify-logo-link">
+                                    <img src="{{ url_for('static', filename='assets/2024-spotify-full-logo/Full_Logo_Green_RGB.svg') }}" 
+                                         alt="Spotify" class="results-spotify-logo">
+                                </a>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -179,6 +183,13 @@
         <!-- Spotify Web Player (Fixed at Bottom) -->
         <footer class="player-footer">
             <div id="spotify-player" class="spotify-player">
+                <!-- Spotify Attribution -->
+                <div class="spotify-attribution">
+                    <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer" class="spotify-logo-link">
+                        <img src="{{ url_for('static', filename='assets/2024-spotify-full-logo/Full_Logo_Green_RGB.svg') }}" 
+                             alt="Spotify" class="spotify-logo">
+                    </a>
+                </div>
                 <!-- Player will be initialized here -->
                 <div class="player-content">
                     <div class="track-info">

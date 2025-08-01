@@ -431,6 +431,7 @@ body {
     font-weight: 500;
     color: #eaeaea;
     font-size: 0.9rem;
+    padding-right: 1rem;
 }
 
 .export-input {
@@ -550,6 +551,32 @@ body {
     gap: 1rem;
     font-size: 0.9rem;
     color: #b3b3b3;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Results Spotify Attribution */
+.results-spotify-attribution {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    opacity: 0.8;
+}
+
+.results-spotify-logo-link {
+    display: inline-block;
+    text-decoration: none;
+    transition: opacity 0.2s ease;
+}
+
+.results-spotify-logo-link:hover {
+    opacity: 1;
+}
+
+.results-spotify-logo {
+    height: 20px;
+    width: auto;
+    transition: opacity 0.2s ease;
 }
 
 .results-container {
@@ -983,6 +1010,31 @@ body {
     padding: 1rem 2rem;
 }
 
+/* Spotify Attribution */
+.spotify-attribution {
+    position: absolute;
+    top: 8px;
+    right: 16px;
+    z-index: 1001;
+}
+
+.spotify-logo-link {
+    display: inline-block;
+    text-decoration: none;
+    opacity: 0.8;
+    transition: opacity 0.2s ease;
+}
+
+.spotify-logo-link:hover {
+    opacity: 1;
+}
+
+.spotify-logo {
+    height: 24px;
+    width: auto;
+    transition: opacity 0.2s ease;
+}
+
 .spotify-player {
     max-width: 1200px;
     margin: 0 auto;
@@ -1161,6 +1213,29 @@ body {
     
     .app-container {
         padding-bottom: 120px;
+    }
+
+    /* Mobile attribution adjustments */
+    .results-spotify-attribution {
+        margin-left: 0;
+        margin-top: 0.5rem;
+        flex-basis: 100%;
+        justify-content: center;
+    }
+
+    .spotify-attribution {
+        position: static;
+        text-align: center;
+        margin-top: 0.5rem;
+        padding: 0.5rem;
+    }
+
+    .results-spotify-logo {
+        height: 18px;
+    }
+
+    .spotify-logo {
+        height: 22px;
     }
 }
 
