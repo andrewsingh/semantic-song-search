@@ -5,3 +5,5 @@ semantic_song_search/design_doc.md
 *__pycache__*
 .cache
 2024-spotify-full-logo/*
+flask_session/*
+.env

@@ -41,8 +41,8 @@ Examples:
     )
     
     # Default paths (relative to the script location)
-    default_songs_file = Path(__file__).parent.parent / 'pop_eval_set_v0' / 'pop_eval_set_v0_results_enriched.json'
-    default_embeddings_file = Path(__file__).parent.parent / 'pop_eval_set_v0' / 'pop_eval_set_v0_embeddings.npz'
+    default_songs_file = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_metadata_ready.json'
+    default_embeddings_file = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
     
     parser.add_argument(
         '-s', '--songs',
@@ -87,6 +87,9 @@ app = Flask(__name__)
 # Use persistent secret key or generate one (sessions reset on app restart with random key)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_FILE_THRESHOLD'] = 500
 Session(app)
 
 # Spotify configuration
@@ -608,8 +611,8 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None):
             embeddings_path = embeddings_file or args.embeddings
         else:
             # Fallback defaults when no args available (e.g., when imported)
-            default_songs = Path(__file__).parent.parent / 'pop_eval_set_v0' / 'pop_eval_set_v0_results_enriched.json'
-            default_embeddings = Path(__file__).parent.parent / 'pop_eval_set_v0' / 'pop_eval_set_v0_embeddings.npz'
+            default_songs = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_metadata_ready.json'
+            default_embeddings = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
             songs_path = songs_file or str(default_songs)
             embeddings_path = embeddings_file or str(default_embeddings)
         
