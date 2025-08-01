@@ -648,10 +648,18 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None):
 
 # Spotify OAuth setup
 def get_spotify_oauth():
-    # Construct redirect URI dynamically based on current host/port
-    host = args.host if args else '127.0.0.1'
-    port = args.port if args else 5000
-    redirect_uri = f"http://{host}:{port}/callback"
+    # Construct redirect URI dynamically based on environment
+    # Check if we're in production (Railway/deployed) or local development
+    if os.getenv('RAILWAY_ENVIRONMENT') or request.host not in ['127.0.0.1:5000', 'localhost:5000']:
+        # Production: use the current request host with HTTPS
+        redirect_uri = f"https://{request.host}/callback"
+    else:
+        # Local development: use localhost with HTTP
+        host = args.host if args else '127.0.0.1'
+        port = args.port if args else 5000
+        redirect_uri = f"http://{host}:{port}/callback"
+    
+    logger.info(f"Using OAuth redirect URI: {redirect_uri}")
     
     return SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,

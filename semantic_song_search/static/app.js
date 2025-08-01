@@ -1090,11 +1090,38 @@ class SemanticSearchApp {
                 this.updateAuthStatus(true);
             } else {
                 this.updateAuthStatus(false);
+                // Auto-prompt for login if not authenticated
+                this.promptForLogin();
             }
         } catch (error) {
             console.error('Auth check failed:', error);
             this.updateAuthStatus(false);
+            // Auto-prompt for login on error (likely not authenticated)
+            this.promptForLogin();
         }
+    }
+    
+    promptForLogin() {
+        // Only auto-prompt once per session to avoid loops
+        if (sessionStorage.getItem('autoLoginPrompted') === 'true') {
+            return;
+        }
+        
+        // Mark that we've prompted to avoid repeated prompts
+        sessionStorage.setItem('autoLoginPrompted', 'true');
+        
+        // Show a user-friendly prompt
+        const shouldLogin = confirm(
+            "Welcome to Semantic Song Search! 🎵\n\n" +
+            "To play songs and create playlists, you'll need to connect your Spotify account.\n\n" +
+            "Would you like to login to Spotify now?"
+        );
+        
+        if (shouldLogin) {
+            // Redirect to login
+            window.location.href = '/login';
+        }
+        // If they decline, they can still search but won't be able to play/create playlists
     }
     
     updateAuthStatus(isAuthenticated) {
@@ -1596,6 +1623,24 @@ class SemanticSearchApp {
     
     async playSong(song, isAutoAdvance = false) {
         console.log('🎵 playSong called with:', song, 'isAutoAdvance:', isAutoAdvance);
+        
+        // Check if user is authenticated before trying to play
+        if (!this.isAuthenticated || !this.accessToken) {
+            // Don't auto-prompt for auto-advances (to avoid interrupting user)
+            if (!isAutoAdvance) {
+                const shouldLogin = confirm(
+                    "You need to connect your Spotify account to play songs.\n\n" +
+                    "Would you like to login to Spotify now?"
+                );
+                
+                if (shouldLogin) {
+                    window.location.href = '/login';
+                    return;
+                }
+            }
+            console.log('❌ Cannot play song - not authenticated');
+            return;
+        }
         
         // Prevent concurrent playSong calls
         if (this.isPlayingSong) {
@@ -2176,6 +2221,22 @@ class SemanticSearchApp {
     }
     
     async exportToPlaylist() {
+        // Check if user is authenticated before trying to create playlist
+        if (!this.isAuthenticated || !this.accessToken) {
+            const shouldLogin = confirm(
+                "You need to connect your Spotify account to create playlists.\n\n" +
+                "Would you like to login to Spotify now?"
+            );
+            
+            if (shouldLogin) {
+                window.location.href = '/login';
+                return;
+            }
+            
+            this.showExportStatus('Please login to Spotify to create playlists.', 'error');
+            return;
+        }
+        
         const playlistNameInput = document.getElementById('playlist-name');
         const songCountInput = document.getElementById('song-count');
         const exportBtn = document.getElementById('export-btn');
