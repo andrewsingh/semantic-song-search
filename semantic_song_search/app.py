@@ -18,6 +18,9 @@ from typing import List, Dict, Tuple, Optional
 import logging
 import argparse
 from pathlib import Path
+import uuid
+from datetime import datetime
+import mixpanel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -102,6 +105,63 @@ openai_client = OpenAI()
 # Validate OpenAI API key exists
 if not os.getenv('OPENAI_API_KEY'):
     logger.warning("OPENAI_API_KEY not set. Text-to-song search will not work.")
+
+# Mixpanel configuration
+MIXPANEL_TOKEN = os.getenv('MIXPANEL_TOKEN')
+if not MIXPANEL_TOKEN:
+    logger.warning("MIXPANEL_TOKEN not set. Analytics tracking will be disabled.")
+    mp = None
+else:
+    mp = mixpanel.Mixpanel(MIXPANEL_TOKEN)
+
+# Helper functions for tracking
+def get_or_create_user_id():
+    """Get existing user ID or create a new one."""
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())
+    return session['user_id']
+
+def get_user_properties():
+    """Get common user properties for tracking."""
+    # Ensure session_start is set if not already present
+    if 'session_start' not in session:
+        session['session_start'] = datetime.now().isoformat()[:19]
+    
+    # Get additional header information for location context
+    headers = {
+        'accept_language': request.headers.get('Accept-Language', ''),
+        'x_forwarded_for': request.headers.get('X-Forwarded-For', ''),  # For proxied requests
+        'cf_ipcountry': request.headers.get('CF-IPCountry', ''),  # Cloudflare country header
+        'x_real_ip': request.headers.get('X-Real-IP', ''),  # Real IP from proxy
+    }
+    
+    return {
+        'is_authenticated': bool(session.get('token_info')),
+        'session_start': session['session_start'],
+        'user_agent': request.headers.get('User-Agent', '')[:100],  # Limit length
+        'ip': request.remote_addr,
+        'real_ip': headers['x_real_ip'] or headers['x_forwarded_for'] or request.remote_addr,
+        'referrer': request.headers.get('Referer', ''),
+        'accept_language': headers['accept_language'][:50],  # Browser language preferences
+        'cf_country': headers['cf_ipcountry'],  # Will be empty unless using Cloudflare
+        'timestamp': datetime.now().isoformat()[:19]
+    }
+
+def track_event(event_name, properties=None):
+    """Helper function to track events with error handling."""
+    if mp is None:
+        logger.debug(f"Mixpanel not configured, skipping event: {event_name}")
+        return  # Skip if Mixpanel is not configured
+    
+    try:
+        user_id = get_or_create_user_id()
+        event_properties = get_user_properties()
+        if properties:
+            event_properties.update(properties)
+        logger.info(f"Tracking event: {event_name} for user: {user_id}")
+        mp.track(user_id, event_name, event_properties)
+    except Exception as e:
+        logger.error(f"Error tracking event {event_name}: {e}")
 
 class MusicSearchEngine:
     """Core search engine for semantic music search."""
@@ -602,6 +662,17 @@ def get_spotify_oauth():
 def index():
     """Main page."""
     init_search_engine()
+    
+    # Set session start time if not already set
+    if 'session_start' not in session:
+        session['session_start'] = datetime.now().isoformat()
+        
+        # Track page load
+        track_event('Page Loaded', {
+            'page_title': 'Semantic Song Search',
+            'is_new_session': True
+        })
+    
     # Pass debug flag to template
     debug_mode = getattr(args, 'debug', False) if args else False
     return render_template('index.html', debug_mode=debug_mode)
@@ -609,6 +680,11 @@ def index():
 @app.route('/login')
 def login():
     """Spotify login."""
+    # Track login attempt
+    track_event('Login Initiated', {
+        'auth_provider': 'spotify'
+    })
+    
     sp_oauth = get_spotify_oauth()
     auth_url = sp_oauth.get_authorize_url()
     return redirect(auth_url)
@@ -616,15 +692,36 @@ def login():
 @app.route('/callback')
 def callback():
     """Spotify OAuth callback."""
-    sp_oauth = get_spotify_oauth()
-    code = request.args.get('code')
-    token_info = sp_oauth.get_access_token(code)
-    session['token_info'] = token_info
-    return redirect(url_for('index'))
+    try:
+        sp_oauth = get_spotify_oauth()
+        code = request.args.get('code')
+        token_info = sp_oauth.get_access_token(code)
+        session['token_info'] = token_info
+        
+        # Track successful authentication
+        track_event('Authentication Successful', {
+            'auth_provider': 'spotify'
+        })
+        
+        return redirect(url_for('index'))
+        
+    except Exception as e:
+        # Track authentication failure
+        track_event('Authentication Failed', {
+            'auth_provider': 'spotify',
+            'error_message': str(e)[:200]  # Limit error message length
+        })
+        logger.error(f"Authentication failed: {e}")
+        return redirect(url_for('index'))
 
 @app.route('/logout')
 def logout():
     """Clear Spotify session."""
+    # Track logout
+    track_event('Logout', {
+        'auth_provider': 'spotify'
+    })
+    
     session.pop('token_info', None)
     logger.info("User logged out, session cleared")
     return redirect(url_for('index'))
@@ -639,7 +736,16 @@ def search_suggestions():
     if not query:
         return jsonify([])
     
+    start_time = datetime.now()
     results = search_engine.search_songs_by_text(query, limit=100)
+    search_duration = (datetime.now() - start_time).total_seconds()
+    
+    # Track suggestion search
+    track_event('Search Suggestions Requested', {
+        'query_length': len(query),
+        'results_count': len(results),
+        'search_duration_seconds': round(search_duration, 3)
+    })
     
     suggestions = []
     for song_idx, score, label in results:
@@ -672,6 +778,8 @@ def search():
     k = data.get('k', 20)
     offset = data.get('offset', 0)  # For pagination
     # Note: Top artists filtering is now handled client-side for better performance
+    
+    start_time = datetime.now()
     
     # Validate pagination parameters
     if k <= 0 or k > 100:  # Reasonable limits
@@ -737,6 +845,41 @@ def search():
                 logger.error(f"Error processing search result {result}: {e}")
                 continue
         
+        # Calculate search performance
+        search_duration = (datetime.now() - start_time).total_seconds()
+        
+        # Track successful search with enhanced context
+        search_properties = {
+            'search_type': search_type,
+            'embed_type': embed_type,
+            'results_returned': total_count,
+            'results_requested': k,
+            'search_offset': offset,
+            'search_duration_seconds': round(search_duration, 3),
+            'is_paginated_search': offset > 0,
+            'returned_count': len(formatted_results)
+        }
+        
+        # Add query-specific information
+        if search_type == 'text' and query:
+            search_properties.update({
+                'query': query[:200],  # Limit query length for storage
+                'query_length': len(query)
+            })
+        elif search_type == 'song' and song_idx is not None:
+            # Get song details for better tracking
+            try:
+                song = search_engine.songs[song_idx]
+                search_properties.update({
+                    'query_song_idx': song_idx,
+                    'query_song_name': song['original_song'][:100],  # Limit length
+                    'query_artist_name': song['original_artist'][:100]  # Limit length
+                })
+            except (IndexError, KeyError):
+                search_properties['query_song_idx'] = song_idx
+        
+        track_event('Search Performed', search_properties)
+        
         # Return results (filtering now handled client-side for better performance)
         return jsonify({
             'results': formatted_results,
@@ -753,6 +896,15 @@ def search():
         })
         
     except Exception as e:
+        # Track search errors
+        search_duration = (datetime.now() - start_time).total_seconds()
+        track_event('Search Error', {
+            'search_type': search_type,
+            'embed_type': embed_type,
+            'query_length': len(query) if query else 0,
+            'error_message': str(e)[:200],
+            'search_duration_seconds': round(search_duration, 3)
+        })
         logger.error(f"Search error: {e}")
         return jsonify({'error': str(e)}), 500
 
@@ -790,6 +942,8 @@ def create_playlist():
     if not token_info:
         return jsonify({'error': 'Not authenticated'}), 401
     
+    start_time = datetime.now()
+    
     # Check if token is expired and refresh if needed
     sp_oauth = get_spotify_oauth()
     if sp_oauth.is_token_expired(token_info):
@@ -806,6 +960,7 @@ def create_playlist():
         playlist_name = data.get('playlist_name', 'Semantic Song Search Playlist')
         song_count = data.get('song_count', 20)
         song_spotify_ids = data.get('song_spotify_ids', [])
+        search_context = data.get('search_context', {})
         
         # Validate inputs
         if not playlist_name.strip():
@@ -851,6 +1006,50 @@ def create_playlist():
             batch = track_uris[i:i + batch_size]
             sp.playlist_add_items(playlist['id'], batch)
         
+        # Track successful playlist creation with full context
+        creation_duration = (datetime.now() - start_time).total_seconds()
+        
+        # Start with playlist-specific properties
+        playlist_properties = {
+            'playlist_name': playlist_name.strip()[:100],  # Limit length for storage
+            'playlist_name_length': len(playlist_name.strip()),
+            'songs_requested': song_count,
+            'songs_added': len(valid_songs),
+            'creation_duration_seconds': round(creation_duration, 3)
+        }
+        
+        # Add search context if provided
+        if search_context:
+            # Add search type and embedding type
+            if 'search_type' in search_context:
+                playlist_properties['search_type'] = search_context['search_type']
+            if 'embed_type' in search_context:
+                playlist_properties['embed_type'] = search_context['embed_type']
+            
+            # Add query information
+            if search_context.get('search_type') == 'text':
+                if 'query' in search_context:
+                    playlist_properties['query'] = search_context['query'][:200]  # Limit length
+                if 'query_length' in search_context:
+                    playlist_properties['query_length'] = search_context['query_length']
+            elif search_context.get('search_type') == 'song':
+                if 'query_song_idx' in search_context:
+                    playlist_properties['query_song_idx'] = search_context['query_song_idx']
+                if 'query_song_name' in search_context:
+                    playlist_properties['query_song_name'] = search_context['query_song_name'][:100]
+                if 'query_artist_name' in search_context:
+                    playlist_properties['query_artist_name'] = search_context['query_artist_name'][:100]
+            
+            # Add filter and selection information
+            if 'is_filtered' in search_context:
+                playlist_properties['is_filtered'] = search_context['is_filtered']
+            if 'is_manual_selection' in search_context:
+                playlist_properties['is_manual_selection'] = search_context['is_manual_selection']
+            if 'selected_songs_count' in search_context:
+                playlist_properties['selected_songs_count'] = search_context['selected_songs_count']
+        
+        track_event('Playlist Created', playlist_properties)
+        
         logger.info(f"Created playlist '{playlist_name}' with {len(valid_songs)} tracks")
         
         return jsonify({
@@ -862,6 +1061,26 @@ def create_playlist():
         })
         
     except spotipy.exceptions.SpotifyException as e:
+        # Track playlist creation errors
+        creation_duration = (datetime.now() - start_time).total_seconds()
+        # Build error properties with search context
+        error_properties = {
+            'error_type': 'spotify_api_error',
+            'error_code': e.http_status,
+            'error_message': str(e)[:200],
+            'songs_requested': song_count,
+            'creation_duration_seconds': round(creation_duration, 3)
+        }
+        
+        # Add search context to error tracking
+        if search_context:
+            if 'search_type' in search_context:
+                error_properties['search_type'] = search_context['search_type']
+            if 'embed_type' in search_context:
+                error_properties['embed_type'] = search_context['embed_type']
+        
+        track_event('Playlist Creation Failed', error_properties)
+        
         logger.error(f"Spotify API error: {e}")
         if e.http_status == 401:
             return jsonify({'error': 'Spotify authentication expired, please login again'}), 401
@@ -877,6 +1096,25 @@ def create_playlist():
         else:
             return jsonify({'error': f'Spotify API error: {e.msg}'}), 500
     except Exception as e:
+        # Track general playlist creation errors
+        creation_duration = (datetime.now() - start_time).total_seconds()
+        
+        # Build error properties with search context
+        error_properties = {
+            'error_type': 'general_error',
+            'error_message': str(e)[:200],
+            'songs_requested': song_count,
+            'creation_duration_seconds': round(creation_duration, 3)
+        }
+        
+        # Add search context to error tracking
+        if search_context:
+            if 'search_type' in search_context:
+                error_properties['search_type'] = search_context['search_type']
+            if 'embed_type' in search_context:
+                error_properties['embed_type'] = search_context['embed_type']
+        
+        track_event('Playlist Creation Failed', error_properties)
         logger.error(f"Failed to create playlist: {e}")
         return jsonify({'error': 'Failed to create playlist'}), 500
 
@@ -898,6 +1136,31 @@ def get_token():
             return jsonify({'error': 'Token refresh failed, please re-authenticate'}), 401
     
     return jsonify({'access_token': token_info['access_token']})
+
+@app.route('/api/test_tracking')
+def test_tracking():
+    """Test endpoint to verify Mixpanel tracking is working."""
+    try:
+        # Check if Mixpanel is configured
+        if mp is None:
+            return jsonify({
+                'success': False, 
+                'error': 'Mixpanel not configured - MIXPANEL_TOKEN environment variable not set',
+                'token_set': bool(MIXPANEL_TOKEN)
+            }), 500
+        
+        track_event('Test Event', {
+            'test_property': 'test_value',
+            'endpoint': 'api/test_tracking'
+        })
+        return jsonify({
+            'success': True, 
+            'message': 'Test event tracked successfully',
+            'token_set': bool(MIXPANEL_TOKEN)
+        })
+    except Exception as e:
+        logger.error(f"Test tracking failed: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/top_artists')
 def get_top_artists():

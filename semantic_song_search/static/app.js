@@ -48,6 +48,12 @@ class SemanticSearchApp {
         this.autoPlayCheckInterval = null;  // Backup auto-play checker
         this.lastProcessedTrackEnd = null;  // Prevent duplicate track-end processing
         
+        // Analytics tracking
+        this.sessionStartTime = Date.now();
+        this.searchCount = 0;
+        this.songsPlayed = 0;
+        this.playlistsCreated = 0;
+        
         this.init();
     }
     
@@ -60,6 +66,34 @@ class SemanticSearchApp {
         
         // Don't initialize player here - it will be initialized when needed in playSong()
         // this.initSpotifyPlayer();
+        
+        // Track initial page load
+        this.trackPageLoad();
+    }
+    
+    trackPageLoad() {
+        if (typeof mixpanel !== 'undefined') {
+            // Get timezone and language information
+            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const language = navigator.language || navigator.userLanguage;
+            const languages = navigator.languages || [language];
+            
+            mixpanel.track('Page Loaded', {
+                'page_title': document.title,
+                'url': window.location.href,
+                'referrer': document.referrer,
+                'user_agent': navigator.userAgent,
+                'screen_width': window.screen.width,
+                'screen_height': window.screen.height,
+                'viewport_width': window.innerWidth,
+                'viewport_height': window.innerHeight,
+                'timezone': timezone,
+                'language': language,
+                'languages': languages.join(', '),
+                'platform': navigator.platform,
+                'cookie_enabled': navigator.cookieEnabled
+            });
+        }
     }
     
     // Helper function to get current search type from segmented control
@@ -153,6 +187,18 @@ class SemanticSearchApp {
             console.log(`🎛️ Top artists filter checkbox changed: ${e.target.checked ? 'CHECKED' : 'UNCHECKED'}`);
             console.log(`🎛️ Current state - topArtistsLoaded: ${this.topArtistsLoaded}, isAuthenticated: ${this.isAuthenticated}, top artists count: ${this.topArtists.length}`);
             
+            // Track filter toggle
+            if (typeof mixpanel !== 'undefined') {
+                mixpanel.track('Top Artists Filter Toggled', {
+                    'filter_enabled': e.target.checked,
+                    'is_authenticated': this.isAuthenticated,
+                    'top_artists_loaded': this.topArtistsLoaded,
+                    'top_artists_count': this.topArtists.length,
+                    'has_existing_results': this.searchResults.length > 0,
+                    'results_count': this.searchResults.length
+                });
+            }
+            
             // If checked and we don't have top artists yet, load them
             if (e.target.checked && !this.topArtistsLoaded && this.isAuthenticated) {
                 console.log(`🎛️ Loading top artists because checkbox was checked but not loaded yet...`);
@@ -173,6 +219,18 @@ class SemanticSearchApp {
             this.loadMoreResults();
         });
         
+        // Track when user leaves the page
+        window.addEventListener('beforeunload', () => {
+            const sessionDuration = Math.round((Date.now() - this.sessionStartTime) / 1000);
+            if (typeof mixpanel !== 'undefined') {
+                mixpanel.track('Session Ended', {
+                    'session_duration_seconds': sessionDuration,
+                    'searches_performed': this.searchCount || 0,
+                    'songs_played': this.songsPlayed || 0,
+                    'playlists_created': this.playlistsCreated || 0
+                });
+            }
+        });
 
     }
     
@@ -180,6 +238,15 @@ class SemanticSearchApp {
         const suggestionsContainer = document.getElementById('suggestions');
         const querySection = document.getElementById('query-section');
         const searchInput = document.getElementById('search-input');
+        
+        // Track search type change
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Search Type Changed', {
+                'new_search_type': searchType,
+                'previous_search_type': this.currentSearchType || 'unknown',
+                'has_active_search': this.searchResults.length > 0
+            });
+        }
         
         // Update current search type immediately
         this.currentSearchType = searchType;
@@ -197,6 +264,17 @@ class SemanticSearchApp {
     
     handleEmbedTypeChange(embedType) {
         console.log(`🎛️ Embedding type changed to: ${embedType}`);
+        
+        // Track embed type change
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Embed Type Changed', {
+                'new_embed_type': embedType,
+                'previous_embed_type': this.currentEmbedType || 'unknown',
+                'has_active_search': this.searchResults.length > 0
+            });
+        }
+        
+        this.currentEmbedType = embedType;
         
         // Don't auto-rerun if we're currently loading more results
         if (this.isLoadingMore) {
@@ -287,6 +365,35 @@ class SemanticSearchApp {
         let filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
         if (!query) return;
+        
+        // Track search initiation on frontend with comprehensive context
+        if (typeof mixpanel !== 'undefined') {
+            const searchProperties = {
+                'search_type': searchType,
+                'embed_type': embedType,
+                'is_filtered': filterTopArtists,
+                'is_manual_selection': this.isManualSelectionMode,
+                'selected_songs_count': this.selectedSongs.size,
+                'has_spotify_auth': this.isAuthenticated,
+                'has_results': this.searchResults.length > 0,
+                'is_new_search': this.searchResultsId !== `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`
+            };
+            
+            // Add query-specific information
+            if (searchType === 'text' && query) {
+                searchProperties.query = query;
+                searchProperties.query_length = query.length;
+            } else if (searchType === 'song' && this.currentQuerySong) {
+                searchProperties.has_query_song = true;
+                searchProperties.query_song_idx = this.currentQuerySong.song_idx;
+                searchProperties.query_song_name = this.currentQuerySong.song || '';
+                searchProperties.query_artist_name = this.currentQuerySong.artist || '';
+            }
+            
+            mixpanel.track('Search Initiated', searchProperties);
+        }
+        
+        this.searchCount++;
         
         // If top artists filter is enabled but not loaded, load them first
         if (filterTopArtists && !this.topArtistsLoaded) {
@@ -388,6 +495,18 @@ class SemanticSearchApp {
     async loadMoreResults() {
         if (this.isLoadingMore || !this.hasMoreResults || !this.currentSearchData) {
             return;
+        }
+        
+        // Track load more click
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Load More Clicked', {
+                'current_results_count': this.searchResults.length,
+                'current_offset': this.currentOffset,
+                'search_type': this.currentSearchData.search_type,
+                'embed_type': this.currentSearchData.embed_type,
+                'has_filter_active': document.getElementById('top-artists-filter').checked,
+                'is_manual_selection_mode': this.isManualSelectionMode
+            });
         }
         
         this.isLoadingMore = true;
@@ -1564,6 +1683,23 @@ class SemanticSearchApp {
             this.currentTrack = song;
             this.lastTrackId = song.spotify_id;  // Track for auto-advance detection
             
+            // Track song play
+            if (typeof mixpanel !== 'undefined') {
+                mixpanel.track('Song Played', {
+                    'song_spotify_id': song.spotify_id || 'unknown',
+                    'song_title': song.song || 'unknown',
+                    'artist': song.artist || 'unknown',
+                    'play_method': isAutoAdvance ? 'auto_advance' : 'manual_click',
+                    'similarity_score': song.similarity || 0,
+                    'position_in_results': this.searchResults.findIndex(r => r.song_idx === song.song_idx) + 1,
+                    'is_authenticated': this.isAuthenticated
+                });
+            }
+            
+            if (!isAutoAdvance) { // Only count manual plays
+                this.songsPlayed++;
+            }
+            
             // Reset the playing flag after successful start
             // The song is now playing, so we're no longer "starting" it
             setTimeout(() => {
@@ -1579,6 +1715,17 @@ class SemanticSearchApp {
             
         } catch (error) {
             console.error('❌ Error playing song:', error);
+            
+            // Track song play failures
+            if (typeof mixpanel !== 'undefined') {
+                mixpanel.track('Song Play Failed', {
+                    'song_spotify_id': song.spotify_id || 'unknown',
+                    'song_title': song.song || 'unknown',
+                    'artist': song.artist || 'unknown',
+                    'error_message': error.message || 'Unknown error',
+                    'play_method': isAutoAdvance ? 'auto_advance' : 'manual_click'
+                });
+            }
             
             // Reset current song index on error to prevent queue issues
             this.currentSongIndex = -1;
@@ -2161,6 +2308,25 @@ class SemanticSearchApp {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
             
+            // Prepare search context for tracking
+            const searchContext = {
+                search_type: this.currentSearchType,
+                embed_type: this.currentEmbedType,
+                is_filtered: this.isFiltered,
+                is_manual_selection: this.isManualSelectionMode,
+                selected_songs_count: this.selectedSongs.size
+            };
+            
+            // Add query-specific context
+            if (this.currentSearchType === 'text' && this.currentQuery) {
+                searchContext.query = this.currentQuery;
+                searchContext.query_length = this.currentQuery.length;
+            } else if (this.currentSearchType === 'song' && this.currentQuerySong) {
+                searchContext.query_song_idx = this.currentQuerySong.song_idx;
+                searchContext.query_song_name = this.currentQuerySong.song || '';
+                searchContext.query_artist_name = this.currentQuerySong.artist || '';
+            }
+
             const response = await fetch('/api/create_playlist', {
                 method: 'POST',
                 headers: {
@@ -2169,7 +2335,8 @@ class SemanticSearchApp {
                 body: JSON.stringify({
                     playlist_name: playlistName,
                     song_count: songCount,
-                    song_spotify_ids: spotifyIds
+                    song_spotify_ids: spotifyIds,
+                    search_context: searchContext
                 }),
                 signal: controller.signal
             });
@@ -2191,6 +2358,9 @@ class SemanticSearchApp {
                 `;
                 this.showExportStatus(message, 'success');
                 console.log('🎵 Playlist created:', data);
+                
+                // Track successful playlist creation (for session counter only - main event tracked by backend)
+                this.playlistsCreated++;
             } else {
                 // Handle specific error cases
                 if (response.status === 403 && data.error && 
