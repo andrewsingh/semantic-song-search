@@ -367,6 +367,7 @@ body {
 .query-card {
     border: 2px solid #1DB954;
     box-shadow: 0 4px 20px rgba(29, 185, 84, 0.2);
+    padding-bottom: 1rem !;
 }
 
 /* Export to Playlist Section */
@@ -622,7 +623,7 @@ body {
     margin-bottom: 0.5rem;
     color: #fff;
     font-weight: 600;
-    max-width: 640px;
+    max-width: 650px;
     margin-left: auto;
     margin-right: auto;
 }
@@ -635,7 +636,7 @@ body {
 
 .welcome-content ul {
     text-align: left;
-    max-width: 640px;
+    max-width: 650px;
     margin: 0 auto 1.5rem;
     color: #ccc;
 }

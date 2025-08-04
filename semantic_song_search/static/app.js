@@ -1418,6 +1418,25 @@ class SemanticSearchApp {
             console.log(`🔍 Filter results: ${this.searchResults.length} out of ${this.originalSearchResults.length} songs kept`);
         }
         
+        // If in manual selection mode, remove filtered-out songs from selection
+        if (this.isManualSelectionMode && this.selectedSongs.size > 0) {
+            // Create a set of currently visible song indices for efficient lookup
+            const visibleSongIndices = new Set(this.searchResults.map(song => song.song_idx));
+            
+            // Remove any selected songs that are no longer visible
+            const originalSelectionSize = this.selectedSongs.size;
+            for (const songIdx of this.selectedSongs) {
+                if (!visibleSongIndices.has(songIdx)) {
+                    this.selectedSongs.delete(songIdx);
+                }
+            }
+            
+            const removedCount = originalSelectionSize - this.selectedSongs.size;
+            if (removedCount > 0) {
+                console.log(`🎯 Removed ${removedCount} filtered-out songs from selection (${this.selectedSongs.size} songs still selected)`);
+            }
+        }
+        
         // Update the display with filtered results
         const mockData = {
             results: this.searchResults,
@@ -1440,6 +1459,7 @@ class SemanticSearchApp {
         if (this.isManualSelectionMode) {
             this.updateAllCardSelections();
             this.updateExportFormDisplay(); // Update export form with current selection count
+            this.updateResultsCount(); // Update results count display
         }
     }
     
