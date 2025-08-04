@@ -367,7 +367,7 @@ body {
 .query-card {
     border: 2px solid #1DB954;
     box-shadow: 0 4px 20px rgba(29, 185, 84, 0.2);
-    padding-bottom: 1rem !;
+    padding-bottom: 1rem !important;
 }
 
 /* Export to Playlist Section */
