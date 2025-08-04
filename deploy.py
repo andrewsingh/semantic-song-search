@@ -12,15 +12,21 @@ sys.path.insert(0, str(Path(__file__).parent / 'semantic_song_search'))
 
 from app import app, init_search_engine
 
+RAILWAY_VOLUME_MOUNT_PATH = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '/data')
+DATASET_NAME = os.getenv('DATASET_NAME', 'eval_set_v2')
+
 def main():
     """Initialize the app with production data files and start the server."""
     
     # Get port from environment (Railway/Render/Heroku style)
     port = int(os.environ.get('PORT', 5000))
     
+    # Convert to Path objects for proper path operations
+    volume_path = Path(RAILWAY_VOLUME_MOUNT_PATH)
+    dataset_path = volume_path / DATASET_NAME
+    
     # Use eval_set_v2 data files (adjust paths as needed for your deployment)
-    songs_file = Path(__file__).parent / 'data' / 'eval_set_v2' / 'eval_set_v2_metadata_ready.json'
-    embeddings_file = Path(__file__).parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
+    songs_file = dataset_path / 'eval_set_v2_metadata_ready.json'
     
     # Verify files exist before starting
     if not songs_file.exists():
@@ -28,8 +34,8 @@ def main():
         sys.exit(1)
     
     # Check for embeddings (either combined file or directory)
-    embeddings_npz = Path(__file__).parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings.npz'
-    embeddings_dir = Path(__file__).parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
+    embeddings_npz = dataset_path / 'eval_set_v2_embeddings.npz'
+    embeddings_dir = dataset_path / 'eval_set_v2_embeddings'
     
     if embeddings_npz.exists():
         embeddings_path = embeddings_npz
