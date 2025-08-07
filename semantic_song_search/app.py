@@ -1744,7 +1744,7 @@ def get_top_artists():
         logger.error(f"Failed to get top artists: {e}")
         return jsonify({'error': 'Failed to retrieve top artists'}), 500
 
-@app.route('/api/ranking_weights')
+@app.route('/api/ranking_weights', methods=['GET'])
 def get_ranking_weights():
     """Get current ranking algorithm weights and configuration."""
     if search_engine is None:
@@ -1756,6 +1756,44 @@ def get_ranking_weights():
     except Exception as e:
         logger.error(f"Failed to get ranking weights: {e}")
         return jsonify({'error': 'Failed to retrieve ranking weights'}), 500
+
+@app.route('/api/ranking_weights', methods=['PUT'])
+def update_ranking_weights():
+    """Update ranking algorithm weights."""
+    if search_engine is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Validate required weight keys
+        required_keys = ['w_sem', 'w_int', 'w_ucb', 'w_pop']
+        for key in required_keys:
+            if key not in data:
+                return jsonify({'error': f'Missing required weight: {key}'}), 400
+            if not isinstance(data[key], (int, float)) or data[key] < 0:
+                return jsonify({'error': f'Invalid weight value for {key}: must be non-negative number'}), 400
+        
+        # Validate weights sum to approximately 1.0
+        total_weight = sum(data[key] for key in required_keys)
+        if abs(total_weight - 1.0) > 0.1:
+            return jsonify({'error': f'Weights must sum to approximately 1.0, got {total_weight:.3f}'}), 400
+        
+        # Update the search engine weights
+        for key in required_keys:
+            search_engine.ranking_params[key] = float(data[key])
+        
+        logger.info(f"Updated ranking weights: {data}")
+        
+        # Return the updated weights
+        weights = search_engine.get_ranking_weights()
+        return jsonify(weights)
+    
+    except Exception as e:
+        logger.error(f"Failed to update ranking weights: {e}")
+        return jsonify({'error': 'Failed to update ranking weights'}), 500
 
 if __name__ == '__main__':
     # Parse command line arguments

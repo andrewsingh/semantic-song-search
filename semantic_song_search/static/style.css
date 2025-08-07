@@ -1349,6 +1349,52 @@ body {
     margin-bottom: 1rem;
 }
 
+.edit-weights-btn {
+    background: rgba(29, 185, 84, 0.2);
+    border: 1px solid rgba(29, 185, 84, 0.4);
+    color: #1DB954;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.edit-weights-btn:hover:not(:disabled) {
+    background: rgba(29, 185, 84, 0.3);
+    border-color: rgba(29, 185, 84, 0.6);
+}
+
+.edit-weights-btn.editing {
+    background: rgba(255, 193, 7, 0.2);
+    border-color: rgba(255, 193, 7, 0.4);
+    color: #ffc107;
+}
+
+.edit-weights-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.weight-input {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(29, 185, 84, 0.4);
+    border-radius: 4px;
+    color: #1DB954;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.2rem 0.4rem;
+    width: 70px;
+    text-align: right;
+}
+
+.weight-input:focus {
+    outline: none;
+    border-color: #1DB954;
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.2);
+}
+
 .ranking-weights-header h4 {
     color: #1DB954;
     font-size: 1rem;

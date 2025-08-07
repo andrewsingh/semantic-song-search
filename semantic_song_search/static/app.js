@@ -14,6 +14,7 @@ class SemanticSearchApp {
         this.currentSearchType = 'text'; // Initialize to match HTML default
         this.searchResults = [];
         this.currentSearchData = null;
+        this.lastSearchRequestData = null;
         this.currentOffset = 0;
         this.totalResultsCount = 0;
         this.hasMoreResults = false;
@@ -452,8 +453,9 @@ class SemanticSearchApp {
                 requestData.song_idx = this.currentQuerySong.song_idx;
             }
             
-            // Store current search data for load more functionality
+            // Store current search data for load more functionality and weight updates
             this.currentSearchData = { ...requestData };
+            this.lastSearchRequestData = { ...requestData };
             
             const response = await fetch('/api/search', {
                 method: 'POST',
@@ -484,6 +486,7 @@ class SemanticSearchApp {
             this.totalResultsCount = data.pagination.total_count;
             this.hasMoreResults = data.pagination.has_more;
             this.isFiltered = false; // Reset since server doesn't filter anymore
+            this.currentSearchData = data; // Store current search data for reranking
             
             // Apply client-side filter if checkbox is currently checked
             const topArtistsFilter = document.getElementById('top-artists-filter');
@@ -758,35 +761,266 @@ class SemanticSearchApp {
             return;
         }
         
-        // Create ranking weights display
+        // Create ranking weights display with edit functionality
         const weightsHTML = `
             <div class="ranking-weights-header">
                 <h4>Ranking Formula Components</h4>
+                <button id="edit-weights-btn" class="edit-weights-btn">Edit</button>
                 ${!rankingWeights.has_history ? '<span class="no-history-note">* No history data - using exploration bonus instead</span>' : ''}
             </div>
             <div class="ranking-weights-grid">
                 <div class="weight-item">
                     <span class="weight-label">Semantic Similarity</span>
-                    <span class="weight-value">${(rankingWeights.w_sem * 100).toFixed(0)}%</span>
+                    <span class="weight-value" data-weight="w_sem">${(rankingWeights.w_sem * 100).toFixed(1)}%</span>
                 </div>
                 <div class="weight-item ${rankingWeights.has_history ? '' : 'no-history'}">
                     <span class="weight-label">Personal Interest</span>
-                    <span class="weight-value">${(rankingWeights.w_int * 100).toFixed(0)}%</span>
+                    <span class="weight-value" data-weight="w_int">${(rankingWeights.w_int * 100).toFixed(1)}%</span>
                     ${!rankingWeights.has_history ? '<span class="no-history-indicator">*</span>' : ''}
                 </div>
                 <div class="weight-item">
                     <span class="weight-label">Exploration</span>
-                    <span class="weight-value">${(rankingWeights.w_ucb * 100).toFixed(0)}%</span>
+                    <span class="weight-value" data-weight="w_ucb">${(rankingWeights.w_ucb * 100).toFixed(1)}%</span>
                 </div>
                 <div class="weight-item">
                     <span class="weight-label">Popularity</span>
-                    <span class="weight-value">${(rankingWeights.w_pop * 100).toFixed(0)}%</span>
+                    <span class="weight-value" data-weight="w_pop">${(rankingWeights.w_pop * 100).toFixed(1)}%</span>
                 </div>
             </div>
         `;
         
         rankingWeightsContainer.innerHTML = weightsHTML;
         rankingWeightsContainer.style.display = 'block';
+        
+        // Add event listener for edit button
+        const editBtn = document.getElementById('edit-weights-btn');
+        if (editBtn) {
+            editBtn.addEventListener('click', () => this.toggleWeightsEditing());
+        }
+    }
+    
+    toggleWeightsEditing() {
+        const editBtn = document.getElementById('edit-weights-btn');
+        const weightValues = document.querySelectorAll('.weight-value[data-weight]');
+        
+        if (editBtn.textContent === 'Edit') {
+            // Enter edit mode
+            editBtn.textContent = 'Save & Run';
+            editBtn.classList.add('editing');
+            
+            // Convert weight values to input fields
+            weightValues.forEach(valueSpan => {
+                const currentValue = valueSpan.textContent.replace('%', '');
+                const weightKey = valueSpan.dataset.weight;
+                
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = '0.1';
+                input.min = '0';
+                input.max = '100';
+                input.value = currentValue;
+                input.className = 'weight-input';
+                input.dataset.weight = weightKey;
+                
+                valueSpan.replaceWith(input);
+            });
+        } else {
+            // Save and rerank
+            this.saveWeightsAndRerank();
+        }
+    }
+    
+    async saveWeightsAndRerank() {
+        const editBtn = document.getElementById('edit-weights-btn');
+        const weightInputs = document.querySelectorAll('.weight-input[data-weight]');
+        
+        // Collect new weights
+        const newWeights = {};
+        let totalWeight = 0;
+        
+        weightInputs.forEach(input => {
+            const weight = (parseFloat(input.value) || 0) / 100; // Convert percentage to decimal
+            newWeights[input.dataset.weight] = weight;
+            totalWeight += weight;
+        });
+        
+        // Validate weights sum to approximately 100%
+        const totalPercentage = totalWeight * 100;
+        if (Math.abs(totalPercentage - 100.0) > 10) {
+            alert('Warning: Weights should sum to approximately 100%. Current sum: ' + totalPercentage.toFixed(1) + '%');
+            return;
+        }
+        
+        try {
+            // Update button state
+            editBtn.textContent = 'Updating...';
+            editBtn.disabled = true;
+            
+            // Update weights on server
+            await this.updateServerWeights(newWeights);
+            
+            // Trigger new search with updated weights
+            await this.performNewSearchWithUpdatedWeights();
+            
+            // Exit edit mode
+            editBtn.textContent = 'Edit';
+            editBtn.classList.remove('editing');
+            editBtn.disabled = false;
+            
+            // Convert inputs back to spans
+            weightInputs.forEach(input => {
+                const valueSpan = document.createElement('span');
+                valueSpan.className = 'weight-value';
+                valueSpan.dataset.weight = input.dataset.weight;
+                valueSpan.textContent = parseFloat(input.value).toFixed(1) + '%';
+                
+                input.replaceWith(valueSpan);
+            });
+            
+        } catch (error) {
+            console.error('Error updating weights:', error);
+            alert('Error updating weights: ' + error.message);
+            editBtn.textContent = 'Save & Run';
+            editBtn.disabled = false;
+        }
+    }
+    
+    async updateServerWeights(newWeights) {
+        const response = await fetch('/api/ranking_weights', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(newWeights)
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to update weights on server');
+        }
+        
+        return await response.json();
+    }
+    
+    async performNewSearchWithUpdatedWeights() {
+        // Check if we have a current search to repeat
+        if (!this.lastSearchRequestData) {
+            throw new Error('No current search to repeat with new weights');
+        }
+        
+        // Repeat the same search with updated server weights
+        const requestData = this.lastSearchRequestData;
+        
+        // Clear current results and reset state
+        this.searchResults = [];
+        this.originalSearchResults = [];
+        this.currentOffset = 0;
+        this.totalResultsCount = 0;
+        this.hasMoreResults = false;
+        
+        // Perform the search API call directly
+        const response = await fetch('/api/search', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestData)
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Search failed: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        // Process the results same as original search
+        this.searchResults = data.results;
+        this.originalSearchResults = [...data.results];
+        this.currentOffset = data.pagination.offset + data.pagination.limit;
+        this.totalResultsCount = data.pagination.total_count;
+        this.hasMoreResults = data.pagination.has_more;
+        this.isFiltered = false;
+        this.currentSearchData = data;
+        
+        // Re-render the results
+        this.displayResults(data, false); // isLoadMore = false
+        this.displayRankingWeights(data.ranking_weights);
+        this.updateResultsCount();
+        
+        // Re-apply any active filters
+        const topArtistsFilter = document.getElementById('top-artists-filter');
+        if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
+            this.applyClientSideFilter();
+        }
+    }
+    
+    async rerankResultsWithNewWeights(newWeights) {
+        // Apply new weights to existing search results
+        this.searchResults.forEach(song => {
+            if (song.scoring_components) {
+                const components = song.scoring_components;
+                
+                // Recalculate weighted components
+                components.semantic_weighted = newWeights.w_sem * components.semantic_similarity;
+                components.interest_weighted = newWeights.w_int * components.personal_interest;
+                components.exploration_weighted = newWeights.w_ucb * components.exploration_bonus;
+                components.popularity_weighted = newWeights.w_pop * components.popularity_score;
+                
+                // Recalculate final score
+                song.final_score = components.semantic_weighted + components.interest_weighted + 
+                                 components.exploration_weighted + components.popularity_weighted;
+            }
+        });
+        
+        // Also update originalSearchResults
+        this.originalSearchResults.forEach(song => {
+            if (song.scoring_components) {
+                const components = song.scoring_components;
+                
+                // Recalculate weighted components
+                components.semantic_weighted = newWeights.w_sem * components.semantic_similarity;
+                components.interest_weighted = newWeights.w_int * components.personal_interest;
+                components.exploration_weighted = newWeights.w_ucb * components.exploration_bonus;
+                components.popularity_weighted = newWeights.w_pop * components.popularity_score;
+                
+                // Recalculate final score
+                song.final_score = components.semantic_weighted + components.interest_weighted + 
+                                 components.exploration_weighted + components.popularity_weighted;
+            }
+        });
+        
+        // Re-sort results by new final scores
+        this.searchResults.sort((a, b) => (b.final_score || 0) - (a.final_score || 0));
+        this.originalSearchResults.sort((a, b) => (b.final_score || 0) - (a.final_score || 0));
+        
+        // Re-apply current filter if active
+        this.applyClientSideFilter();
+        
+        // Update the UI with re-ranked results
+        const mockData = {
+            results: this.searchResults,
+            search_type: this.currentSearchData?.search_type || 'text',
+            embed_type: this.currentSearchData?.embed_type || 'tags_genres',
+            query: this.currentSearchData?.query || '',
+            ranking_weights: {
+                ...newWeights,
+                has_history: this.currentSearchData?.ranking_weights?.has_history || false,
+                history_songs_count: this.currentSearchData?.ranking_weights?.history_songs_count || 0
+            },
+            pagination: {
+                offset: 0,
+                limit: this.searchResults.length,
+                total_count: this.searchResults.length,
+                has_more: false,
+                returned_count: this.searchResults.length
+            }
+        };
+        
+        // Update current search data
+        this.currentSearchData = mockData;
+        
+        // Re-render results
+        this.displayResults(mockData, false);
     }
     
     createSongCardHTML(song, options = {}) {
@@ -796,16 +1030,16 @@ class SemanticSearchApp {
         let scoringDetailsHTML = '';
         
         if (rank && similarity !== undefined) {
-            // Main score display
+            // Main score display - show final ranking score without percentage
             const finalScore = song.final_score !== undefined ? song.final_score : similarity;
             metadataHTML = `
                 <div class="card-metadata">
                     <span class="card-rank">#${rank}</span>
-                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}%</span>
+                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}</span>
                 </div>
             `;
             
-            // Detailed scoring components (if available)
+            // Detailed scoring components (if available) - show raw values without percentages
             if (song.scoring_components) {
                 const components = song.scoring_components;
                 const hasHistory = components.has_history;
@@ -814,24 +1048,24 @@ class SemanticSearchApp {
                     <div class="scoring-details">
                         <div class="scoring-component">
                             <span class="component-label">Sem:</span>
-                            <span class="component-value">${(components.semantic_weighted * 100).toFixed(1)}%&nbsp;</span>
-                            <span class="component-raw">(${(components.semantic_similarity * 100).toFixed(1)}%)</span>
+                            <span class="component-value">${(components.semantic_weighted * 100).toFixed(1)}&nbsp;</span>
+                            <span class="component-raw">(${(components.semantic_similarity * 100).toFixed(1)})</span>
                         </div>
                         <div class="scoring-component ${hasHistory ? '' : 'no-history'}">
                             <span class="component-label">Per:</span>
-                            <span class="component-value">${(components.interest_weighted * 100).toFixed(1)}%&nbsp;</span>
-                            <span class="component-raw">(${(components.personal_interest * 100).toFixed(1)}%)</span>
+                            <span class="component-value">${(components.interest_weighted * 100).toFixed(1)}&nbsp;</span>
+                            <span class="component-raw">(${(components.personal_interest * 100).toFixed(1)})</span>
                             ${!hasHistory ? '<span class="no-history-indicator">*</span>' : ''}
                         </div>
                         <div class="scoring-component">
                             <span class="component-label">Expl:</span>
-                            <span class="component-value">${(components.exploration_weighted * 100).toFixed(1)}%&nbsp;</span>
-                            <span class="component-raw">(${(components.exploration_bonus * 100).toFixed(1)}%)</span>
+                            <span class="component-value">${(components.exploration_weighted * 100).toFixed(1)}&nbsp;</span>
+                            <span class="component-raw">(${(components.exploration_bonus * 100).toFixed(1)})</span>
                         </div>
                         <div class="scoring-component">
                             <span class="component-label">Pop:</span>
-                            <span class="component-value">${(components.popularity_weighted * 100).toFixed(1)}%&nbsp;</span>
-                            <span class="component-raw">(${(components.popularity_score * 100).toFixed(1)}%)</span>
+                            <span class="component-value">${(components.popularity_weighted * 100).toFixed(1)}&nbsp;</span>
+                            <span class="component-raw">(${(components.popularity_score * 100).toFixed(1)})</span>
                         </div>
                     </div>
                 `;
@@ -910,10 +1144,11 @@ class SemanticSearchApp {
         
         let footerHTML = '';
         if (rank && similarity !== undefined) {
+            const finalScore = song.final_score !== undefined ? song.final_score : similarity;
             footerHTML = `
                 <div class="card-footer">
                     <span class="card-rank">#${rank}</span>
-                    <span class="similarity-score">${(similarity * 100).toFixed(1)}%</span>
+                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}</span>
                 </div>
             `;
         }
@@ -1131,6 +1366,7 @@ class SemanticSearchApp {
         this.searchResults = [];
         this.originalSearchResults = [];
         this.currentSearchData = null;
+        this.lastSearchRequestData = null;
         this.currentOffset = 0;
         this.totalResultsCount = 0;
         this.hasMoreResults = false;
