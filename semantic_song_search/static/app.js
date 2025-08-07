@@ -468,6 +468,16 @@ class SemanticSearchApp {
             }
             
             const data = await response.json();
+            
+            // Validate API response structure
+            if (!data || typeof data !== 'object') {
+                throw new Error('Invalid API response format');
+            }
+            
+            if (!Array.isArray(data.results)) {
+                throw new Error('API response missing results array');
+            }
+            
             this.searchResults = data.results;
             this.originalSearchResults = [...data.results]; // Store original unfiltered results for client-side filtering
             this.currentOffset = data.pagination.offset + data.pagination.limit;
@@ -531,6 +541,12 @@ class SemanticSearchApp {
             }
             
             const data = await response.json();
+            
+            // Validate load more response
+            if (!data || !Array.isArray(data.results)) {
+                throw new Error('Invalid load more response format');
+            }
+            
             const previousResultsCount = this.searchResults.length;
             
             // Add new results to original unfiltered results
@@ -590,8 +606,26 @@ class SemanticSearchApp {
         // Update header (show current results count with new formatting)
         this.updateResultsCount();
         
-        searchInfo.textContent = `${data.search_type} search • ${data.embed_type.replace('_', ' ')}`;
+        // Create enhanced search info with ranking details
+        let searchInfoText = `${data.search_type} search • ${data.embed_type.replace('_', ' ')}`;
+        
+        // Add ranking weights information if available
+        if (data.ranking_weights) {
+            const weights = data.ranking_weights;
+            if (weights.has_history) {
+                searchInfoText += ` • Personalized ranking (${weights.history_songs_count} songs)`;
+            } else {
+                searchInfoText += ` • Semantic similarity only`;
+            }
+        }
+        
+        searchInfo.textContent = searchInfoText;
         resultsHeader.style.display = 'flex';
+        
+        // Display ranking weights if available (only for new searches)
+        if (!isLoadMore) {
+            this.displayRankingWeights(data.ranking_weights);
+        }
         
         // Clear results grid only for new searches, not for load more
         if (!isLoadMore) {
@@ -702,17 +736,106 @@ class SemanticSearchApp {
         this.updateLoadMoreButton();
     }
     
+    displayRankingWeights(rankingWeights) {
+        let rankingWeightsContainer = document.getElementById('ranking-weights-container');
+        
+        // Create container if it doesn't exist
+        if (!rankingWeightsContainer) {
+            rankingWeightsContainer = document.createElement('div');
+            rankingWeightsContainer.id = 'ranking-weights-container';
+            rankingWeightsContainer.className = 'ranking-weights-container';
+            
+            // Insert after results header
+            const resultsHeader = document.getElementById('results-header');
+            resultsHeader.parentNode.insertBefore(rankingWeightsContainer, resultsHeader.nextSibling);
+        }
+        
+        // Clear existing content
+        rankingWeightsContainer.innerHTML = '';
+        
+        if (!rankingWeights) {
+            rankingWeightsContainer.style.display = 'none';
+            return;
+        }
+        
+        // Create ranking weights display
+        const weightsHTML = `
+            <div class="ranking-weights-header">
+                <h4>Ranking Formula Components</h4>
+                ${!rankingWeights.has_history ? '<span class="no-history-note">* No history data - using exploration bonus instead</span>' : ''}
+            </div>
+            <div class="ranking-weights-grid">
+                <div class="weight-item">
+                    <span class="weight-label">Semantic Similarity</span>
+                    <span class="weight-value">${(rankingWeights.w_sem * 100).toFixed(0)}%</span>
+                </div>
+                <div class="weight-item ${rankingWeights.has_history ? '' : 'no-history'}">
+                    <span class="weight-label">Personal Interest</span>
+                    <span class="weight-value">${(rankingWeights.w_int * 100).toFixed(0)}%</span>
+                    ${!rankingWeights.has_history ? '<span class="no-history-indicator">*</span>' : ''}
+                </div>
+                <div class="weight-item">
+                    <span class="weight-label">Exploration</span>
+                    <span class="weight-value">${(rankingWeights.w_ucb * 100).toFixed(0)}%</span>
+                </div>
+                <div class="weight-item">
+                    <span class="weight-label">Popularity</span>
+                    <span class="weight-value">${(rankingWeights.w_pop * 100).toFixed(0)}%</span>
+                </div>
+            </div>
+        `;
+        
+        rankingWeightsContainer.innerHTML = weightsHTML;
+        rankingWeightsContainer.style.display = 'block';
+    }
+    
     createSongCardHTML(song, options = {}) {
         const { rank, similarity, isQuery = false, fieldValue = null, embedType = null, isSelected = false } = options;
         
         let metadataHTML = '';
+        let scoringDetailsHTML = '';
+        
         if (rank && similarity !== undefined) {
+            // Main score display
+            const finalScore = song.final_score !== undefined ? song.final_score : similarity;
             metadataHTML = `
                 <div class="card-metadata">
                     <span class="card-rank">#${rank}</span>
-                    <span class="similarity-score">${(similarity * 100).toFixed(1)}%</span>
+                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}%</span>
                 </div>
             `;
+            
+            // Detailed scoring components (if available)
+            if (song.scoring_components) {
+                const components = song.scoring_components;
+                const hasHistory = components.has_history;
+                
+                scoringDetailsHTML = `
+                    <div class="scoring-details">
+                        <div class="scoring-component">
+                            <span class="component-label">Sem:</span>
+                            <span class="component-value">${(components.semantic_weighted * 100).toFixed(1)}%&nbsp;</span>
+                            <span class="component-raw">(${(components.semantic_similarity * 100).toFixed(1)}%)</span>
+                        </div>
+                        <div class="scoring-component ${hasHistory ? '' : 'no-history'}">
+                            <span class="component-label">Per:</span>
+                            <span class="component-value">${(components.interest_weighted * 100).toFixed(1)}%&nbsp;</span>
+                            <span class="component-raw">(${(components.personal_interest * 100).toFixed(1)}%)</span>
+                            ${!hasHistory ? '<span class="no-history-indicator">*</span>' : ''}
+                        </div>
+                        <div class="scoring-component">
+                            <span class="component-label">Expl:</span>
+                            <span class="component-value">${(components.exploration_weighted * 100).toFixed(1)}%&nbsp;</span>
+                            <span class="component-raw">(${(components.exploration_bonus * 100).toFixed(1)}%)</span>
+                        </div>
+                        <div class="scoring-component">
+                            <span class="component-label">Pop:</span>
+                            <span class="component-value">${(components.popularity_weighted * 100).toFixed(1)}%&nbsp;</span>
+                            <span class="component-raw">(${(components.popularity_score * 100).toFixed(1)}%)</span>
+                        </div>
+                    </div>
+                `;
+            }
         }
         
         let tagsHTML = '';
@@ -806,6 +929,7 @@ class SemanticSearchApp {
                 </div>
             </div>
             ${tagsHTML}
+            ${scoringDetailsHTML}
             ${accordionHTML}
             ${footerHTML}
         `;
@@ -1390,7 +1514,7 @@ class SemanticSearchApp {
         if (!filterEnabled || !this.topArtistsLoaded || this.topArtists.length === 0) {
             // Show all original results
             console.log(`🔍 Showing all ${this.originalSearchResults.length} original results (filter disabled or no top artists)`);
-            this.searchResults = [...this.originalSearchResults];
+            this.searchResults = this.originalSearchResults; // Reference, not copy
             this.isFiltered = false;
             
             // Manual selection state is preserved as-is when filter is disabled

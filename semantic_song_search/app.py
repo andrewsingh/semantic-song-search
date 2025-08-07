@@ -19,8 +19,10 @@ import logging
 import argparse
 from pathlib import Path
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import mixpanel
+import pandas as pd
+import sys
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,6 +78,13 @@ Examples:
         '--debug',
         action='store_true',
         help='Run in debug mode'
+    )
+    
+    parser.add_argument(
+        '--history',
+        type=str,
+        default=None,
+        help='Path to Spotify Extended Streaming History directory (optional - enables personalized ranking)'
     )
     
     return parser.parse_args()
@@ -167,11 +176,12 @@ def track_event(event_name, properties=None):
         logger.error(f"Error tracking event {event_name}: {e}")
 
 class MusicSearchEngine:
-    """Core search engine for semantic music search."""
+    """Core search engine for semantic music search with personalized ranking."""
     
-    def __init__(self, songs_file: str, embeddings_file: str):
+    def __init__(self, songs_file: str, embeddings_file: str, history_path: str = None):
         self.songs_file = songs_file
         self.embeddings_file = embeddings_file
+        self.history_path = history_path
         self.songs = []
         self.embeddings_data = None
         self.song_lookup = {}
@@ -179,9 +189,33 @@ class MusicSearchEngine:
         self.tfidf_vectorizer = None
         self.tfidf_matrix = None
         
+        # Personalized ranking data structures
+        self.history_df = None
+        self.user_song_stats = {}  # Aggregated stats per (original_song, original_artist)
+        self.has_history = False
+        
+        # Ranking algorithm hyperparameters (from design doc v1)
+        self.ranking_params = {
+            'H': 30,          # Recency half-life in days
+            'kappa': 0.46,    # Affinity saturation rate
+            'lambda': 0.5,    # Short-skip penalty strength
+            'alpha': 2,       # Prior weight for affinity smoothing
+            'A0': 5,          # Prior affinity value
+            'S': 10,          # Satiation time scale in days
+            'beta': 0.5,      # UCB exploration coefficient
+            'gamma': 0.6,     # Popularity damping exponent
+            'w_sem': 0.50,    # Weight for semantic similarity
+            'w_int': 0.30,    # Weight for personal interest
+            'w_ucb': 0.15,    # Weight for exploration
+            'w_pop': 0.05     # Weight for popularity
+        }
+        
         self._load_data()
         self._build_indices()
         self._build_text_search_index()
+        
+        if self.history_path:
+            self._load_and_process_history()
     
     def _load_data(self):
         """Load song profiles and embeddings."""
@@ -443,6 +477,326 @@ class MusicSearchEngine:
         self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
         self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(search_texts)
     
+    def _smart_convert_to_datetime(self, timestamp: int) -> datetime:
+        """Convert timestamp to datetime, handling both seconds and milliseconds."""
+        if timestamp is None:
+            return None
+        # timestamp may be in milliseconds or seconds
+        if timestamp < 10000000000:
+            return datetime.fromtimestamp(timestamp)
+        else:
+            return datetime.fromtimestamp(timestamp / 1000)
+    
+    def _load_spotify_history_entries(self, json_dir: Path) -> List[Dict]:
+        """Load entries from Spotify Extended Streaming History JSON files."""
+        entries = []
+        json_files = list(json_dir.glob("*.json"))
+        
+        if not json_files:
+            logger.warning(f"No JSON files found in {json_dir}")
+            return []
+        
+        logger.info(f"Loading history from {len(json_files)} JSON files...")
+        
+        for json_file in sorted(json_files):
+            # Only include audio history files
+            if "Audio" not in json_file.name:
+                logger.debug(f"Skipping non-audio history file: {json_file.name}")
+                continue
+                
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    entries.extend(data)
+                    logger.info(f"Loaded {len(data)} entries from {json_file.name}")
+                else:
+                    logger.warning(f"Expected list in {json_file.name}, got {type(data)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error in {json_file}: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Error loading {json_file}: {e}")
+                continue
+        
+        logger.info(f"Total entries loaded: {len(entries)}")
+        return entries
+    
+    def _clean_history_entries(self, entries: List[Dict]) -> List[Dict]:
+        """Clean and standardize history entry data."""
+        cleaned_entries = []
+        skipped_count = 0
+        
+        for entry in entries:
+            # Skip entries without track URI
+            if not entry.get("spotify_track_uri"):
+                skipped_count += 1
+                continue
+            
+            # Skip entries without required metadata
+            if not entry.get("master_metadata_track_name") or not entry.get("master_metadata_album_artist_name"):
+                skipped_count += 1
+                continue
+            
+            # Handle timestamp conversion with comprehensive error handling
+            try:
+                if entry.get("offline"):
+                    timestamp = self._smart_convert_to_datetime(entry.get("offline_timestamp"))
+                    if timestamp is None:
+                        skipped_count += 1
+                        continue
+                else:
+                    timestamp_str = entry.get("ts", "")
+                    if not timestamp_str:
+                        skipped_count += 1
+                        continue
+                    
+                    # Handle various timestamp formats
+                    try:
+                        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    except ValueError:
+                        # Try alternative parsing methods
+                        try:
+                            timestamp = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%SZ")
+                        except ValueError:
+                            logger.warning(f"Could not parse timestamp: {timestamp_str}")
+                            skipped_count += 1
+                            continue
+                
+                # Strip timezone info to work with naive datetime objects
+                if timestamp:
+                    timestamp = timestamp.replace(tzinfo=None)
+                    
+                    # Validate timestamp is reasonable (not too far in past/future)
+                    now = datetime.now()
+                    if timestamp.year < 2006 or timestamp > now:  # Spotify founded in 2006
+                        logger.warning(f"Timestamp out of reasonable range: {timestamp}")
+                        skipped_count += 1
+                        continue
+                else:
+                    skipped_count += 1
+                    continue
+                    
+            except Exception as e:
+                logger.warning(f"Error parsing timestamp for entry: {e}")
+                skipped_count += 1
+                continue
+            
+            # Extract track ID from URI
+            track_id = entry["spotify_track_uri"].split(":")[-1] if entry.get("spotify_track_uri") else ""
+            
+            cleaned_entry = {
+                "timestamp": timestamp,
+                "ms_played": entry.get("ms_played", 0),
+                "track_id": track_id,
+                "original_song": entry["master_metadata_track_name"],
+                "original_artist": entry["master_metadata_album_artist_name"], 
+                "original_album": entry.get("master_metadata_album_album_name", ""),
+                "reason_start": entry.get("reason_start", ""),
+                "reason_end": entry.get("reason_end", "")
+            }
+            
+            cleaned_entries.append(cleaned_entry)
+        
+        if skipped_count > 0:
+            logger.info(f"Cleaned {len(cleaned_entries)} entries (skipped {skipped_count} invalid entries)")
+        else:
+            logger.info(f"Cleaned {len(cleaned_entries)} entries")
+            
+        return cleaned_entries
+    
+    def _filter_history_to_known_songs(self, history_df: pd.DataFrame) -> pd.DataFrame:
+        """Filter history to only include songs that exist in our metadata."""
+        # Create set of known song keys for fast lookup
+        metadata_keys = set((song['original_song'], song['original_artist']) for song in self.songs)
+        
+        # Filter dataframe to only include known songs
+        original_count = len(history_df)
+        filtered_df = history_df[
+            history_df.apply(lambda x: (x['original_song'], x['original_artist']) in metadata_keys, axis=1)
+        ].reset_index(drop=True)
+        
+        filtered_count = len(filtered_df)
+        logger.info(f"Filtered history: {filtered_count}/{original_count} entries match known songs")
+        
+        return filtered_df
+    
+    def _compute_user_song_stats(self, history_df: pd.DataFrame, now_utc: datetime = None) -> Dict:
+        """Compute aggregated listening statistics per song using the ranking formula."""
+        if now_utc is None:
+            now_utc = datetime.now()
+        
+        params = self.ranking_params
+        H, kappa, lambda_val = params['H'], params['kappa'], params['lambda']
+        alpha, A0, S, beta, gamma = params['alpha'], params['A0'], params['S'], params['beta'], params['gamma']
+        
+        logger.info("Computing user song statistics...")
+        
+        # Add duration for completion calculation
+        df = history_df.copy()
+        
+        # Get song durations and add to dataframe
+        song_durations = {}
+        for song in self.songs:
+            song_key = (song['original_song'], song['original_artist'])
+            duration_ms = song.get('metadata', {}).get('duration', 200000)  # Default ~3:20 if missing
+            song_durations[song_key] = duration_ms
+        
+        df['duration_ms'] = df.apply(lambda x: song_durations.get((x['original_song'], x['original_artist']), 200000), axis=1)
+        
+        # Calculate completion ratio
+        df['completion'] = np.minimum(df['ms_played'] / df['duration_ms'], 1.0)
+        
+        # Calculate recency weights
+        days_ago = (now_utc - df['timestamp']).dt.total_seconds() / (24 * 3600)
+        df['recency_weight'] = np.exp(-np.log(2) * days_ago / H)
+        
+        # Calculate short-skip penalty
+        short_skip_mask = df['ms_played'] < 15000
+        df['skip_penalty'] = lambda_val * short_skip_mask * (1 - df['completion']) * df['recency_weight']
+        
+        # Calculate equivalent full listens
+        df['efl'] = df['recency_weight'] * df['completion']
+        
+        # Group by song key and aggregate
+        song_key_col = df[['original_song', 'original_artist']].apply(tuple, axis=1)
+        df['song_key'] = song_key_col
+        
+        grouped = df.groupby('song_key').agg({
+            'efl': 'sum',
+            'skip_penalty': 'sum', 
+            'ms_played': 'size',  # Count of plays
+            'timestamp': 'max'    # Most recent play
+        }).rename(columns={'ms_played': 'play_count', 'timestamp': 'last_play'})
+        
+        # Calculate net equivalent full listens (E_net)
+        grouped['E_net'] = np.clip(grouped['efl'] - grouped['skip_penalty'], 0, None)
+        
+        # Calculate raw affinity with bounds checking
+        # Clip E_net to prevent overflow in exp calculation
+        e_net_clipped = np.clip(grouped['E_net'], 0, 20)  # exp(-20*0.46) is effectively 0
+        grouped['A_raw'] = 100 * (1 - np.exp(-kappa * e_net_clipped))
+        
+        # Smooth affinity with prior - add safety check for division
+        denominator = alpha + grouped['play_count']
+        grouped['Affinity'] = np.where(
+            denominator > 0,
+            (alpha * A0 + grouped['play_count'] * grouped['A_raw']) / denominator,
+            A0  # Fallback to prior if denominator is somehow 0
+        )
+        
+        # Calculate satiation and interest with safety checks
+        if S is not None and S > 0:
+            try:
+                days_since_last = (now_utc - grouped['last_play']).dt.total_seconds() / (24 * 3600)
+                # Clip days_since_last to prevent extreme values
+                days_since_last = np.clip(days_since_last, 0, 365 * 5)  # Max 5 years
+                satiation = np.exp(-days_since_last / S)
+                grouped['Interest'] = grouped['Affinity'] * (1 - satiation)
+            except Exception as e:
+                logger.warning(f"Error calculating satiation, using raw affinity: {e}")
+                grouped['Interest'] = grouped['Affinity']
+        else:
+            grouped['Interest'] = grouped['Affinity']
+        
+        # Calculate UCB exploration bonus with bounds checking
+        grouped['UCB'] = beta / np.sqrt(np.maximum(1 + grouped['play_count'], 1))  # Ensure >= 1
+        
+        # Convert to dictionary format with validation
+        user_stats = {}
+        invalid_count = 0
+        
+        for song_key, stats in grouped.iterrows():
+            # Validate all numeric values are reasonable
+            try:
+                efl = float(stats['efl'])
+                skip_penalty = float(stats['skip_penalty'])
+                E_net = float(stats['E_net'])
+                play_count = int(stats['play_count'])
+                affinity = float(stats['Affinity'])
+                interest = float(stats['Interest'])
+                ucb = float(stats['UCB'])
+                
+                # Check for invalid values
+                if not all(np.isfinite([efl, skip_penalty, E_net, affinity, interest, ucb])):
+                    logger.warning(f"Non-finite values for song {song_key}, skipping")
+                    invalid_count += 1
+                    continue
+                
+                if play_count < 0:
+                    logger.warning(f"Negative play count for song {song_key}, skipping")
+                    invalid_count += 1
+                    continue
+                
+                user_stats[song_key] = {
+                    'efl': efl,
+                    'skip_penalty': skip_penalty,
+                    'E_net': E_net,
+                    'play_count': play_count,
+                    'last_play': stats['last_play'],
+                    'affinity': np.clip(affinity, 0, 100),  # Ensure reasonable bounds
+                    'interest': np.clip(interest, 0, 100),  # Ensure reasonable bounds
+                    'ucb': np.clip(ucb, 0, 1)  # UCB should be 0-1
+                }
+            except Exception as e:
+                logger.warning(f"Error processing stats for song {song_key}: {e}")
+                invalid_count += 1
+                continue
+        
+        if invalid_count > 0:
+            logger.warning(f"Skipped {invalid_count} songs with invalid statistics")
+        
+        logger.info(f"Computed statistics for {len(user_stats)} unique songs")
+        return user_stats
+    
+    def _load_and_process_history(self):
+        """Load and process Spotify Extended Streaming History."""
+        try:
+            history_path = Path(self.history_path)
+            
+            if not history_path.exists():
+                logger.error(f"History path does not exist: {history_path}")
+                return
+            
+            if not history_path.is_dir():
+                logger.error(f"History path is not a directory: {history_path}")
+                return
+            
+            logger.info(f"Loading Spotify Extended Streaming History from: {history_path}")
+            
+            # Load raw entries
+            entries = self._load_spotify_history_entries(history_path)
+            if not entries:
+                logger.warning("No history entries found")
+                return
+            
+            # Clean entries
+            cleaned_entries = self._clean_history_entries(entries)
+            if not cleaned_entries:
+                logger.warning("No valid history entries after cleaning")
+                return
+            
+            # Convert to DataFrame
+            self.history_df = pd.DataFrame(cleaned_entries)
+            
+            # Filter to songs we know about
+            self.history_df = self._filter_history_to_known_songs(self.history_df)
+            
+            if len(self.history_df) == 0:
+                logger.warning("No history entries match songs in metadata")
+                return
+            
+            # Compute per-song statistics
+            self.user_song_stats = self._compute_user_song_stats(self.history_df)
+            
+            self.has_history = True
+            logger.info(f"Successfully loaded history with {len(self.history_df)} plays across {len(self.user_song_stats)} songs")
+            
+        except Exception as e:
+            logger.error(f"Error loading history: {e}")
+            self.has_history = False
+            self.history_df = None
+            self.user_song_stats = {}
+    
     def search_songs_by_text(self, query: str, limit: int = 10) -> List[Tuple[int, float, str]]:
         """Search for songs using text similarity (for song-to-song search suggestions)."""
         if not query or not self.tfidf_vectorizer:
@@ -547,12 +901,12 @@ class MusicSearchEngine:
             logger.error(f"Error getting text embedding: {e}")
             raise
     
-    def similarity_search(self, query_embedding: np.ndarray, embed_type: str, k: int = 20, offset: int = 0) -> Tuple[List[Tuple[int, float, str]], int]:
-        """Perform similarity search using cosine similarity.
+    def similarity_search(self, query_embedding: np.ndarray, embed_type: str, k: int = 20, offset: int = 0) -> Tuple[List[Dict], int]:
+        """Perform similarity search with enhanced personalized ranking.
         
         Returns:
-            Tuple[List[Tuple[int, float, str]], int]: (paginated_results_with_field_values, total_count)
-            Each result tuple contains: (song_idx, similarity, field_value)
+            Tuple[List[Dict], int]: (paginated_results_with_detailed_scores, total_count)
+            Each result dict contains: song_idx, similarity, field_value, and component scores
         """
         if embed_type not in self.embedding_indices:
             return [], 0
@@ -560,7 +914,7 @@ class MusicSearchEngine:
         indices = self.embedding_indices[embed_type]
         embeddings = indices['embeddings']
         song_indices = indices['song_indices']
-        field_values = indices['field_values']  # Get the field values for accordion display
+        field_values = indices['field_values']
         
         # Normalize embeddings for cosine similarity
         query_norm_value = np.linalg.norm(query_embedding)
@@ -570,35 +924,106 @@ class MusicSearchEngine:
         
         query_norm = query_embedding / query_norm_value
         embedding_norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        # Avoid division by zero for embedding normalization
         embedding_norms = np.where(embedding_norms == 0, 1, embedding_norms)
         embeddings_norm = embeddings / embedding_norms
         
-        # Compute similarities
+        # Compute semantic similarities
         similarities = np.dot(embeddings_norm, query_norm)
         
-        # Get all results sorted by similarity
-        all_indices = similarities.argsort()[::-1]
-        total_count = len(all_indices)
+        # Compute enhanced ranking scores for all candidate songs
+        candidate_scores = []
+        params = self.ranking_params
+        
+        for idx in range(len(similarities)):
+            song_idx = song_indices[idx]
+            semantic_sim = similarities[idx]
+            field_value = field_values[idx]
+            
+            # Get song metadata for popularity
+            song = self.songs[song_idx]
+            song_key = (song['original_song'], song['original_artist'])
+            popularity = song.get('metadata', {}).get('popularity', 50) / 100.0  # Normalize to 0-1
+            
+            # Compute component scores
+            s_t = float(semantic_sim)  # Semantic similarity (already 0-1)
+            
+            # Personal interest score (I_t) with bounds checking
+            if self.has_history and song_key in self.user_song_stats:
+                raw_interest = self.user_song_stats[song_key]['interest']
+                i_t = np.clip(raw_interest / 100.0, 0, 1)  # Normalize to 0-1 and clip
+                ucb = np.clip(self.user_song_stats[song_key]['ucb'], 0, 1)  # Clip UCB too
+            else:
+                # No history data - use neutral values
+                i_t = 0.0  # No personal interest 
+                ucb = min(params['beta'], 1.0)  # Cap exploration bonus at 1.0
+            
+            # Damped popularity score (P_t^gamma) with bounds checking
+            popularity_normalized = np.clip(popularity, 0, 1)
+            p_t = popularity_normalized ** params['gamma']
+            
+            # Composite score with safety checks
+            final_score = (
+                params['w_sem'] * s_t +
+                params['w_int'] * i_t +
+                params['w_ucb'] * ucb +
+                params['w_pop'] * p_t
+            )
+            
+            # Ensure final score is finite and reasonable
+            if not np.isfinite(final_score):
+                logger.warning(f"Non-finite final score for song {song_idx}, using semantic similarity only")
+                final_score = s_t
+            
+            final_score = float(np.clip(final_score, 0, 1))  # Ensure 0-1 range
+            
+            candidate_scores.append({
+                'idx': idx,
+                'song_idx': int(song_idx),
+                'field_value': str(field_value),
+                'final_score': float(final_score),
+                # Component scores (both raw and weighted)
+                'semantic_similarity': float(s_t),
+                'semantic_weighted': float(params['w_sem'] * s_t),
+                'personal_interest': float(i_t),
+                'interest_weighted': float(params['w_int'] * i_t),
+                'exploration_bonus': float(ucb),
+                'exploration_weighted': float(params['w_ucb'] * ucb),
+                'popularity_score': float(p_t),
+                'popularity_weighted': float(params['w_pop'] * p_t),
+                'has_history': bool(self.has_history and song_key in self.user_song_stats)
+            })
+        
+        # Sort by final score (descending)
+        candidate_scores.sort(key=lambda x: x['final_score'], reverse=True)
+        total_count = len(candidate_scores)
         
         # Apply pagination
         start_idx = offset
         end_idx = offset + k
-        paginated_indices = all_indices[start_idx:end_idx]
+        paginated_results = candidate_scores[start_idx:end_idx]
         
+        # Convert to the expected format (but include detailed scores)
         results = []
-        for idx in paginated_indices:
-            song_idx = song_indices[idx]
-            similarity = similarities[idx]
-            field_value = field_values[idx]  # Get the original text that was embedded
-            results.append((int(song_idx), float(similarity), str(field_value)))  # Convert all to native Python types
+        for result in paginated_results:
+            results.append(result)
         
         return results, total_count
+    
+    def get_ranking_weights(self) -> Dict:
+        """Get the current ranking algorithm weights for display."""
+        return {
+            'w_sem': self.ranking_params['w_sem'],
+            'w_int': self.ranking_params['w_int'],
+            'w_ucb': self.ranking_params['w_ucb'], 
+            'w_pop': self.ranking_params['w_pop'],
+            'has_history': self.has_history,
+            'history_songs_count': len(self.user_song_stats) if self.has_history else 0
+        }
 
 # Initialize search engine
 search_engine = None
 
-def init_search_engine(songs_file: str = None, embeddings_file: str = None):
+def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None):
     """Initialize the search engine with data files."""
     global search_engine
     if search_engine is None:
@@ -606,15 +1031,18 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None):
         if songs_file and embeddings_file:
             songs_path = songs_file
             embeddings_path = embeddings_file
+            history_path_arg = history_path
         elif args:
             songs_path = songs_file or args.songs
             embeddings_path = embeddings_file or args.embeddings
+            history_path_arg = history_path or args.history
         else:
             # Fallback defaults when no args available (e.g., when imported)
             default_songs = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_metadata_ready.json'
             default_embeddings = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
             songs_path = songs_file or str(default_songs)
             embeddings_path = embeddings_file or str(default_embeddings)
+            history_path_arg = history_path
         
         # Validate that files exist
         if not Path(songs_path).exists():
@@ -640,11 +1068,25 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None):
                 logger.error(f"Embeddings path not found: {embeddings_path}")
                 raise FileNotFoundError(f"Embeddings path not found: {embeddings_path}")
         
+        # Validate history path if provided
+        if history_path_arg:
+            history_path_obj = Path(history_path_arg)
+            if not history_path_obj.exists():
+                logger.warning(f"History path does not exist: {history_path_arg}")
+                history_path_arg = None
+            elif not history_path_obj.is_dir():
+                logger.warning(f"History path is not a directory: {history_path_arg}")
+                history_path_arg = None
+        
         logger.info(f"Initializing search engine with:")
         logger.info(f"  Songs file: {songs_path}")
         logger.info(f"  Embeddings file: {embeddings_path}")
+        if history_path_arg:
+            logger.info(f"  History path: {history_path_arg} (personalized ranking enabled)")
+        else:
+            logger.info(f"  History path: None (using semantic similarity only)")
         
-        search_engine = MusicSearchEngine(songs_path, embeddings_path)
+        search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg)
 
 # Spotify OAuth setup
 def get_spotify_oauth():
@@ -821,37 +1263,85 @@ def search():
         else:
             return jsonify({'error': 'Invalid search_type'}), 400
         
-        # Format results (filtering now handled client-side)
+        # Format results with detailed scoring information
         formatted_results = []
         
         for result in results:
             try:
-                # Handle both old format (song_idx, similarity) and new format (song_idx, similarity, field_value)
-                if len(result) == 3:
-                    result_song_idx, similarity, field_value = result
-                elif len(result) == 2:
-                    result_song_idx, similarity = result
-                    field_value = "N/A"  # Fallback for backwards compatibility
-                    logger.warning("Old format results detected - using fallback field_value")
-                else:
-                    logger.error(f"Unexpected result format: {result}")
-                    continue
+                # New format includes detailed scoring components
+                if isinstance(result, dict):
+                    result_song_idx = result['song_idx']
+                    field_value = result['field_value']
                     
-                song = search_engine.songs[result_song_idx]
-                metadata = song.get('metadata', {})
-                
-                formatted_results.append({
-                    'song_idx': int(result_song_idx),  # Convert numpy.int64 to native Python int
-                    'song': song['original_song'],
-                    'artist': song['original_artist'],
-                    'album': metadata.get('album_name', ''),
-                    'cover_url': metadata.get('cover_url', ''),
-                    'spotify_id': metadata.get('song_id', ''),
-                    'similarity': float(similarity),  # Convert numpy.float64 to native Python float
-                    'field_value': field_value, # Include the original field value
-                    'genres': song.get('genres', []),
-                    'tags': song.get('tags', [])
-                })
+                    song = search_engine.songs[result_song_idx]
+                    metadata = song.get('metadata', {})
+                    
+                    formatted_result = {
+                        'song_idx': result_song_idx,
+                        'song': song['original_song'],
+                        'artist': song['original_artist'],
+                        'album': metadata.get('album_name', ''),
+                        'cover_url': metadata.get('cover_url', ''),
+                        'spotify_id': metadata.get('song_id', ''),
+                        'field_value': field_value,
+                        'genres': song.get('genres', []),
+                        'tags': song.get('tags', []),
+                        # Enhanced scoring information
+                        'final_score': result['final_score'],
+                        'scoring_components': {
+                            'semantic_similarity': result['semantic_similarity'],
+                            'semantic_weighted': result['semantic_weighted'],
+                            'personal_interest': result['personal_interest'],
+                            'interest_weighted': result['interest_weighted'],
+                            'exploration_bonus': result['exploration_bonus'],
+                            'exploration_weighted': result['exploration_weighted'],
+                            'popularity_score': result['popularity_score'],
+                            'popularity_weighted': result['popularity_weighted'],
+                            'has_history': result['has_history']
+                        },
+                        # Backwards compatibility
+                        'similarity': result['semantic_similarity']
+                    }
+                    formatted_results.append(formatted_result)
+                else:
+                    # Legacy format fallback
+                    if len(result) == 3:
+                        result_song_idx, similarity, field_value = result
+                    elif len(result) == 2:
+                        result_song_idx, similarity = result
+                        field_value = "N/A"
+                    else:
+                        logger.error(f"Unexpected result format: {result}")
+                        continue
+                        
+                    song = search_engine.songs[result_song_idx]
+                    metadata = song.get('metadata', {})
+                    
+                    formatted_results.append({
+                        'song_idx': int(result_song_idx),
+                        'song': song['original_song'],
+                        'artist': song['original_artist'],
+                        'album': metadata.get('album_name', ''),
+                        'cover_url': metadata.get('cover_url', ''),
+                        'spotify_id': metadata.get('song_id', ''),
+                        'similarity': float(similarity),
+                        'field_value': field_value,
+                        'genres': song.get('genres', []),
+                        'tags': song.get('tags', []),
+                        # Default values for missing components
+                        'final_score': float(similarity),
+                        'scoring_components': {
+                            'semantic_similarity': float(similarity),
+                            'semantic_weighted': float(similarity),
+                            'personal_interest': 0.0,
+                            'interest_weighted': 0.0,
+                            'exploration_bonus': 0.0,
+                            'exploration_weighted': 0.0,
+                            'popularity_score': 0.0,
+                            'popularity_weighted': 0.0,
+                            'has_history': False
+                        }
+                    })
             except (ValueError, IndexError, KeyError) as e:
                 logger.error(f"Error processing search result {result}: {e}")
                 continue
@@ -891,12 +1381,16 @@ def search():
         
         track_event('Search Performed', search_properties)
         
-        # Return results (filtering now handled client-side for better performance)
+        # Get ranking weights for display
+        ranking_weights = search_engine.get_ranking_weights()
+        
+        # Return results with ranking information
         return jsonify({
             'results': formatted_results,
             'search_type': search_type,
             'embed_type': embed_type,
             'query': query,
+            'ranking_weights': ranking_weights,
             'pagination': {
                 'offset': offset,
                 'limit': k,
@@ -1249,6 +1743,19 @@ def get_top_artists():
     except Exception as e:
         logger.error(f"Failed to get top artists: {e}")
         return jsonify({'error': 'Failed to retrieve top artists'}), 500
+
+@app.route('/api/ranking_weights')
+def get_ranking_weights():
+    """Get current ranking algorithm weights and configuration."""
+    if search_engine is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+    
+    try:
+        weights = search_engine.get_ranking_weights()
+        return jsonify(weights)
+    except Exception as e:
+        logger.error(f"Failed to get ranking weights: {e}")
+        return jsonify({'error': 'Failed to retrieve ranking weights'}), 500
 
 if __name__ == '__main__':
     # Parse command line arguments
