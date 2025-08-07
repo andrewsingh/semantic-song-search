@@ -18,6 +18,10 @@ from typing import List, Dict, Tuple, Optional
 import logging
 import argparse
 from pathlib import Path
+try:
+    from . import ranking_utils
+except ImportError:
+    import ranking_utils
 import uuid
 from datetime import datetime, timedelta
 import mixpanel
@@ -194,21 +198,8 @@ class MusicSearchEngine:
         self.user_song_stats = {}  # Aggregated stats per (original_song, original_artist)
         self.has_history = False
         
-        # Ranking algorithm hyperparameters (from design doc v1)
-        self.ranking_params = {
-            'H': 30,          # Recency half-life in days
-            'kappa': 0.46,    # Affinity saturation rate
-            'lambda': 0.5,    # Short-skip penalty strength
-            'alpha': 2,       # Prior weight for affinity smoothing
-            'A0': 5,          # Prior affinity value
-            'S': 10,          # Satiation time scale in days
-            'beta': 0.5,      # UCB exploration coefficient
-            'gamma': 0.6,     # Popularity damping exponent
-            'w_sem': 0.50,    # Weight for semantic similarity
-            'w_int': 0.30,    # Weight for personal interest
-            'w_ucb': 0.15,    # Weight for exploration
-            'w_pop': 0.05     # Weight for popularity
-        }
+        # Ranking algorithm configuration
+        self.ranking_config = ranking_utils.RankingConfig()
         
         self._load_data()
         self._build_indices()
@@ -477,133 +468,6 @@ class MusicSearchEngine:
         self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
         self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(search_texts)
     
-    def _smart_convert_to_datetime(self, timestamp: int) -> datetime:
-        """Convert timestamp to datetime, handling both seconds and milliseconds."""
-        if timestamp is None:
-            return None
-        # timestamp may be in milliseconds or seconds
-        if timestamp < 10000000000:
-            return datetime.fromtimestamp(timestamp)
-        else:
-            return datetime.fromtimestamp(timestamp / 1000)
-    
-    def _load_spotify_history_entries(self, json_dir: Path) -> List[Dict]:
-        """Load entries from Spotify Extended Streaming History JSON files."""
-        entries = []
-        json_files = list(json_dir.glob("*.json"))
-        
-        if not json_files:
-            logger.warning(f"No JSON files found in {json_dir}")
-            return []
-        
-        logger.info(f"Loading history from {len(json_files)} JSON files...")
-        
-        for json_file in sorted(json_files):
-            # Only include audio history files
-            if "Audio" not in json_file.name:
-                logger.debug(f"Skipping non-audio history file: {json_file.name}")
-                continue
-                
-            try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                if isinstance(data, list):
-                    entries.extend(data)
-                    logger.info(f"Loaded {len(data)} entries from {json_file.name}")
-                else:
-                    logger.warning(f"Expected list in {json_file.name}, got {type(data)}")
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error in {json_file}: {e}")
-                continue
-            except Exception as e:
-                logger.error(f"Error loading {json_file}: {e}")
-                continue
-        
-        logger.info(f"Total entries loaded: {len(entries)}")
-        return entries
-    
-    def _clean_history_entries(self, entries: List[Dict]) -> List[Dict]:
-        """Clean and standardize history entry data."""
-        cleaned_entries = []
-        skipped_count = 0
-        
-        for entry in entries:
-            # Skip entries without track URI
-            if not entry.get("spotify_track_uri"):
-                skipped_count += 1
-                continue
-            
-            # Skip entries without required metadata
-            if not entry.get("master_metadata_track_name") or not entry.get("master_metadata_album_artist_name"):
-                skipped_count += 1
-                continue
-            
-            # Handle timestamp conversion with comprehensive error handling
-            try:
-                if entry.get("offline"):
-                    timestamp = self._smart_convert_to_datetime(entry.get("offline_timestamp"))
-                    if timestamp is None:
-                        skipped_count += 1
-                        continue
-                else:
-                    timestamp_str = entry.get("ts", "")
-                    if not timestamp_str:
-                        skipped_count += 1
-                        continue
-                    
-                    # Handle various timestamp formats
-                    try:
-                        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                    except ValueError:
-                        # Try alternative parsing methods
-                        try:
-                            timestamp = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%SZ")
-                        except ValueError:
-                            logger.warning(f"Could not parse timestamp: {timestamp_str}")
-                            skipped_count += 1
-                            continue
-                
-                # Strip timezone info to work with naive datetime objects
-                if timestamp:
-                    timestamp = timestamp.replace(tzinfo=None)
-                    
-                    # Validate timestamp is reasonable (not too far in past/future)
-                    now = datetime.now()
-                    if timestamp.year < 2006 or timestamp > now:  # Spotify founded in 2006
-                        logger.warning(f"Timestamp out of reasonable range: {timestamp}")
-                        skipped_count += 1
-                        continue
-                else:
-                    skipped_count += 1
-                    continue
-                    
-            except Exception as e:
-                logger.warning(f"Error parsing timestamp for entry: {e}")
-                skipped_count += 1
-                continue
-            
-            # Extract track ID from URI
-            track_id = entry["spotify_track_uri"].split(":")[-1] if entry.get("spotify_track_uri") else ""
-            
-            cleaned_entry = {
-                "timestamp": timestamp,
-                "ms_played": entry.get("ms_played", 0),
-                "track_id": track_id,
-                "original_song": entry["master_metadata_track_name"],
-                "original_artist": entry["master_metadata_album_artist_name"], 
-                "original_album": entry.get("master_metadata_album_album_name", ""),
-                "reason_start": entry.get("reason_start", ""),
-                "reason_end": entry.get("reason_end", "")
-            }
-            
-            cleaned_entries.append(cleaned_entry)
-        
-        if skipped_count > 0:
-            logger.info(f"Cleaned {len(cleaned_entries)} entries (skipped {skipped_count} invalid entries)")
-        else:
-            logger.info(f"Cleaned {len(cleaned_entries)} entries")
-            
-        return cleaned_entries
-    
     def _filter_history_to_known_songs(self, history_df: pd.DataFrame) -> pd.DataFrame:
         """Filter history to only include songs that exist in our metadata."""
         # Create set of known song keys for fast lookup
@@ -620,134 +484,6 @@ class MusicSearchEngine:
         
         return filtered_df
     
-    def _compute_user_song_stats(self, history_df: pd.DataFrame, now_utc: datetime = None) -> Dict:
-        """Compute aggregated listening statistics per song using the ranking formula."""
-        if now_utc is None:
-            now_utc = datetime.now()
-        
-        params = self.ranking_params
-        H, kappa, lambda_val = params['H'], params['kappa'], params['lambda']
-        alpha, A0, S, beta, gamma = params['alpha'], params['A0'], params['S'], params['beta'], params['gamma']
-        
-        logger.info("Computing user song statistics...")
-        
-        # Add duration for completion calculation
-        df = history_df.copy()
-        
-        # Get song durations and add to dataframe
-        song_durations = {}
-        for song in self.songs:
-            song_key = (song['original_song'], song['original_artist'])
-            duration_ms = song.get('metadata', {}).get('duration', 200000)  # Default ~3:20 if missing
-            song_durations[song_key] = duration_ms
-        
-        df['duration_ms'] = df.apply(lambda x: song_durations.get((x['original_song'], x['original_artist']), 200000), axis=1)
-        
-        # Calculate completion ratio
-        df['completion'] = np.minimum(df['ms_played'] / df['duration_ms'], 1.0)
-        
-        # Calculate recency weights
-        days_ago = (now_utc - df['timestamp']).dt.total_seconds() / (24 * 3600)
-        df['recency_weight'] = np.exp(-np.log(2) * days_ago / H)
-        
-        # Calculate short-skip penalty
-        short_skip_mask = df['ms_played'] < 15000
-        df['skip_penalty'] = lambda_val * short_skip_mask * (1 - df['completion']) * df['recency_weight']
-        
-        # Calculate equivalent full listens
-        df['efl'] = df['recency_weight'] * df['completion']
-        
-        # Group by song key and aggregate
-        song_key_col = df[['original_song', 'original_artist']].apply(tuple, axis=1)
-        df['song_key'] = song_key_col
-        
-        grouped = df.groupby('song_key').agg({
-            'efl': 'sum',
-            'skip_penalty': 'sum', 
-            'ms_played': 'size',  # Count of plays
-            'timestamp': 'max'    # Most recent play
-        }).rename(columns={'ms_played': 'play_count', 'timestamp': 'last_play'})
-        
-        # Calculate net equivalent full listens (E_net)
-        grouped['E_net'] = np.clip(grouped['efl'] - grouped['skip_penalty'], 0, None)
-        
-        # Calculate raw affinity with bounds checking
-        # Clip E_net to prevent overflow in exp calculation
-        e_net_clipped = np.clip(grouped['E_net'], 0, 20)  # exp(-20*0.46) is effectively 0
-        grouped['A_raw'] = 100 * (1 - np.exp(-kappa * e_net_clipped))
-        
-        # Smooth affinity with prior - add safety check for division
-        denominator = alpha + grouped['play_count']
-        grouped['Affinity'] = np.where(
-            denominator > 0,
-            (alpha * A0 + grouped['play_count'] * grouped['A_raw']) / denominator,
-            A0  # Fallback to prior if denominator is somehow 0
-        )
-        
-        # Calculate satiation and interest with safety checks
-        if S is not None and S > 0:
-            try:
-                days_since_last = (now_utc - grouped['last_play']).dt.total_seconds() / (24 * 3600)
-                # Clip days_since_last to prevent extreme values
-                days_since_last = np.clip(days_since_last, 0, 365 * 5)  # Max 5 years
-                satiation = np.exp(-days_since_last / S)
-                grouped['Interest'] = grouped['Affinity'] * (1 - satiation)
-            except Exception as e:
-                logger.warning(f"Error calculating satiation, using raw affinity: {e}")
-                grouped['Interest'] = grouped['Affinity']
-        else:
-            grouped['Interest'] = grouped['Affinity']
-        
-        # Calculate UCB exploration bonus with bounds checking
-        grouped['UCB'] = beta / np.sqrt(np.maximum(1 + grouped['play_count'], 1))  # Ensure >= 1
-        
-        # Convert to dictionary format with validation
-        user_stats = {}
-        invalid_count = 0
-        
-        for song_key, stats in grouped.iterrows():
-            # Validate all numeric values are reasonable
-            try:
-                efl = float(stats['efl'])
-                skip_penalty = float(stats['skip_penalty'])
-                E_net = float(stats['E_net'])
-                play_count = int(stats['play_count'])
-                affinity = float(stats['Affinity'])
-                interest = float(stats['Interest'])
-                ucb = float(stats['UCB'])
-                
-                # Check for invalid values
-                if not all(np.isfinite([efl, skip_penalty, E_net, affinity, interest, ucb])):
-                    logger.warning(f"Non-finite values for song {song_key}, skipping")
-                    invalid_count += 1
-                    continue
-                
-                if play_count < 0:
-                    logger.warning(f"Negative play count for song {song_key}, skipping")
-                    invalid_count += 1
-                    continue
-                
-                user_stats[song_key] = {
-                    'efl': efl,
-                    'skip_penalty': skip_penalty,
-                    'E_net': E_net,
-                    'play_count': play_count,
-                    'last_play': stats['last_play'],
-                    'affinity': np.clip(affinity, 0, 100),  # Ensure reasonable bounds
-                    'interest': np.clip(interest, 0, 100),  # Ensure reasonable bounds
-                    'ucb': np.clip(ucb, 0, 1)  # UCB should be 0-1
-                }
-            except Exception as e:
-                logger.warning(f"Error processing stats for song {song_key}: {e}")
-                invalid_count += 1
-                continue
-        
-        if invalid_count > 0:
-            logger.warning(f"Skipped {invalid_count} songs with invalid statistics")
-        
-        logger.info(f"Computed statistics for {len(user_stats)} unique songs")
-        return user_stats
-    
     def _load_and_process_history(self):
         """Load and process Spotify Extended Streaming History."""
         try:
@@ -763,20 +499,11 @@ class MusicSearchEngine:
             
             logger.info(f"Loading Spotify Extended Streaming History from: {history_path}")
             
-            # Load raw entries
-            entries = self._load_spotify_history_entries(history_path)
-            if not entries:
-                logger.warning("No history entries found")
+            # Use the new ranking_utils functions
+            self.history_df, success = ranking_utils.load_and_process_spotify_history(history_path)
+            if not success or self.history_df.empty:
+                logger.warning("Failed to load history data")
                 return
-            
-            # Clean entries
-            cleaned_entries = self._clean_history_entries(entries)
-            if not cleaned_entries:
-                logger.warning("No valid history entries after cleaning")
-                return
-            
-            # Convert to DataFrame
-            self.history_df = pd.DataFrame(cleaned_entries)
             
             # Filter to songs we know about
             self.history_df = self._filter_history_to_known_songs(self.history_df)
@@ -785,8 +512,8 @@ class MusicSearchEngine:
                 logger.warning("No history entries match songs in metadata")
                 return
             
-            # Compute per-song statistics
-            self.user_song_stats = self._compute_user_song_stats(self.history_df)
+            # Compute per-song statistics using the new ranking_utils function
+            self.user_song_stats = ranking_utils.compute_user_song_stats(self.history_df, self.ranking_config)
             
             self.has_history = True
             logger.info(f"Successfully loaded history with {len(self.history_df)} plays across {len(self.user_song_stats)} songs")
@@ -932,7 +659,7 @@ class MusicSearchEngine:
         
         # Compute enhanced ranking scores for all candidate songs
         candidate_scores = []
-        params = self.ranking_params
+        config = self.ranking_config
         
         for idx in range(len(similarities)):
             song_idx = song_indices[idx]
@@ -955,18 +682,18 @@ class MusicSearchEngine:
             else:
                 # No history data - use neutral values
                 i_t = 0.0  # No personal interest 
-                ucb = min(params['beta'], 1.0)  # Cap exploration bonus at 1.0
+                ucb = min(config.beta, 1.0)  # Cap exploration bonus at 1.0
             
             # Damped popularity score (P_t^gamma) with bounds checking
             popularity_normalized = np.clip(popularity, 0, 1)
-            p_t = popularity_normalized ** params['gamma']
+            p_t = popularity_normalized ** config.gamma
             
             # Composite score with safety checks
             final_score = (
-                params['w_sem'] * s_t +
-                params['w_int'] * i_t +
-                params['w_ucb'] * ucb +
-                params['w_pop'] * p_t
+                config.w_sem * s_t +
+                config.w_int * i_t +
+                config.w_ucb * ucb +
+                config.w_pop * p_t
             )
             
             # Ensure final score is finite and reasonable
@@ -983,13 +710,13 @@ class MusicSearchEngine:
                 'final_score': float(final_score),
                 # Component scores (both raw and weighted)
                 'semantic_similarity': float(s_t),
-                'semantic_weighted': float(params['w_sem'] * s_t),
+                'semantic_weighted': float(config.w_sem * s_t),
                 'personal_interest': float(i_t),
-                'interest_weighted': float(params['w_int'] * i_t),
+                'interest_weighted': float(config.w_int * i_t),
                 'exploration_bonus': float(ucb),
-                'exploration_weighted': float(params['w_ucb'] * ucb),
+                'exploration_weighted': float(config.w_ucb * ucb),
                 'popularity_score': float(p_t),
-                'popularity_weighted': float(params['w_pop'] * p_t),
+                'popularity_weighted': float(config.w_pop * p_t),
                 'has_history': bool(self.has_history and song_key in self.user_song_stats)
             })
         
@@ -1012,10 +739,10 @@ class MusicSearchEngine:
     def get_ranking_weights(self) -> Dict:
         """Get the current ranking algorithm weights for display."""
         return {
-            'w_sem': self.ranking_params['w_sem'],
-            'w_int': self.ranking_params['w_int'],
-            'w_ucb': self.ranking_params['w_ucb'], 
-            'w_pop': self.ranking_params['w_pop'],
+            'w_sem': self.ranking_config.w_sem,
+            'w_int': self.ranking_config.w_int,
+            'w_ucb': self.ranking_config.w_ucb, 
+            'w_pop': self.ranking_config.w_pop,
             'has_history': self.has_history,
             'history_songs_count': len(self.user_song_stats) if self.has_history else 0
         }
@@ -1782,8 +1509,7 @@ def update_ranking_weights():
             return jsonify({'error': f'Weights must sum to approximately 1.0, got {total_weight:.3f}'}), 400
         
         # Update the search engine weights
-        for key in required_keys:
-            search_engine.ranking_params[key] = float(data[key])
+        search_engine.ranking_config.update_weights(data)
         
         logger.info(f"Updated ranking weights: {data}")
         
