@@ -26,7 +26,7 @@ class RankingConfig:
         # Temporal dynamics parameters
         self.H = 30          # Recency half-life in days
         self.kappa = 0.46    # Affinity saturation rate
-        self.lambda_val = 0.5    # Short-skip penalty strength (renamed to avoid keyword conflict)
+        self.lambda_val = 0.0    # Short-skip penalty strength (renamed to avoid keyword conflict)
         self.alpha = 2       # Prior weight for affinity smoothing
         self.A0 = 5          # Prior affinity value
         self.S = 10          # Satiation time scale in days
@@ -178,7 +178,6 @@ def clean_history_entries(entries: List[Dict]) -> List[Dict]:
             'ms_played': int(entry.get("ms_played", 0)),
             'track_uri': entry["spotify_track_uri"],
             'timestamp': timestamp,
-            'completion': min(1.0, int(entry.get("ms_played", 0)) / max(1, int(entry.get("track_end_timestamp", 1)) - int(entry.get("track_start_timestamp", 0)))),
             'skipped': entry.get("skipped", False),
             'offline': entry.get("offline", False)
         }
@@ -222,13 +221,14 @@ def load_and_process_spotify_history(history_path: Path) -> Tuple[pd.DataFrame, 
         return pd.DataFrame(), False
 
 
-def compute_user_song_stats(history_df: pd.DataFrame, config: RankingConfig) -> Dict[Tuple[str, str], Dict]:
+def compute_user_song_stats(history_df: pd.DataFrame, config: RankingConfig, songs_metadata: Optional[List[Dict]] = None) -> Dict[Tuple[str, str], Dict]:
     """
     Compute personalized statistics for each song based on listening history.
     
     Args:
         history_df: DataFrame with cleaned listening history
         config: RankingConfig with hyperparameters
+        songs_metadata: Optional list of song metadata dicts for duration lookup
         
     Returns:
         Dictionary mapping (song, artist) tuples to statistics
@@ -250,6 +250,28 @@ def compute_user_song_stats(history_df: pd.DataFrame, config: RankingConfig) -> 
     
     # Work with a copy to avoid modifying original
     df = history_df.copy()
+    
+    # Calculate completion ratios using song duration metadata
+    if songs_metadata is not None:
+        # Create a lookup dictionary for song durations (in milliseconds)
+        duration_lookup = {}
+        for song in songs_metadata:
+            song_key = (song['original_song'], song['original_artist'])
+            duration_ms = song.get('metadata', {}).get('duration', 200) * 1000  # Convert seconds to ms, default ~3:20
+            duration_lookup[song_key] = duration_ms
+        
+        # Calculate completion for each entry
+        def calculate_completion(row):
+            song_key = (row['original_song'], row['original_artist'])
+            duration_ms = duration_lookup.get(song_key, 200000)  # Default ~3:20 if not found
+            return min(1.0, row['ms_played'] / max(1, duration_ms))
+        
+        df['completion'] = df.apply(calculate_completion, axis=1)
+        logger.info(f"Calculated completion ratios using {len(duration_lookup)} song durations")
+    else:
+        # Fallback: estimate completion based on typical song length
+        logger.warning("No song metadata provided, using fallback completion calculation")
+        df['completion'] = np.minimum(df['ms_played'] / 200000.0, 1.0)  # Assume ~3:20 average
     
     # Calculate recency weights
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)

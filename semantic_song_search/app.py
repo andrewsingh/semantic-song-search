@@ -513,7 +513,7 @@ class MusicSearchEngine:
                 return
             
             # Compute per-song statistics using the new ranking_utils function
-            self.user_song_stats = ranking_utils.compute_user_song_stats(self.history_df, self.ranking_config)
+            self.user_song_stats = ranking_utils.compute_user_song_stats(self.history_df, self.ranking_config, self.songs)
             
             self.has_history = True
             logger.info(f"Successfully loaded history with {len(self.history_df)} plays across {len(self.user_song_stats)} songs")
