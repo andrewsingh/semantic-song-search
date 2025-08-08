@@ -72,7 +72,10 @@ def load_embeddings_data(embeddings_path: str) -> Dict[str, Dict]:
         # New separate format
         logger.info(f"Loading embeddings from directory: {embeddings_path}")
         
-        from . import constants
+        try:
+            from . import constants
+        except ImportError:
+            import constants
         for embed_type in constants.EMBEDDING_TYPES:
             embed_file = embeddings_path / f"{embed_type}_embeddings.npz"
             if embed_file.exists():
@@ -304,7 +307,10 @@ def build_text_search_index(songs: List[Dict], ngram_range: Tuple[int, int] = No
         raise ValueError("songs must be a list")
     
     try:
-        from . import constants
+        try:
+            from . import constants
+        except ImportError:
+            import constants
     except ImportError:
         import constants
     
@@ -405,7 +411,10 @@ def search_songs_by_text(query: str, vectorizer: TfidfVectorizer, tfidf_matrix: 
         List of (song_index, similarity_score, display_label) tuples
     """
     try:
-        from . import constants
+        try:
+            from . import constants
+        except ImportError:
+            import constants
     except ImportError:
         import constants
     

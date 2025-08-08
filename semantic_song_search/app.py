@@ -211,6 +211,10 @@ class MusicSearchEngine:
                 'artist': song['original_artist'],
                 'cover_url': song.get('metadata', {}).get('cover_url'),
                 'album': song.get('metadata', {}).get('album_name', 'Unknown Album'),
+                'spotify_id': song.get('metadata', {}).get('song_id', ''),
+                'field_value': 'N/A',  # V2 uses full_profile by default
+                'genres': song.get('genres', []),
+                'tags': song.get('tags', []),
                 'final_score': result['final_score'],
                 'scoring_components': {
                     'semantic_similarity': result['semantic_similarity'],
@@ -287,6 +291,48 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             embeddings_path = embeddings_file or str(default_embeddings)
             history_path_arg = history_path
         
+        # Validate that files exist
+        if not Path(songs_path).exists():
+            logger.error(f"Songs file not found: {songs_path}")
+            raise FileNotFoundError(f"Songs file not found: {songs_path}")
+        
+        # For embeddings, validate based on format (file vs directory/base path)
+        embeddings_path_obj = Path(embeddings_path)
+        if embeddings_path_obj.is_file():
+            # Old combined format - file must exist
+            if not embeddings_path_obj.exists():
+                logger.error(f"Embeddings file not found: {embeddings_path}")
+                raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
+        else:
+            # New separate format - directory or parent directory should exist
+            if embeddings_path_obj.is_dir():
+                # Path is a directory - it exists, validation will happen in _load_embeddings_data
+                pass
+            elif embeddings_path_obj.parent.exists():
+                # Path is a base name - parent directory exists, validation will happen in _load_embeddings_data
+                pass
+            else:
+                logger.error(f"Embeddings path not found: {embeddings_path}")
+                raise FileNotFoundError(f"Embeddings path not found: {embeddings_path}")
+        
+        # Validate history path if provided
+        if history_path_arg:
+            history_path_obj = Path(history_path_arg)
+            if not history_path_obj.exists():
+                logger.warning(f"History path does not exist: {history_path_arg}")
+                history_path_arg = None
+            elif not history_path_obj.is_dir():
+                logger.warning(f"History path is not a directory: {history_path_arg}")
+                history_path_arg = None
+        
+        logger.info(f"Initializing search engine with:")
+        logger.info(f"  Songs file: {songs_path}")
+        logger.info(f"  Embeddings file: {embeddings_path}")
+        if history_path_arg:
+            logger.info(f"  History path: {history_path_arg} (personalized ranking enabled)")
+        else:
+            logger.info(f"  History path: None (using semantic similarity only)")
+        
         # Create search engine
         search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg)
 
@@ -328,6 +374,12 @@ def search():
         song_idx = data.get('song_idx')
         discovery_slider = float(data.get('discovery_slider', 0.5))  # Discovery parameter
         discovery_slider = np.clip(discovery_slider, 0.0, 1.0)  # Ensure valid range
+        
+        # Validate pagination parameters
+        if limit <= 0 or limit > 100:  # Reasonable limits
+            return jsonify({'error': 'limit must be between 1 and 100'}), 400
+        if offset < 0:
+            return jsonify({'error': 'offset must be non-negative'}), 400
         
         if not query_text and search_type == 'text':
             return jsonify({'error': 'Query text is required'}), 400
@@ -865,15 +917,24 @@ def top_artists():
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Semantic Song Search')
-    parser.add_argument('--songs', default=constants.DEFAULT_SONGS_FILE, 
-                       help='Path to songs JSON file')
-    parser.add_argument('--embeddings', default=constants.DEFAULT_EMBEDDINGS_PATH,
-                       help='Path to embeddings file or directory')  
-    parser.add_argument('--history', help='Path to Spotify Extended Streaming History directory')
+    parser = argparse.ArgumentParser(
+        description='Semantic Song Search and Playlist Creation',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python app.py
+  python app.py --songs custom_songs.json --embeddings custom_embeddings.npz
+  python app.py -s /path/to/songs.json -e /path/to/embeddings.npz
+        """
+    )
+    parser.add_argument('-s', '--songs', type=str, default=constants.DEFAULT_SONGS_FILE, 
+                       help=f'Path to songs JSON file (default: {constants.DEFAULT_SONGS_FILE})')
+    parser.add_argument('-e', '--embeddings', type=str, default=constants.DEFAULT_EMBEDDINGS_PATH,
+                       help=f'Path to embeddings file/directory (supports combined .npz file or directory with separate embedding files) (default: {constants.DEFAULT_EMBEDDINGS_PATH})')  
+    parser.add_argument('--history', type=str, default=None, help='Path to Spotify Extended Streaming History directory (optional - enables personalized ranking)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--host', default=constants.DEFAULT_HOST, help='Host to bind to')
-    parser.add_argument('--port', type=int, default=constants.DEFAULT_PORT, help='Port to bind to')
+    parser.add_argument('--host', type=str, default=constants.DEFAULT_HOST, help='Host to run the server on (default: 127.0.0.1)')
+    parser.add_argument('--port', type=int, default=constants.DEFAULT_PORT, help='Port to run the server on (default: 5000)')
     return parser.parse_args()
 
 if __name__ == '__main__':
