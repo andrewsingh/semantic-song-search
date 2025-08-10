@@ -148,7 +148,7 @@ class MusicSearchEngine:
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          discovery_slider: float = 0.5) -> Tuple[List[Dict], int]:
         """
-        Perform V2 similarity search with personalized ranking.
+        Perform V2.5 similarity search with personalized ranking.
         
         Args:
             query_embedding: Normalized query embedding
@@ -162,8 +162,8 @@ class MusicSearchEngine:
         # Update discovery slider in config
         self.ranking_engine.config.d = discovery_slider
         
-        # Compute semantic similarities for all songs
-        candidate_scores = []
+        # V2.5: Compute candidates and their priors for quantile normalization
+        candidates_data = []
         
         for i, song in enumerate(self.songs):
             song_key = (song['original_song'], song['original_artist'])
@@ -172,20 +172,59 @@ class MusicSearchEngine:
             if song_key in self.embedding_lookup:
                 song_embedding = self.embedding_lookup[song_key]
                 semantic_similarity = np.dot(query_embedding, song_embedding)
+                
+                # Compute raw priors for quantile normalization
+                popularity = song.get('metadata', {}).get('popularity', 50)
+                P_t = popularity / 100.0
+                C_t = self.ranking_engine.compute_knn_similarity_prior(song_embedding, self.embedding_lookup)
+                B_t = self.ranking_engine.compute_artist_affinity_prior(song_key, song_embedding, self.embedding_lookup)
+                
+                candidates_data.append({
+                    'song_idx': i,
+                    'song_key': song_key,
+                    'song': song,
+                    'song_embedding': song_embedding,
+                    'semantic_similarity': semantic_similarity,
+                    'P_t': P_t,
+                    'C_t': C_t,
+                    'B_t': B_t
+                })
             else:
                 # No embedding available, skip
                 continue
-            
-            # Compute V2 final score
-            final_score, components = self.ranking_engine.compute_final_score(
-                semantic_similarity, song_key, song, song_embedding
+        
+        if not candidates_data:
+            return [], 0
+        
+        # V2.5: Compute quantile normalization maps
+        P_values = [c['P_t'] for c in candidates_data]
+        C_values = [c['C_t'] for c in candidates_data]
+        B_values = [c['B_t'] for c in candidates_data]
+        
+        quantile_maps = {
+            'P': self.ranking_engine.compute_quantile_normalization(P_values),
+            'C': self.ranking_engine.compute_quantile_normalization(C_values),
+            'B': self.ranking_engine.compute_quantile_normalization(B_values)
+        }
+        
+        # Compute V2.5 final scores
+        candidate_scores = []
+        
+        for candidate in candidates_data:
+            final_score, components = self.ranking_engine.compute_v25_final_score(
+                candidate['semantic_similarity'], 
+                candidate['song_key'], 
+                candidate['song'],
+                candidate['song_embedding'],
+                self.embedding_lookup,
+                quantile_maps
             )
             
             candidate_scores.append({
-                'song_idx': i,
-                'song_key': song_key,
+                'song_idx': candidate['song_idx'],
+                'song_key': candidate['song_key'],
                 'final_score': final_score,
-                'semantic_similarity': semantic_similarity,
+                'semantic_similarity': candidate['semantic_similarity'],
                 **components  # Include all component scores for debugging
             })
         
@@ -198,13 +237,14 @@ class MusicSearchEngine:
         end_idx = offset + k
         paginated_results = candidate_scores[start_idx:end_idx]
         
-        # Convert to expected format
+        # Convert to V2.5 result format
         results = []
         for result in paginated_results:
             song_idx = result['song_idx']
             song = self.songs[song_idx]
+            song_key = result['song_key']
             
-            # Build result dict
+            # Build result dict with V2.5 structure
             result_dict = {
                 'song_idx': song_idx,
                 'song': song['original_song'],
@@ -212,31 +252,17 @@ class MusicSearchEngine:
                 'cover_url': song.get('metadata', {}).get('cover_url'),
                 'album': song.get('metadata', {}).get('album_name', 'Unknown Album'),
                 'spotify_id': song.get('metadata', {}).get('song_id', ''),
-                'field_value': 'N/A',  # V2 uses full_profile by default
+                'field_value': 'N/A',  # V2.5 uses full_profile by default
                 'genres': song.get('genres', []),
                 'tags': song.get('tags', []),
                 'final_score': result['final_score'],
-                'scoring_components': {
-                    'semantic_similarity': result['semantic_similarity'],
-                    'semantic_weighted': result['semantic_weighted'],
-                    'predicted_utility': result['predicted_utility'],
-                    'utility_weighted': result['utility_weighted'],
-                    'final_score': result['final_score'],
-                    'lambda': result['lambda'],
-                    'discovery_slider': result['discovery_slider'],
-                    'has_history': song_key in (self.ranking_engine.track_stats if self.ranking_engine.track_stats else {})
-                }
+                'scoring_components': result  # Include all V2.5 components
             }
             
-            # Add detailed components if available
-            if 'confidence_gate' in result:
-                result_dict['scoring_components'].update({
-                    'confidence_gate': result['confidence_gate'],
-                    'track_affinity': result['track_affinity'],
-                    'prior_utility': result['prior_utility'],
-                    'exploit_term': result['exploit_term'],
-                    'explore_term': result['explore_term']
-                })
+            # Add has_history flag for compatibility
+            result_dict['scoring_components']['has_history'] = song_key in (
+                self.ranking_engine.track_stats if self.ranking_engine.track_stats else {}
+            )
             
             results.append(result_dict)
         
@@ -252,19 +278,15 @@ class MusicSearchEngine:
         )
     
     def get_ranking_weights(self) -> Dict:
-        """Get current ranking weights for display."""
+        """Get current V2.5 ranking weights for display."""
         config = self.ranking_engine.config
-        return {
-            'lambda': config.lambda_val,
-            'd': config.d,
-            'H_c': config.H_c,
-            'K': config.K,
-            'beta_p': config.beta_p,
-            'beta_s': config.beta_s,
-            'beta_a': config.beta_a,
+        weights = config.to_dict()
+        weights.update({
+            'version': '2.5',
             'has_history': self.has_history,
             'history_songs_count': len(self.ranking_engine.track_stats) if self.ranking_engine.track_stats else 0
-        }
+        })
+        return weights
 
 
 # Initialize search engine
