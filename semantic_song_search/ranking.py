@@ -53,11 +53,6 @@ class RankingConfig:
         self.beta_p = 0.4        # Prior weight for popularity
         self.beta_s = 0.4        # Prior weight for kNN similarity
         self.beta_a = 0.2        # Prior weight for artist affinity
-        
-        # Reference centroid parameters (used by V2 compute_prior_utility)
-        self.top_m_tracks = 20             # Top M tracks for reference centroid
-        self.min_confidence_threshold = 0.1 # Minimum confidence for reference tracks
-        self.min_reference_tracks = 5      # Minimum tracks needed for centroid
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -79,10 +74,7 @@ class RankingConfig:
             'epsilon': self.epsilon,
             'beta_p': self.beta_p,
             'beta_s': self.beta_s,
-            'beta_a': self.beta_a,
-            'top_m_tracks': self.top_m_tracks,
-            'min_confidence_threshold': self.min_confidence_threshold,
-            'min_reference_tracks': self.min_reference_tracks
+            'beta_a': self.beta_a
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -122,7 +114,6 @@ class RankingEngine:
         # Computed user profile data
         self.track_stats = {}           # Per-track statistics
         self.artist_affinities = {}     # Per-artist affinities  
-        self.reference_centroid = None  # Centroid of top-affinity tracks
         self.has_history = False
     
     def compute_track_statistics(self, history_df: pd.DataFrame, songs_metadata: List[Dict]) -> Dict:
@@ -168,7 +159,8 @@ class RankingEngine:
         def calculate_completion(row):
             song_key = (row['original_song'], row['original_artist'])
             duration_ms = duration_lookup.get(song_key, 180000)  # Default 3 minutes
-            return min(1.0, row['ms_played'] / max(30000, duration_ms))  # Minimum 30 seconds
+            # Use actual duration without artificial minimum (as per V2.5 spec)
+            return min(1.0, row['ms_played'] / max(1, duration_ms))  # Guard against zero duration
         
         df['c_ti'] = df.apply(calculate_completion, axis=1)
         
@@ -374,6 +366,9 @@ class RankingEngine:
         """
         Compute empirical CDF for quantile normalization (V2.5 §5).
         
+        Uses all values (including duplicates) to compute true empirical CDF:
+        F(x) = #{v <= x} / N
+        
         Args:
             values: List of raw values to normalize
             
@@ -383,240 +378,22 @@ class RankingEngine:
         if not values:
             return {}
         
-        # Sort values and compute ranks
-        sorted_values = sorted(set(values))  # Remove duplicates
+        # Sort ALL values (not just unique ones) for proper ECDF
+        sorted_values = sorted(values)
         n = len(sorted_values)
         
-        # Map each unique value to its quantile
+        # Build quantile map using empirical CDF with multiplicities
         quantile_map = {}
-        for i, value in enumerate(sorted_values):
-            quantile = i / max(1, n - 1)  # Avoid division by zero
-            quantile_map[value] = quantile
+        
+        for value in sorted_values:
+            if value not in quantile_map:
+                # Count how many values are <= this value
+                count_leq = sum(1 for v in sorted_values if v <= value)
+                # Empirical CDF: F(x) = #{v <= x} / N
+                quantile = count_leq / n
+                quantile_map[value] = quantile
         
         return quantile_map
-    
-    def compute_reference_centroid(self, embeddings_data: Dict) -> np.ndarray:
-        """
-        Compute reference centroid (μ_top) from top-affinity tracks.
-        
-        Args:
-            embeddings_data: Dictionary with track embeddings
-            
-        Returns:
-            Normalized reference centroid or None if insufficient data
-        """
-        if not self.track_stats:
-            logger.warning("No track statistics for reference centroid computation")
-            return None
-        
-        # Compute confidence-weighted affinity (w_hist)
-        reference_candidates = []
-        
-        for song_key, stats in self.track_stats.items():
-            g_t = stats['g_t']
-            A_t = stats['A_t']
-            w_hist = g_t * A_t
-            
-            # Check if we have embeddings for this track
-            if song_key in embeddings_data:
-                reference_candidates.append({
-                    'song_key': song_key,
-                    'w_hist': w_hist,
-                    'embedding': embeddings_data[song_key]
-                })
-        
-        if not reference_candidates:
-            logger.warning("No reference candidates with embeddings found")
-            return None
-        
-        # Sort by w_hist and select top candidates
-        reference_candidates.sort(key=lambda x: x['w_hist'], reverse=True)
-        
-        # Try top-M approach first
-        top_m = reference_candidates[:self.config.top_m_tracks]
-        
-        # Filter by minimum confidence threshold if needed
-        filtered_refs = [r for r in top_m if r['w_hist'] >= self.config.min_confidence_threshold]
-        
-        # Use the better option
-        if len(filtered_refs) >= self.config.min_reference_tracks:
-            selected_refs = filtered_refs
-        elif len(top_m) >= self.config.min_reference_tracks:
-            selected_refs = top_m
-        else:
-            logger.warning(f"Only {len(reference_candidates)} reference tracks available, using all")
-            selected_refs = reference_candidates
-        
-        if len(selected_refs) < 3:  # Too few for meaningful centroid
-            logger.warning("Too few reference tracks for meaningful centroid")
-            return None
-        
-        # Compute weighted centroid
-        embeddings = np.array([r['embedding'] for r in selected_refs])
-        weights = np.array([r['w_hist'] for r in selected_refs])
-        
-        if np.sum(weights) < 1e-6:
-            logger.warning("Reference weights too small")
-            return None
-        
-        # Weighted average
-        centroid = np.average(embeddings, axis=0, weights=weights)
-        
-        # Normalize
-        centroid_norm = np.linalg.norm(centroid)
-        if centroid_norm < 1e-6:
-            logger.warning("Reference centroid has zero norm")
-            return None
-        
-        centroid = centroid / centroid_norm
-        
-        logger.info(f"Computed reference centroid from {len(selected_refs)} tracks")
-        self.reference_centroid = centroid
-        return centroid
-    
-    def compute_prior_utility(self, song_key: Tuple[str, str], song_metadata: Dict, 
-                            song_embedding: np.ndarray) -> float:
-        """
-        Compute prior utility (F_t) for a track.
-        
-        Args:
-            song_key: (song, artist) tuple
-            song_metadata: Song metadata dict
-            song_embedding: Normalized track embedding
-            
-        Returns:
-            Prior utility score [0, 1]
-        """
-        # P_t: Popularity component
-        metadata = song_metadata.get('metadata', {})
-        popularity = metadata.get('popularity', 50)
-        try:
-            P_t = float(popularity) / 100.0
-            P_t = np.clip(P_t, 0.0, 1.0)  # Ensure valid range
-        except (TypeError, ValueError):
-            logger.warning(f"Invalid popularity value: {popularity}, using default")
-            P_t = 0.5
-        
-        # C_t: Cosine similarity to reference centroid
-        # Ensure embeddings are normalized
-        if np.abs(np.linalg.norm(song_embedding) - 1.0) > 1e-6:
-            logger.warning(f"Song embedding not normalized: {np.linalg.norm(song_embedding)}")
-            song_embedding = song_embedding / np.linalg.norm(song_embedding)
-        
-        if self.reference_centroid is not None:
-            if np.abs(np.linalg.norm(self.reference_centroid) - 1.0) > 1e-6:
-                logger.warning("Reference centroid not normalized")
-            # Compute cosine similarity
-            cos_sim = np.dot(song_embedding, self.reference_centroid)
-            # Rescale from [-1, 1] to [0, 1]
-            C_t = (cos_sim + 1) / 2
-        else:
-            # Fallback: uninformative mid-prior
-            C_t = 0.5
-        
-        # B_t: Artist affinity
-        _, artist = song_key
-        B_t = self.artist_affinities.get(artist, 0.0)
-        
-        # Combine components
-        F_t = (self.config.beta_p * P_t + 
-               self.config.beta_s * C_t + 
-               self.config.beta_a * B_t)
-        
-        return float(np.clip(F_t, 0, 1))
-    
-    def compute_predicted_utility(self, song_key: Tuple[str, str], song_metadata: Dict,
-                                song_embedding: np.ndarray) -> float:
-        """
-        Compute predicted utility U_t(d) for a track.
-        
-        Args:
-            song_key: (song, artist) tuple  
-            song_metadata: Song metadata dict
-            song_embedding: Normalized track embedding
-            
-        Returns:
-            Predicted utility score [0, 1]
-        """
-        d = self.config.d  # Discovery slider
-        
-        if song_key in self.track_stats:
-            # Track with listening history
-            stats = self.track_stats[song_key]
-            g_t = stats['g_t']
-            A_t = stats['A_t']
-            
-            # Exploitation term: (1-d) * g_t * A_t
-            exploit_term = (1 - d) * g_t * A_t
-            
-            # Exploration term: d * (1-g_t) * F_t
-            F_t = self.compute_prior_utility(song_key, song_metadata, song_embedding)
-            explore_term = d * (1 - g_t) * F_t
-            
-        else:
-            # Track with no listening history
-            g_t = 0.0  # No confidence for unplayed tracks
-            A_t = 0.0  # No affinity data
-            
-            # Exploitation term: (1-d) * g_t * A_t = 0
-            exploit_term = (1 - d) * g_t * A_t
-            
-            # Exploration term: d * (1-g_t) * F_t = d * 1 * F_t
-            F_t = self.compute_prior_utility(song_key, song_metadata, song_embedding)
-            explore_term = d * (1 - g_t) * F_t
-        
-        U_t = exploit_term + explore_term
-        return float(np.clip(U_t, 0, 1))
-    
-    def compute_final_score(self, semantic_similarity: float, song_key: Tuple[str, str],
-                          song_metadata: Dict, song_embedding: np.ndarray) -> Tuple[float, Dict]:
-        """
-        Compute final V2 score for a track.
-        
-        Args:
-            semantic_similarity: Query-track semantic similarity [0, 1]
-            song_key: (song, artist) tuple
-            song_metadata: Song metadata dict  
-            song_embedding: Normalized track embedding
-            
-        Returns:
-            Tuple of (final_score, component_breakdown)
-        """
-        # Semantic relevance (S_t)
-        S_t = float(np.clip(semantic_similarity, 0, 1))
-        
-        # Predicted utility (U_t)
-        U_t = self.compute_predicted_utility(song_key, song_metadata, song_embedding)
-        
-        # Final score: λ * S_t + (1-λ) * U_t
-        lambda_val = self.config.lambda_val
-        final_score = lambda_val * S_t + (1 - lambda_val) * U_t
-        
-        # Component breakdown for analysis
-        components = {
-            'semantic_similarity': S_t,
-            'semantic_weighted': lambda_val * S_t,
-            'predicted_utility': U_t,
-            'utility_weighted': (1 - lambda_val) * U_t,
-            'final_score': final_score,
-            'lambda': lambda_val,
-            'discovery_slider': self.config.d
-        }
-        
-        # Add detailed utility breakdown if we have history
-        if song_key in self.track_stats:
-            stats = self.track_stats[song_key]
-            F_t = self.compute_prior_utility(song_key, song_metadata, song_embedding)
-            
-            components.update({
-                'confidence_gate': stats['g_t'],
-                'track_affinity': stats['A_t'],
-                'prior_utility': F_t,
-                'exploit_term': (1 - self.config.d) * stats['g_t'] * stats['A_t'],
-                'explore_term': self.config.d * (1 - stats['g_t']) * F_t
-            })
-        
-        return float(np.clip(final_score, 0, 1)), components
     
     def compute_v25_final_score(self, semantic_similarity: float, song_key: Tuple[str, str],
                                song_metadata: Dict, song_embedding: np.ndarray,
@@ -635,13 +412,13 @@ class RankingEngine:
         Returns:
             Tuple of (final_score, component_breakdown)
         """
-        # Semantic relevance (S_t) - already [0,1]
-        S_t = float(np.clip(semantic_similarity, 0, 1))
+        # Semantic relevance (S_t): rescale cosine [-1,1] to [0,1] 
+        S_t = float(np.clip((semantic_similarity + 1) / 2, 0, 1))
         
         # Compute three priors (V2.5 §4)
         # P_t: Popularity prior
         popularity = song_metadata.get('metadata', {}).get('popularity', 50)
-        P_t = popularity / 100.0
+        P_t = np.clip(popularity / 100.0, 0.0, 1.0)
         
         # C_t: kNN similarity prior
         C_t = self.compute_knn_similarity_prior(song_embedding, embeddings_data)
@@ -713,14 +490,14 @@ class RankingEngine:
 
 
 def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dict], 
-                       embeddings_data: Dict, config: RankingConfig = None) -> RankingEngine:
+                       embeddings_data: Dict = None, config: RankingConfig = None) -> RankingEngine:
     """
     Initialize a complete ranking engine with data.
     
     Args:
         history_df: Listening history DataFrame
         songs_metadata: List of song metadata dicts
-        embeddings_data: Dictionary mapping song_keys to embeddings
+        embeddings_data: Dictionary mapping song_keys to embeddings (unused in V2.5)
         config: Optional custom configuration
         
     Returns:
@@ -735,8 +512,7 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
         # Compute artist affinities
         engine.compute_artist_affinities()
         
-        # Compute reference centroid
-        engine.compute_reference_centroid(embeddings_data)
+        # V2.5: Reference centroid not needed (uses kNN and artist priors instead)
     else:
         logger.warning("No history data provided - engine will use prior-only scoring")
     
