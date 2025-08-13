@@ -18,41 +18,59 @@ logger = logging.getLogger(__name__)
 class RankingConfig:
     """Configuration class for ranking algorithm hyperparameters."""
     
-    def __init__(self):
-        """Initialize with default hyperparameters from V2.5 spec."""
-        # Core V2.5 parameters - same as V2
-        self.H_c = 30.0          # History half-life in days
-        self.K = 5.0             # Confidence ramp parameter
-        self.lambda_val = 0.5    # Relevance vs utility balance (λ in formula)
-        
-        # Discovery slider (user-controlled, default neutral)
-        self.d = 0.5             # Discovery slider 0=familiar, 1=new
-        self.rho = 1.0           # Slider curve parameter (d' = d^rho)
-        
-        # V2.5: Curved signed evidence parameters
-        self.gamma_s = 1.2       # Completion curvature for success
-        self.gamma_f = 1.4       # Skip curvature for failures
-        self.kappa = 2.0         # Skip amplification factor
-        
-        # V2.5: Beta prior parameters
-        self.alpha_0 = 1.0       # Beta prior alpha
-        self.beta_0 = 1.0        # Beta prior beta
-        
-        # V2.5: Freshness parameter
-        self.eta = 1.2           # Freshness sharpness
-        
-        # V2.5: kNN similarity prior parameters
-        self.k_neighbors = 50    # Number of kNN neighbors
-        self.sigma = 10.0        # Softmax temperature for kNN weights
-        
-        # V2.5: Artist affinity prior parameters
-        self.phi = 4.0           # Artist style focus exponent
-        self.epsilon = 1e-6      # Denominator guard
-        
-        # V2.5: Prior combination weights
-        self.beta_p = 0.4        # Prior weight for popularity
-        self.beta_s = 0.4        # Prior weight for kNN similarity
-        self.beta_a = 0.2        # Prior weight for artist affinity
+    def __init__(self, 
+                 # Core V2.5 parameters - same as V2
+                 H_c: float = 30.0,          # History half-life in days
+                 K: float = 5.0,             # Confidence ramp parameter
+                 lambda_val: float = 0.5,    # Relevance vs utility balance (λ in formula)
+                 
+                 # Discovery slider (user-controlled, default neutral)
+                 d: float = 0.5,             # Discovery slider 0=familiar, 1=new
+                 rho: float = 1.0,           # Slider curve parameter (d' = d^rho)
+                 
+                 # V2.5: Curved signed evidence parameters
+                 gamma_s: float = 1.2,       # Completion curvature for success
+                 gamma_f: float = 1.4,       # Skip curvature for failures
+                 kappa: float = 2.0,         # Skip amplification factor
+                 
+                 # V2.5: Beta prior parameters
+                 alpha_0: float = 1.0,       # Beta prior alpha
+                 beta_0: float = 1.0,        # Beta prior beta
+                 
+                 # V2.5: Freshness parameter
+                 eta: float = 1.2,           # Freshness sharpness
+                 
+                 # V2.5: kNN similarity prior parameters
+                 k_neighbors: int = 50,      # Number of kNN neighbors
+                 sigma: float = 10.0,        # Softmax temperature for kNN weights
+                 
+                 # V2.5: Artist affinity prior parameters
+                 phi: float = 4.0,           # Artist style focus exponent
+                 epsilon: float = 1e-6,      # Denominator guard
+                 
+                 # V2.5: Prior combination weights
+                 beta_p: float = 0.4,        # Prior weight for popularity
+                 beta_s: float = 0.4,        # Prior weight for kNN similarity
+                 beta_a: float = 0.2):       # Prior weight for artist affinity
+        """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
+        self.H_c = H_c
+        self.K = K
+        self.lambda_val = lambda_val
+        self.d = d
+        self.rho = rho
+        self.gamma_s = gamma_s
+        self.gamma_f = gamma_f
+        self.kappa = kappa
+        self.alpha_0 = alpha_0
+        self.beta_0 = beta_0
+        self.eta = eta
+        self.k_neighbors = k_neighbors
+        self.sigma = sigma
+        self.phi = phi
+        self.epsilon = epsilon
+        self.beta_p = beta_p
+        self.beta_s = beta_s
+        self.beta_a = beta_a
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -169,6 +187,11 @@ class RankingEngine:
         # f_{t,i} = w_{t,i} * kappa * (1-c_{t,i})^{gamma_f}  (failure weight)
         df['s_ti'] = df['w_ti'] * (df['c_ti'] ** self.config.gamma_s)
         df['f_ti'] = df['w_ti'] * self.config.kappa * ((1 - df['c_ti']) ** self.config.gamma_f)
+
+        # consider a play a completion if the completion ratio is >= 0.95
+        df['num_completions'] = (df['c_ti'] >= 0.95).astype(int)
+        # consider a play a skip if the completion ratio is < 0.25
+        df['num_skips'] = (df['c_ti'] < 0.25).astype(int)
         
         # Group by song key
         song_key_col = df[['original_song', 'original_artist']].apply(tuple, axis=1)
@@ -182,6 +205,7 @@ class RankingEngine:
             S_t = group['s_ti'].sum()  # Total success evidence
             F_t = group['f_ti'].sum()  # Total failure evidence  
             n_t = S_t + F_t           # Total evidence
+            R_t = group['c_ti'].sum()
             
             # Bayesian affinity (V2.5 §3.2)
             alpha = self.config.alpha_0 + S_t
@@ -199,6 +223,8 @@ class RankingEngine:
             # Freshness from all plays (V2.5 §3.4)
             # f_t = (sum(w_{t,i}) / num_plays)^eta
             num_plays = len(group)
+            num_completions = group['num_completions'].sum().astype(int)
+            num_skips = group['num_skips'].sum().astype(int)
             mean_recency = group['w_ti'].sum() / num_plays if num_plays > 0 else 0
             f_t = mean_recency ** self.config.eta
             
@@ -206,11 +232,13 @@ class RankingEngine:
                 'S_t': float(S_t),
                 'F_t': float(F_t),
                 'n_t': float(n_t),
+                'R_t': float(R_t),
                 'A_t': float(np.clip(A_t, 0, 1)),
                 'g_t': float(np.clip(g_t, 0, 1)),
                 'f_t': float(np.clip(f_t, 0, 1)),
                 'play_count': num_plays,
-                'last_play': group['timestamp'].max(),
+                'num_completions': num_completions,
+                'num_skips': num_skips,
                 # Keep for debugging
                 'alpha': float(alpha),
                 'beta': float(beta),
