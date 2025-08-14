@@ -173,21 +173,11 @@ class MusicSearchEngine:
                 song_embedding = self.embedding_lookup[song_key]
                 semantic_similarity = np.dot(query_embedding, song_embedding)
                 
-                # Compute raw priors for quantile normalization
-                popularity = song.get('metadata', {}).get('popularity', 50)
-                P_t = popularity / 100.0
-                C_t = self.ranking_engine.compute_knn_similarity_prior(song_embedding, self.embedding_lookup)
-                B_t = self.ranking_engine.compute_artist_affinity_prior(song_key, song_embedding, self.embedding_lookup)
-                
                 candidates_data.append({
                     'song_idx': i,
                     'song_key': song_key,
                     'song': song,
-                    'song_embedding': song_embedding,
                     'semantic_similarity': semantic_similarity,
-                    'P_t': P_t,
-                    'C_t': C_t,
-                    'B_t': B_t
                 })
             else:
                 # No embedding available, skip
@@ -196,16 +186,6 @@ class MusicSearchEngine:
         if not candidates_data:
             return [], 0
         
-        # V2.5: Compute quantile normalization maps
-        P_values = [c['P_t'] for c in candidates_data]
-        C_values = [c['C_t'] for c in candidates_data]
-        B_values = [c['B_t'] for c in candidates_data]
-        
-        quantile_maps = {
-            'P': self.ranking_engine.compute_quantile_normalization(P_values),
-            'C': self.ranking_engine.compute_quantile_normalization(C_values),
-            'B': self.ranking_engine.compute_quantile_normalization(B_values)
-        }
         
         # Compute V2.5 final scores
         candidate_scores = []
@@ -215,9 +195,6 @@ class MusicSearchEngine:
                 candidate['semantic_similarity'], 
                 candidate['song_key'], 
                 candidate['song'],
-                candidate['song_embedding'],
-                self.embedding_lookup,
-                quantile_maps
             )
             
             candidate_scores.append({
