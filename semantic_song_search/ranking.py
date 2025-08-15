@@ -64,7 +64,14 @@ class RankingConfig:
         beta_p: float = 0.4,        # Prior weight for popularity
         beta_s: float = 0.4,        # Prior weight for kNN similarity
         beta_a: float = 0.2,        # Prior weight for artist affinity
-        kappa_E: float = 0.25       # Scaling factor for E_t
+        kappa_E: float = 0.25,       # Scaling factor for E_t
+
+        # V2.6: Artist familiarity parameters
+        theta_c: float = 0.95,
+        tau_c: float = 0.02,
+        K_c: float = 8.0,
+        tau_K: float = 2,
+        M_A: float = 15.0
         ):       
             """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -95,6 +102,11 @@ class RankingConfig:
             self.beta_s = beta_s
             self.beta_a = beta_a
             self.kappa_E = kappa_E
+            self.theta_c = theta_c
+            self.tau_c = tau_c
+            self.K_c = K_c
+            self.tau_K = tau_K
+            self.M_A = M_A
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -126,7 +138,12 @@ class RankingConfig:
             'beta_p': self.beta_p,
             'beta_s': self.beta_s,
             'beta_a': self.beta_a,
-            'kappa_E': self.kappa_E
+            'kappa_E': self.kappa_E,
+            'theta_c': self.theta_c,
+            'tau_c': self.tau_c,
+            'K_c': self.K_c,
+            'tau_K': self.tau_K,
+            'M_A': self.M_A
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -177,6 +194,12 @@ class RankingEngine:
         self.p95_C_t = None
         self.s_base = None
         self.has_history = False
+
+
+    @staticmethod
+    def logistic(x: float) -> float:
+        return 1 / (1 + np.exp(-x))
+    
     
     def compute_track_statistics(self, history_df: pd.DataFrame, songs_metadata: List[Dict]) -> Dict:
         """
@@ -235,6 +258,8 @@ class RankingEngine:
         df['f_ti'] = df['w_ti'] * self.config.kappa * ((1 - df['c_ti']) ** self.config.gamma_f)
         df['s_ti_a'] = df['w_ti_a'] * (df['c_ti'] ** self.config.gamma_s)
         df['s_ti_d'] = df['w_ti_d'] * (df['c_ti'] ** self.config.gamma_s)
+        df['w_c_ti'] = self.logistic((df['c_ti'] - self.config.theta_c) / self.config.tau_c)
+
 
         # consider a play a completion if the completion ratio is >= 0.95
         df['num_completions'] = (df['c_ti'] >= 0.95).astype(int)
@@ -256,6 +281,8 @@ class RankingEngine:
             S_t_a = group['s_ti_a'].sum()  # Total success evidence (artist affinity)
             S_t_d = group['s_ti_d'].sum()  # Total success evidence (discovery familiarity)
             R_t = group['c_ti'].sum()
+            z_t = group['w_c_ti'].sum()
+            k_t = self.logistic((z_t - self.config.K_c) / self.config.tau_K)
             
             # Bayesian affinity (V2.5 §3.2)
             alpha = self.config.alpha_0 + S_t
@@ -296,6 +323,8 @@ class RankingEngine:
                 'S_t_a': float(S_t_a),
                 'S_t_d': float(S_t_d),
                 'R_t': float(R_t),
+                'z_t': float(z_t),
+                'k_t': float(k_t),
                 'A_t': float(np.clip(A_t, 0, 1)),
                 's_t': float(np.clip(s_t, 0, 1)),
                 'f_t': float(np.clip(f_t, 0, 1)),
