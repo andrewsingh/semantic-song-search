@@ -59,8 +59,7 @@ class RankingConfig:
         sigma: float = 10.0,        # Softmax temperature for kNN weights
         
         # V2.5: Artist affinity prior parameters
-        phi: float = 4.0,           # Artist style focus exponent
-        epsilon: float = 1e-6,      # Denominator guard
+        gamma_A: float = 0.7,
         
         # V2.5: Prior combination weights
         beta_p: float = 0.4,        # Prior weight for popularity
@@ -91,8 +90,7 @@ class RankingConfig:
             self.psi = psi
             self.k_neighbors = k_neighbors
             self.sigma = sigma
-            self.phi = phi
-            self.epsilon = epsilon
+            self.gamma_A = gamma_A
             self.beta_p = beta_p
             self.beta_s = beta_s
             self.beta_a = beta_a
@@ -123,8 +121,7 @@ class RankingConfig:
             'psi': self.psi,
             'k_neighbors': self.k_neighbors,
             'sigma': self.sigma,
-            'phi': self.phi,
-            'epsilon': self.epsilon,
+            'gamma_A': self.gamma_A,
             'beta_p': self.beta_p,
             'beta_s': self.beta_s,
             'beta_a': self.beta_a,
@@ -370,41 +367,16 @@ class RankingEngine:
         # Aggregate by artist
         for (_, artist), stats in self.track_stats.items():
             if artist not in artist_data:
-                artist_data[artist] = {'ejs': []}
+                artist_data[artist] = {'E_A': 0}
 
-            if stats['S_t_a'] > 0:
-                # artist_data[artist]['E_A'] += stats['S_t_a']
-                artist_data[artist]['ejs'].append(stats['S_t_a'])
+            artist_data[artist]['E_A'] += (stats['S_t_a'] ** self.config.gamma_A)
                     
-        alpha_A = 0.2
         artist_affinities = {}
-        artist_affinities_raw = {}
         for artist, data in artist_data.items():
-            ejs = data['ejs']
-            E_A = sum(ejs)
-            if E_A == 0:
-                artist_affinities[artist] = 0
-            else:
-                B_A_exp = E_A / (E_A + self.config.K_E)
-
-                num_artist_tracks = len(ejs)
-                pjs = [(e_j + alpha_A) / (E_A + alpha_A * num_artist_tracks) for e_j in ejs]
-                pjs_squared = [p_j ** 2 for p_j in pjs]
-                if num_artist_tracks <= 1:
-                    D_A = 0
-                else:
-                    D_A = (1 - sum(pjs_squared)) / (1 - (1 / num_artist_tracks))
-                
-                artist_data[artist]['E_A'] = E_A
-                artist_data[artist]['B_A_exp'] = B_A_exp
-                lambda_A = 0.6
-                B_A = B_A_exp * (lambda_A + (1 - lambda_A) * D_A)
-                artist_affinities[artist] = B_A
-                artist_affinities_raw[artist] = B_A_exp
+            artist_affinities[artist] = data['E_A'] / (data['E_A'] + (self.config.K_E ** self.config.gamma_A))
 
         logger.info(f"Computed artist affinities for {len(artist_affinities)} artists")
         self.artist_affinities = artist_affinities
-        self.artist_affinities_raw = artist_affinities_raw
         return artist_affinities
     
     
@@ -625,116 +597,6 @@ class RankingEngine:
         return float(np.clip(final_score, 0, 1)), components
     
     
-    ## DEPRECATED
-    def compute_artist_affinity_prior(self, candidate_song_key: Tuple[str, str],
-                                    candidate_embedding: np.ndarray,
-                                    embeddings_data: Dict) -> float:
-        """
-        Compute similarity-conditioned artist affinity B_t (V2.5 §4.2).
-        
-        Args:
-            candidate_song_key: (song, artist) for candidate
-            candidate_embedding: Unit-norm embedding for candidate
-            embeddings_data: Dictionary mapping (song, artist) -> embedding
-            
-        Returns:
-            B_t: Artist affinity prior score [0, 1]
-        """
-        if not self.track_stats or not embeddings_data:
-            return 0.5
-        
-        candidate_artist = candidate_song_key[1]
-        
-        # Find same-artist tracks in history
-        same_artist_tracks = []
-        for song_key, stats in self.track_stats.items():
-            if song_key[1] == candidate_artist and song_key in embeddings_data:
-                same_artist_tracks.append({
-                    'embedding': embeddings_data[song_key],
-                    'n_t': stats['n_t'],
-                    'A_t': stats['A_t']
-                })
-        
-        if not same_artist_tracks:
-            # No same-artist history
-            return 0.5
-        
-        # Compute similarity-weighted affinity (V2.5 §4.2)
-        numerator = 0.0
-        denominator = self.config.epsilon
-        
-        for track in same_artist_tracks:
-            # Cosine similarity (both embeddings are unit-norm)
-            similarity = np.dot(candidate_embedding, track['embedding'])
-            # Only positive similarities, raised to power phi
-            similarity_weight = max(0, similarity) ** self.config.phi
-            
-            numerator += similarity_weight * track['n_t'] * track['A_t']
-            denominator += similarity_weight * track['n_t']
-        
-        B_t = numerator / denominator if denominator > self.config.epsilon else 0.5
-        return float(np.clip(B_t, 0, 1))
-    
-
-    ## DEPRECATED
-    def compute_knn_similarity_prior(self, candidate_embedding: np.ndarray, 
-                                   embeddings_data: Dict) -> float:
-        """
-        Compute kNN similarity prior C_t for a candidate track (V2.5 §4.1).
-        
-        Args:
-            candidate_embedding: Unit-norm embedding for the candidate track
-            embeddings_data: Dictionary mapping (song, artist) -> embedding for historical tracks
-            
-        Returns:
-            C_t: kNN similarity prior score [0, 1]
-        """
-        if not self.track_stats or not embeddings_data:
-            return 0.5  # Fallback for missing data
-        
-        # Get embeddings for tracks with history
-        historical_embeddings = []
-        track_keys = []
-        trust_scores = []  # g_t * A_t values
-        t0 = time.time()
-        for song_key, stats in self.track_stats.items():
-            if song_key in embeddings_data:
-                historical_embeddings.append(embeddings_data[song_key])
-                track_keys.append(song_key)
-                trust_scores.append(stats['g_t'] * stats['A_t'])
-        t1 = time.time()
-        print(f"Time taken to get embeddings: {(t1 - t0) * 1000} milliseconds")
-        # Use a more reasonable minimum threshold (spec doesn't define k_min)
-        k_min = max(3, min(10, self.config.k_neighbors // 5))  # Dynamic minimum
-        if len(historical_embeddings) < k_min:
-            # Not enough neighbors for meaningful kNN
-            return 0.5
-        t2 = time.time()
-        historical_embeddings = np.array(historical_embeddings)
-        trust_scores = np.array(trust_scores)
-        
-        # Compute cosine similarities (embeddings are unit-norm)
-        similarities = np.dot(historical_embeddings, candidate_embedding)
-        
-        # Get top-k neighbors
-        k = min(self.config.k_neighbors, len(similarities))
-        top_k_indices = np.argpartition(similarities, -k)[-k:]
-        t3 = time.time()
-        print(f"Time taken to compute similarities: {(t3 - t2) * 1000} milliseconds")
-
-        # Compute softmax weights (V2.5 §4.1)
-        top_k_similarities = similarities[top_k_indices]
-        exp_scores = np.exp(self.config.sigma * top_k_similarities)
-        softmax_weights = exp_scores / np.sum(exp_scores)
-        
-        # Trust-weighted average
-        top_k_trust = trust_scores[top_k_indices]
-        C_t = np.dot(softmax_weights, top_k_trust)
-        t4 = time.time()
-        print(f"Time taken to compute C_t: {(t4 - t3) * 1000} milliseconds")
-        return float(np.clip(C_t, 0, 1))
-
-
 
 def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dict], 
                        embeddings_data: Dict = None, config: RankingConfig = None) -> RankingEngine:
