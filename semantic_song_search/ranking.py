@@ -71,7 +71,12 @@ class RankingConfig:
         tau_c: float = 0.02,
         K_c: float = 8.0,
         tau_K: float = 2,
-        M_A: float = 15.0
+        M_A: float = 15.0,
+
+        #V2.6: Track familiarity parameters
+        K_fam: float = 5.0,
+        R_min: float = 3.0,
+        C_fam: float = 0.2,
         ):       
             """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -107,6 +112,9 @@ class RankingConfig:
             self.K_c = K_c
             self.tau_K = tau_K
             self.M_A = M_A
+            self.K_fam = K_fam
+            self.R_min = R_min
+            self.C_fam = C_fam
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -143,7 +151,10 @@ class RankingConfig:
             'tau_c': self.tau_c,
             'K_c': self.K_c,
             'tau_K': self.tau_K,
-            'M_A': self.M_A
+            'M_A': self.M_A,
+            'K_fam': self.K_fam,
+            'R_min': self.R_min,
+            'C_fam': self.C_fam
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -187,7 +198,8 @@ class RankingEngine:
         
         # Computed user profile data
         self.track_stats = {}           # Per-track statistics
-        self.artist_affinities = {}     # Per-artist affinities  
+        self.artist_affinities = {}     # Per-artist affinities
+        self.artist_familiarities = {}  # Per-artist familiarities
         self.knn_similarities = {}      # Per-track kNN similarities
         self.track_priors = {}          # Per-track priors
         self.p05_C_t = None
@@ -281,6 +293,7 @@ class RankingEngine:
             S_t_a = group['s_ti_a'].sum()  # Total success evidence (artist affinity)
             S_t_d = group['s_ti_d'].sum()  # Total success evidence (discovery familiarity)
             R_t = group['c_ti'].sum()
+            R_t_s = (R_t / (R_t + self.config.K_fam))
             z_t = group['w_c_ti'].sum()
             k_t = self.logistic((z_t - self.config.K_c) / self.config.tau_K)
             
@@ -323,6 +336,7 @@ class RankingEngine:
                 'S_t_a': float(S_t_a),
                 'S_t_d': float(S_t_d),
                 'R_t': float(R_t),
+                'R_t_s': float(R_t_s),
                 'z_t': float(z_t),
                 'k_t': float(k_t),
                 'A_t': float(np.clip(A_t, 0, 1)),
@@ -372,29 +386,42 @@ class RankingEngine:
             
             # B_t: Artist affinity prior
             B_t = self.artist_affinities.get(song_key[1], 0.0)
+            B_A_fam = self.artist_familiarities.get(song_key[1], 0.0)
 
             # Combined prior utility E_t
             E_t = (
                 self.config.beta_p * P_t + 
                 self.config.beta_s * C_t_hat + 
                 self.config.beta_a * B_t)
+            
+            # Track familiarity
+            Fam_t = 0
+            if song_key in self.track_stats:
+                R_t = self.track_stats[song_key]['R_t']
+                R_t_s = self.track_stats[song_key]['R_t_s']
+                if R_t >= self.config.R_min:
+                    Fam_t = self.config.C_fam + (R_t_s * (1 - self.config.C_fam))
+                else:
+                    Fam_t = (B_A_fam * self.config.C_fam) + (R_t_s * (1 - self.config.C_fam))
+            else:
+                Fam_t = B_A_fam * self.config.C_fam
+
+            Fam_t = np.clip(Fam_t, 0, 1)
 
             track_priors[song_key] = {
                 'P_t': P_t,
                 'C_t': C_t,
                 'B_t': B_t,
                 'C_t_hat': C_t_hat,
-                'E_t': E_t
+                'E_t': E_t,
+                'Fam_t': Fam_t
             }
         
-        # self.median_Q_t = np.median([stats['Q_t'] for stats in self.track_stats.values()])
-        # self.median_E_t = np.median([priors['E_t'] for priors in track_priors.values()])
-        # self.s_base = self.median_Q_t / (self.median_E_t + 1e-9)
         self.track_priors = track_priors
         return track_priors
 
 
-    def compute_artist_affinities(self) -> Dict[str, float]:
+    def compute_artist_affinities(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         """
         Compute per-artist affinities (B_a) from track statistics.
         
@@ -410,17 +437,21 @@ class RankingEngine:
         # Aggregate by artist
         for (_, artist), stats in self.track_stats.items():
             if artist not in artist_data:
-                artist_data[artist] = {'E_A': 0}
+                artist_data[artist] = {'E_A': 0, 'F_A': 0}
 
             artist_data[artist]['E_A'] += (stats['S_t_a'] ** self.config.gamma_A)
+            artist_data[artist]['F_A'] += stats['k_t']
                     
         artist_affinities = {}
+        artist_familiarities = {}
         for artist, data in artist_data.items():
             artist_affinities[artist] = data['E_A'] / (data['E_A'] + (self.config.K_E ** self.config.gamma_A))
+            artist_familiarities[artist] = data['F_A'] / (data['F_A'] + self.config.M_A)
 
         logger.info(f"Computed artist affinities for {len(artist_affinities)} artists")
         self.artist_affinities = artist_affinities
-        return artist_affinities
+        self.artist_familiarities = artist_familiarities
+        return artist_affinities, artist_familiarities
     
     
     def compute_knn_similarities(self, embeddings_data: Dict) -> Dict[Tuple[str, str], float]:
