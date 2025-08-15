@@ -28,7 +28,9 @@ class RankingConfig:
         
         # Discovery slider (user-controlled, default neutral)
         d: float = 0.5,             # Discovery slider 0=familiar, 1=new
-        rho: float = 1.0,           # Slider curve parameter (d' = d^rho)
+        H_d: float = 360.0,         # Discovery familiarity half-life in days
+        K_d: float = 8.0,           # Discovery familiarity scaling parameter
+        kappa_d: float = 1.386,     # Discovery strength parameter (ln(4))
         
         # V2.5: Curved signed evidence parameters
         gamma_s: float = 1.2,       # Completion curvature for success
@@ -42,12 +44,12 @@ class RankingConfig:
 
         # V2.5: Artist affinity prior parameters
         K_E: float = 10.0,           # Artist affinity prior parameter
-        h_min: float = 0.01,          # Minimum history factor
+        gamma_A: float = 0.7,
         
         # V2.5: Freshness parameters
         eta: float = 1.2,           # Freshness sharpness
-        tau: float = 0.6,           # Freshness threshold
-        beta_f: float = 1.2,          # Freshness exponent
+        tau: float = 0.8,           # Freshness threshold
+        beta_f: float = 1.5,          # Freshness exponent
 
         # V2.5: Familiarity parameters
         K_life: float = 10.0,       # Familiarity half-life
@@ -56,10 +58,7 @@ class RankingConfig:
         
         # V2.5: kNN similarity prior parameters
         k_neighbors: int = 50,      # Number of kNN neighbors
-        sigma: float = 10.0,        # Softmax temperature for kNN weights
-        
-        # V2.5: Artist affinity prior parameters
-        gamma_A: float = 0.7,
+        sigma: float = 10.0,        # Softmax temperature for kNN weights        
         
         # V2.5: Prior combination weights
         beta_p: float = 0.4,        # Prior weight for popularity
@@ -73,7 +72,9 @@ class RankingConfig:
             self.K = K
             self.lambda_val = lambda_val
             self.d = d
-            self.rho = rho
+            self.H_d = H_d
+            self.K_d = K_d
+            self.kappa_d = kappa_d
             self.gamma_s = gamma_s
             self.gamma_f = gamma_f
             self.kappa = kappa
@@ -81,7 +82,7 @@ class RankingConfig:
             self.beta_0 = beta_0
             self.K_s = K_s
             self.K_E = K_E
-            self.h_min = h_min
+            self.gamma_A = gamma_A
             self.eta = eta
             self.tau = tau
             self.beta_f = beta_f
@@ -90,7 +91,6 @@ class RankingConfig:
             self.psi = psi
             self.k_neighbors = k_neighbors
             self.sigma = sigma
-            self.gamma_A = gamma_A
             self.beta_p = beta_p
             self.beta_s = beta_s
             self.beta_a = beta_a
@@ -104,7 +104,9 @@ class RankingConfig:
             'K': self.K,
             'lambda': self.lambda_val,
             'd': self.d,
-            'rho': self.rho,
+            'H_d': self.H_d,
+            'K_d': self.K_d,
+            'kappa_d': self.kappa_d,
             'gamma_s': self.gamma_s,
             'gamma_f': self.gamma_f,
             'kappa': self.kappa,
@@ -112,7 +114,7 @@ class RankingConfig:
             'beta_0': self.beta_0,
             'K_s': self.K_s,
             'K_E': self.K_E,
-            'h_min': self.h_min,
+            'gamma_A': self.gamma_A,
             'eta': self.eta,
             'tau': self.tau,
             'beta_f': self.beta_f,
@@ -121,7 +123,6 @@ class RankingConfig:
             'psi': self.psi,
             'k_neighbors': self.k_neighbors,
             'sigma': self.sigma,
-            'gamma_A': self.gamma_A,
             'beta_p': self.beta_p,
             'beta_s': self.beta_s,
             'beta_a': self.beta_a,
@@ -144,6 +145,11 @@ class RankingConfig:
                         self.d = float_value
                     else:
                         logger.warning(f"Discovery slider must be in [0,1], got {float_value}")
+                elif key == 'kappa_d':  # Discovery strength parameter
+                    if float_value > 0:
+                        self.kappa_d = float_value
+                    else:
+                        logger.warning(f"Discovery strength must be positive, got {float_value}")
                 elif hasattr(self, key):
                     # Additional validation for other parameters
                     if key in ['beta_p', 'beta_s', 'beta_a'] and not 0.0 <= float_value <= 1.0:
@@ -167,8 +173,8 @@ class RankingEngine:
         self.artist_affinities = {}     # Per-artist affinities  
         self.knn_similarities = {}      # Per-track kNN similarities
         self.track_priors = {}          # Per-track priors
-        self.p10_C_t = None
-        self.p90_C_t = None
+        self.p05_C_t = None
+        self.p95_C_t = None
         self.s_base = None
         self.has_history = False
     
@@ -211,6 +217,7 @@ class RankingEngine:
         # Recency weights: w_{t,i} = exp(-ln(2) * (tau - t_{t,i}) / H_c)
         df['w_ti'] = np.maximum(np.exp(-np.log(2) * days_ago / self.config.H_c), 1e-10)
         df['w_ti_a'] = np.maximum(np.exp(-np.log(2) * days_ago / self.config.H_E), 1e-10)
+        df['w_ti_d'] = np.maximum(np.exp(-np.log(2) * days_ago / self.config.H_d), 1e-10)
         
         # Completion ratios: c_{t,i} = min(ms_played / D_t, 1)
         def calculate_completion(row):
@@ -227,6 +234,7 @@ class RankingEngine:
         df['s_ti'] = df['w_ti'] * (df['c_ti'] ** self.config.gamma_s)
         df['f_ti'] = df['w_ti'] * self.config.kappa * ((1 - df['c_ti']) ** self.config.gamma_f)
         df['s_ti_a'] = df['w_ti_a'] * (df['c_ti'] ** self.config.gamma_s)
+        df['s_ti_d'] = df['w_ti_d'] * (df['c_ti'] ** self.config.gamma_s)
 
         # consider a play a completion if the completion ratio is >= 0.95
         df['num_completions'] = (df['c_ti'] >= 0.95).astype(int)
@@ -245,7 +253,8 @@ class RankingEngine:
             S_t = group['s_ti'].sum()  # Total success evidence
             F_t = group['f_ti'].sum()  # Total failure evidence  
             n_t = S_t + F_t           # Total evidence
-            S_t_a = group['s_ti_a'].sum()  # Total success evidence
+            S_t_a = group['s_ti_a'].sum()  # Total success evidence (artist affinity)
+            S_t_d = group['s_ti_d'].sum()  # Total success evidence (discovery familiarity)
             R_t = group['c_ti'].sum()
             
             # Bayesian affinity (V2.5 §3.2)
@@ -273,6 +282,9 @@ class RankingEngine:
             L_t = (R_t / (R_t + self.config.K_life))
             R_t_rec = (n_t / (n_t + self.config.K_recent))
             h_t = 1 - ((1 - L_t) * ((1 - R_t_rec) ** self.config.psi))
+            
+            # Discovery familiarity (long horizon)
+            phi_t = S_t_d / (S_t_d + self.config.K_d)
 
             # Final expoitation quality score
             Q_t = s_t * A_t * m_f_t
@@ -282,12 +294,14 @@ class RankingEngine:
                 'F_t': float(F_t),
                 'n_t': float(n_t),
                 'S_t_a': float(S_t_a),
+                'S_t_d': float(S_t_d),
                 'R_t': float(R_t),
                 'A_t': float(np.clip(A_t, 0, 1)),
                 's_t': float(np.clip(s_t, 0, 1)),
                 'f_t': float(np.clip(f_t, 0, 1)),
                 'm_f_t': float(np.clip(m_f_t, 0, 1)),
                 'h_t': float(np.clip(h_t, 0, 1)),
+                'phi_t': float(np.clip(phi_t, 0, 1)),
                 'Q_t': float(np.clip(Q_t, 0, 1)),
                 'play_count': num_plays,
                 'num_completions': num_completions,
@@ -325,7 +339,7 @@ class RankingEngine:
             
             # C_t: kNN similarity prior
             C_t = self.knn_similarities.get(song_key)
-            C_t_hat = np.clip((C_t - self.p10_C_t) * (1 / (self.p90_C_t - self.p10_C_t)), 0, 1)
+            C_t_hat = np.clip((C_t - self.p05_C_t) * (1 / (self.p95_C_t - self.p05_C_t)), 0, 1)
             
             # B_t: Artist affinity prior
             B_t = self.artist_affinities.get(song_key[1], 0.0)
@@ -486,8 +500,8 @@ class RankingEngine:
         knn_similarities = {song_key: float(C_t_val) for song_key, C_t_val in zip(all_track_keys, C_t_values)}
         # max_terms_dict = {song_key: float(max_term) for song_key, max_term in zip(all_track_keys, max_terms)}
         
-        self.p10_C_t = np.percentile(C_t_values, 10)
-        self.p90_C_t = np.percentile(C_t_values, 90)
+        self.p05_C_t = np.percentile(C_t_values, 5)
+        self.p95_C_t = np.percentile(C_t_values, 95)
         self.knn_similarities = knn_similarities
         return knn_similarities
     
@@ -547,10 +561,12 @@ class RankingEngine:
             stats = self.track_stats[song_key]
             Q_t = stats['Q_t']
             h_t = stats['h_t']
+            phi_t = stats['phi_t']
         else:
-            # No history for this track
+            # No history for this track - low familiarity
             Q_t = 0.0
             h_t = 0.0
+            phi_t = 0.0
 
         priors = self.track_priors[song_key]
         P_t = priors['P_t']
@@ -560,26 +576,33 @@ class RankingEngine:
         E_t = priors['E_t']
         E_t_hat = self.config.kappa_E * E_t
 
-        # Discovery control (V2.5 §6.1)
-        d_prime = self.config.d ** self.config.rho
+        # Core utility (V2.5 revised): keep principled Q_t vs E_t balance
+        U_t = h_t * Q_t + (1 - h_t) * E_t_hat
         
-        # Predicted utility U_t(d) (V2.5 §6.2)
-        U_t = (1 - d_prime) * (h_t * Q_t) + d_prime * (1 - h_t) * E_t_hat
+        # Discovery tilt (exponential familiarity-based scaling)
+        # s_d = exp(kappa_d * (d - 0.5) * (1 - 2*phi_t))
+        discovery_bias = (self.config.d - 0.5) * (1 - 2 * phi_t)
+        s_d = np.exp(self.config.kappa_d * discovery_bias)
         
-        # Final score: λ * S_t + (1-λ) * U_t
+        # Discovery-adjusted utility
+        U_t_discovery = s_d * U_t
+        
+        # Final score: λ * S_t + (1-λ) * U_t^(d)
         lambda_val = self.config.lambda_val
-        final_score = lambda_val * S_t + (1 - lambda_val) * U_t
+        final_score = lambda_val * S_t + (1 - lambda_val) * U_t_discovery
         
         # Component breakdown for analysis
         components = {
             'semantic_similarity': S_t,
             'semantic_weighted': lambda_val * S_t,
-            'predicted_utility': U_t,
-            'utility_weighted': (1 - lambda_val) * U_t,
+            'core_utility': U_t,
+            'discovery_multiplier': s_d,
+            'discovery_adjusted_utility': U_t_discovery,
+            'utility_weighted': (1 - lambda_val) * U_t_discovery,
             'final_score': final_score,
             'lambda': lambda_val,
             'discovery_slider': self.config.d,
-            'd_prime': d_prime,
+            'discovery_bias': discovery_bias,
             # Prior components
             'P_t': P_t,
             'C_t': C_t,
@@ -590,8 +613,9 @@ class RankingEngine:
             # History components
             'Q_t': Q_t,
             'h_t': h_t,
-            'exploit_term': (1 - d_prime) * (h_t * Q_t),
-            'explore_term': d_prime * (1 - h_t) * E_t_hat
+            'phi_t': phi_t,
+            'exploit_term': h_t * Q_t,
+            'explore_term': (1 - h_t) * E_t_hat
         }
         
         return float(np.clip(final_score, 0, 1)), components
