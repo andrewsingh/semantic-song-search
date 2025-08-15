@@ -66,7 +66,7 @@ class RankingConfig:
         beta_p: float = 0.4,        # Prior weight for popularity
         beta_s: float = 0.4,        # Prior weight for kNN similarity
         beta_a: float = 0.2,        # Prior weight for artist affinity
-        lambda_E: float = 4.0       # Scaling factor for E_t
+        kappa_E: float = 0.25       # Scaling factor for E_t
         ):       
             """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -96,7 +96,7 @@ class RankingConfig:
             self.beta_p = beta_p
             self.beta_s = beta_s
             self.beta_a = beta_a
-            self.lambda_E = lambda_E
+            self.kappa_E = kappa_E
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -128,7 +128,7 @@ class RankingConfig:
             'beta_p': self.beta_p,
             'beta_s': self.beta_s,
             'beta_a': self.beta_a,
-            'lambda_E': self.lambda_E
+            'kappa_E': self.kappa_E
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -169,8 +169,10 @@ class RankingEngine:
         self.track_stats = {}           # Per-track statistics
         self.artist_affinities = {}     # Per-artist affinities  
         self.knn_similarities = {}      # Per-track kNN similarities
-        self.min_C_t = None
-        self.max_C_t = None
+        self.track_priors = {}          # Per-track priors
+        self.p10_C_t = None
+        self.p90_C_t = None
+        self.s_base = None
         self.has_history = False
     
     def compute_track_statistics(self, history_df: pd.DataFrame, songs_metadata: List[Dict]) -> Dict:
@@ -305,6 +307,53 @@ class RankingEngine:
         return track_stats
     
 
+    def compute_track_priors(self, songs_metadata: Dict, embeddings_data: Dict) -> None:
+        """
+        Compute per-track priors using V2.5 §4.
+        
+        Args:
+            song_metadata: Dictionary mapping (song, artist) -> song metadata
+        """ 
+        if not embeddings_data:
+            return {}
+        
+        track_priors = {}
+        
+        for song in songs_metadata:
+            song_key = (song['original_song'], song['original_artist'])
+            # Compute three priors (V2.5 §4)
+            # P_t: Popularity prior
+            popularity = song.get('metadata', {}).get('popularity', 50)
+            P_t = np.clip(popularity / 100.0, 0.0, 1.0)
+            
+            # C_t: kNN similarity prior
+            C_t = self.knn_similarities.get(song_key)
+            C_t_hat = np.clip((C_t - self.p10_C_t) * (1 / (self.p90_C_t - self.p10_C_t)), 0, 1)
+            
+            # B_t: Artist affinity prior
+            B_t = self.artist_affinities.get(song_key[1], 0.0)
+
+            # Combined prior utility E_t
+            E_t = (
+                self.config.beta_p * P_t + 
+                self.config.beta_s * C_t_hat + 
+                self.config.beta_a * B_t)
+
+            track_priors[song_key] = {
+                'P_t': P_t,
+                'C_t': C_t,
+                'B_t': B_t,
+                'C_t_hat': C_t_hat,
+                'E_t': E_t
+            }
+        
+        # self.median_Q_t = np.median([stats['Q_t'] for stats in self.track_stats.values()])
+        # self.median_E_t = np.median([priors['E_t'] for priors in track_priors.values()])
+        # self.s_base = self.median_Q_t / (self.median_E_t + 1e-9)
+        self.track_priors = track_priors
+        return track_priors
+
+
     def compute_artist_affinities(self) -> Dict[str, float]:
         """
         Compute per-artist affinities (B_a) from track statistics.
@@ -321,20 +370,313 @@ class RankingEngine:
         # Aggregate by artist
         for (_, artist), stats in self.track_stats.items():
             if artist not in artist_data:
-                artist_data[artist] = {'E_A': 0.0}
-            
-            artist_data[artist]['E_A'] += stats['S_t_a']
-            
-        
-        # Compute artist affinities (B_a)
+                artist_data[artist] = {'ejs': []}
+
+            if stats['S_t_a'] > 0:
+                # artist_data[artist]['E_A'] += stats['S_t_a']
+                artist_data[artist]['ejs'].append(stats['S_t_a'])
+                    
+        alpha_A = 0.2
         artist_affinities = {}
+        artist_affinities_raw = {}
         for artist, data in artist_data.items():
-            artist_affinities[artist] = data['E_A'] / (data['E_A'] + self.config.K_E)
-        
+            ejs = data['ejs']
+            E_A = sum(ejs)
+            if E_A == 0:
+                artist_affinities[artist] = 0
+            else:
+                B_A_exp = E_A / (E_A + self.config.K_E)
+
+                num_artist_tracks = len(ejs)
+                pjs = [(e_j + alpha_A) / (E_A + alpha_A * num_artist_tracks) for e_j in ejs]
+                pjs_squared = [p_j ** 2 for p_j in pjs]
+                if num_artist_tracks <= 1:
+                    D_A = 0
+                else:
+                    D_A = (1 - sum(pjs_squared)) / (1 - (1 / num_artist_tracks))
+                
+                artist_data[artist]['E_A'] = E_A
+                artist_data[artist]['B_A_exp'] = B_A_exp
+                lambda_A = 0.6
+                B_A = B_A_exp * (lambda_A + (1 - lambda_A) * D_A)
+                artist_affinities[artist] = B_A
+                artist_affinities_raw[artist] = B_A_exp
+
         logger.info(f"Computed artist affinities for {len(artist_affinities)} artists")
         self.artist_affinities = artist_affinities
+        self.artist_affinities_raw = artist_affinities_raw
         return artist_affinities
     
+    
+    def compute_knn_similarities(self, embeddings_data: Dict) -> Dict[Tuple[str, str], float]:
+        """
+        Compute kNN similarity prior C_t for all tracks in embeddings_data (V2.5 §4.1).
+        
+        For each track in embeddings_data, find the k most similar tracks from those with history,
+        then compute a trust-weighted average of their Q_t scores.
+        
+        Args:
+            embeddings_data: Dictionary mapping (song, artist) -> embedding for all tracks
+            
+        Returns:
+            Tuple of (knn_similarities_dict, max_terms_dict) for debugging
+        """
+        if not embeddings_data:
+            return {}
+        
+        # Build lists: all tracks vs historical tracks
+        all_embeddings = []
+        all_track_keys = []
+        historical_embeddings = []
+        historical_track_keys = []
+        trust_scores = []
+        
+        t0 = time.time()
+        for song_key in embeddings_data:
+            all_embeddings.append(embeddings_data[song_key])
+            all_track_keys.append(song_key)
+            
+            # Only tracks with history can be neighbors
+            if song_key in self.track_stats:
+                historical_embeddings.append(embeddings_data[song_key])
+                historical_track_keys.append(song_key)
+                trust_scores.append(self.track_stats[song_key]['Q_t'])
+        
+        t1 = time.time()
+        print(f"Time taken to get embeddings: {(t1 - t0) * 1000} milliseconds")
+        print(f"All tracks: {len(all_embeddings)}, Historical tracks: {len(historical_embeddings)}")
+        
+        # Use a more reasonable minimum threshold
+        k_min = max(3, min(10, self.config.k_neighbors // 5))
+        if len(historical_embeddings) < k_min:
+            print(f"Not enough historical tracks ({len(historical_embeddings)}) for meaningful kNN")
+            return {}, {}
+        
+        t2 = time.time()
+        all_embeddings = np.array(all_embeddings)  # shape: (n_all, embed_dim)
+        historical_embeddings = np.array(historical_embeddings)  # shape: (n_hist, embed_dim)
+        trust_scores = np.array(trust_scores)  # shape: (n_hist,)
+        
+        n_all_tracks = len(all_embeddings)
+        n_historical_tracks = len(historical_embeddings)
+        
+        # Compute similarity matrix: all_tracks x historical_tracks
+        # similarity_matrix[i, j] = cosine similarity between all_track[i] and historical_track[j]
+        similarity_matrix = np.matmul(all_embeddings, historical_embeddings.T)  # shape: (n_all, n_hist)
+        
+        # Handle self-similarities: for tracks that are also historical, 
+        # we need to exclude their similarity to themselves
+        # Create efficient lookup: historical_key -> historical_index
+        hist_key_to_idx = {key: idx for idx, key in enumerate(historical_track_keys)}
+        
+        # Find matches and exclude self-similarities
+        all_to_hist_mapping = {}
+        for i, all_key in enumerate(all_track_keys):
+            if all_key in hist_key_to_idx:
+                j = hist_key_to_idx[all_key]
+                all_to_hist_mapping[i] = j
+                similarity_matrix[i, j] = -np.inf  # Exclude self-similarity
+        
+        # Get the indices corresponding to the top-k similarities for each track
+        # If any tracks are both in all_tracks and historical_tracks, we excluded self-similarities,
+        # so we need to account for having one fewer neighbor available for those tracks
+        if all_to_hist_mapping:
+            # Some tracks have self-similarities excluded
+            k = min(self.config.k_neighbors, n_historical_tracks - 1)
+        else:
+            # No self-similarities to exclude
+            k = min(self.config.k_neighbors, n_historical_tracks)
+        
+        top_k_indices = np.argpartition(similarity_matrix, -k, axis=1)[:, -k:]  # shape: (n_all, k)
+        
+        # Get the top-k similarities and trust scores for each track using advanced indexing
+        row_indices = np.arange(n_all_tracks)[:, np.newaxis]  # shape: (n_all, 1)
+        top_k_similarities = similarity_matrix[row_indices, top_k_indices]  # shape: (n_all, k)
+        top_k_trust = trust_scores[top_k_indices]  # shape: (n_all, k)
+        
+        t3 = time.time()
+        print(f"Time taken to compute similarities: {(t3 - t2) * 1000} milliseconds")
+        
+        # Compute softmax weights (V2.5 §4.1)
+        exp_scores = np.exp(self.config.sigma * top_k_similarities)  # shape: (n_all, k)
+        softmax_weights = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)  # shape: (n_all, k)
+        
+        # Trust-weighted average
+        C_t_terms = softmax_weights * top_k_trust  # shape: (n_all, k)
+        C_t_values = np.clip(np.sum(C_t_terms, axis=1), 0, 1)  # shape: (n_all,)
+        # Get max term for debugging purposes
+        # max_terms = np.max(C_t_terms, axis=1)  # shape: (n_all,)
+        
+        t4 = time.time()
+        print(f"Time taken to compute C_t: {(t4 - t3) * 1000} milliseconds")
+        
+        # Build dictionaries mapping (song, artist) -> values
+        knn_similarities = {song_key: float(C_t_val) for song_key, C_t_val in zip(all_track_keys, C_t_values)}
+        # max_terms_dict = {song_key: float(max_term) for song_key, max_term in zip(all_track_keys, max_terms)}
+        
+        self.p10_C_t = np.percentile(C_t_values, 10)
+        self.p90_C_t = np.percentile(C_t_values, 90)
+        self.knn_similarities = knn_similarities
+        return knn_similarities
+    
+    
+    @staticmethod
+    def compute_quantile_normalization(values: List[float]) -> Dict[float, float]:
+        """
+        Compute empirical CDF for quantile normalization (V2.5 §5).
+        
+        Uses all values (including duplicates) to compute true empirical CDF:
+        F(x) = #{v <= x} / N
+        
+        Args:
+            values: List of raw values to normalize
+            
+        Returns:
+            Dictionary mapping raw values to quantile-normalized [0, 1] values
+        """
+        if not values:
+            return {}
+        
+        # Sort ALL values (not just unique ones) for proper ECDF
+        sorted_values = sorted(values)
+        n = len(sorted_values)
+        
+        # Build quantile map using empirical CDF with multiplicities
+        quantile_map = {}
+        
+        for value in sorted_values:
+            if value not in quantile_map:
+                # Count how many values are <= this value
+                count_leq = sum(1 for v in sorted_values if v <= value)
+                # Empirical CDF: F(x) = #{v <= x} / N
+                quantile = count_leq / n
+                # round key to 4 decimal places to avoid floating point precision issues
+                quantile_map[round(value, 4)] = quantile
+        
+        return quantile_map
+    
+
+    def compute_v25_final_score(self, semantic_similarity: float, song_key: Tuple[str, str]) -> Tuple[float, Dict]:
+        """
+        Compute final V2.5 score for a track.
+        
+        Args:
+            semantic_similarity: Query-track semantic similarity [0, 1]
+            song_key: (song, artist) tuple
+            
+        Returns:
+            Tuple of (final_score, component_breakdown)
+        """
+        # Semantic relevance (S_t): rescale cosine [-1,1] to [0,1] 
+        S_t = float(np.clip((semantic_similarity + 1) / 2, 0, 1))
+        
+        # Get track statistics if available
+        if song_key in self.track_stats:
+            stats = self.track_stats[song_key]
+            Q_t = stats['Q_t']
+            h_t = stats['h_t']
+        else:
+            # No history for this track
+            Q_t = 0.0
+            h_t = 0.0
+
+        priors = self.track_priors[song_key]
+        P_t = priors['P_t']
+        C_t = priors['C_t']
+        B_t = priors['B_t']
+        C_t_hat = priors['C_t_hat']
+        E_t = priors['E_t']
+        E_t_hat = self.config.kappa_E * E_t
+
+        # Discovery control (V2.5 §6.1)
+        d_prime = self.config.d ** self.config.rho
+        
+        # Predicted utility U_t(d) (V2.5 §6.2)
+        U_t = (1 - d_prime) * (h_t * Q_t) + d_prime * (1 - h_t) * E_t_hat
+        
+        # Final score: λ * S_t + (1-λ) * U_t
+        lambda_val = self.config.lambda_val
+        final_score = lambda_val * S_t + (1 - lambda_val) * U_t
+        
+        # Component breakdown for analysis
+        components = {
+            'semantic_similarity': S_t,
+            'semantic_weighted': lambda_val * S_t,
+            'predicted_utility': U_t,
+            'utility_weighted': (1 - lambda_val) * U_t,
+            'final_score': final_score,
+            'lambda': lambda_val,
+            'discovery_slider': self.config.d,
+            'd_prime': d_prime,
+            # Prior components
+            'P_t': P_t,
+            'C_t': C_t,
+            'B_t': B_t,
+            'C_t_hat': C_t_hat,
+            'E_t': E_t,
+            'E_t_hat': E_t_hat,
+            # History components
+            'Q_t': Q_t,
+            'h_t': h_t,
+            'exploit_term': (1 - d_prime) * (h_t * Q_t),
+            'explore_term': d_prime * (1 - h_t) * E_t_hat
+        }
+        
+        return float(np.clip(final_score, 0, 1)), components
+    
+    
+    ## DEPRECATED
+    def compute_artist_affinity_prior(self, candidate_song_key: Tuple[str, str],
+                                    candidate_embedding: np.ndarray,
+                                    embeddings_data: Dict) -> float:
+        """
+        Compute similarity-conditioned artist affinity B_t (V2.5 §4.2).
+        
+        Args:
+            candidate_song_key: (song, artist) for candidate
+            candidate_embedding: Unit-norm embedding for candidate
+            embeddings_data: Dictionary mapping (song, artist) -> embedding
+            
+        Returns:
+            B_t: Artist affinity prior score [0, 1]
+        """
+        if not self.track_stats or not embeddings_data:
+            return 0.5
+        
+        candidate_artist = candidate_song_key[1]
+        
+        # Find same-artist tracks in history
+        same_artist_tracks = []
+        for song_key, stats in self.track_stats.items():
+            if song_key[1] == candidate_artist and song_key in embeddings_data:
+                same_artist_tracks.append({
+                    'embedding': embeddings_data[song_key],
+                    'n_t': stats['n_t'],
+                    'A_t': stats['A_t']
+                })
+        
+        if not same_artist_tracks:
+            # No same-artist history
+            return 0.5
+        
+        # Compute similarity-weighted affinity (V2.5 §4.2)
+        numerator = 0.0
+        denominator = self.config.epsilon
+        
+        for track in same_artist_tracks:
+            # Cosine similarity (both embeddings are unit-norm)
+            similarity = np.dot(candidate_embedding, track['embedding'])
+            # Only positive similarities, raised to power phi
+            similarity_weight = max(0, similarity) ** self.config.phi
+            
+            numerator += similarity_weight * track['n_t'] * track['A_t']
+            denominator += similarity_weight * track['n_t']
+        
+        B_t = numerator / denominator if denominator > self.config.epsilon else 0.5
+        return float(np.clip(B_t, 0, 1))
+    
+
+    ## DEPRECATED
     def compute_knn_similarity_prior(self, candidate_embedding: np.ndarray, 
                                    embeddings_data: Dict) -> float:
         """
@@ -391,284 +733,7 @@ class RankingEngine:
         t4 = time.time()
         print(f"Time taken to compute C_t: {(t4 - t3) * 1000} milliseconds")
         return float(np.clip(C_t, 0, 1))
-    
-    
-    def compute_knn_similarities(self, embeddings_data: Dict) -> Dict[Tuple[str, str], float]:
-        """
-        Compute kNN similarity prior C_t for all tracks in embeddings_data (V2.5 §4.1).
-        
-        For each track in embeddings_data, find the k most similar tracks from those with history,
-        then compute a trust-weighted average of their Q_t scores.
-        
-        Args:
-            embeddings_data: Dictionary mapping (song, artist) -> embedding for all tracks
-            
-        Returns:
-            Tuple of (knn_similarities_dict, max_terms_dict) for debugging
-        """
-        if not self.track_stats or not embeddings_data:
-            return {}, {}
-        
-        # Build lists: all tracks vs historical tracks
-        all_embeddings = []
-        all_track_keys = []
-        historical_embeddings = []
-        historical_track_keys = []
-        trust_scores = []
-        
-        t0 = time.time()
-        for song_key in embeddings_data:
-            all_embeddings.append(embeddings_data[song_key])
-            all_track_keys.append(song_key)
-            
-            # Only tracks with history can be neighbors
-            if song_key in self.track_stats:
-                historical_embeddings.append(embeddings_data[song_key])
-                historical_track_keys.append(song_key)
-                trust_scores.append(self.track_stats[song_key]['Q_t'])
-        
-        t1 = time.time()
-        print(f"Time taken to get embeddings: {(t1 - t0) * 1000} milliseconds")
-        print(f"All tracks: {len(all_embeddings)}, Historical tracks: {len(historical_embeddings)}")
-        
-        # Use a more reasonable minimum threshold
-        k_min = max(3, min(10, self.config.k_neighbors // 5))
-        if len(historical_embeddings) < k_min:
-            print(f"Not enough historical tracks ({len(historical_embeddings)}) for meaningful kNN")
-            return {}, {}
-        
-        t2 = time.time()
-        all_embeddings = np.array(all_embeddings)  # shape: (n_all, embed_dim)
-        historical_embeddings = np.array(historical_embeddings)  # shape: (n_hist, embed_dim)
-        trust_scores = np.array(trust_scores)  # shape: (n_hist,)
-        
-        n_all_tracks = len(all_embeddings)
-        n_historical_tracks = len(historical_embeddings)
-        
-        # Compute similarity matrix: all_tracks x historical_tracks
-        # similarity_matrix[i, j] = cosine similarity between all_track[i] and historical_track[j]
-        similarity_matrix = np.matmul(all_embeddings, historical_embeddings.T)  # shape: (n_all, n_hist)
-        
-        # Handle self-similarities: for tracks that are also historical, 
-        # we need to exclude their similarity to themselves
-        # Create efficient lookup: historical_key -> historical_index
-        hist_key_to_idx = {key: idx for idx, key in enumerate(historical_track_keys)}
-        
-        # Find matches and exclude self-similarities
-        all_to_hist_mapping = {}
-        for i, all_key in enumerate(all_track_keys):
-            if all_key in hist_key_to_idx:
-                j = hist_key_to_idx[all_key]
-                all_to_hist_mapping[i] = j
-                similarity_matrix[i, j] = -np.inf  # Exclude self-similarity
-        
-        # Get the indices corresponding to the top-k similarities for each track
-        k = min(self.config.k_neighbors, n_historical_tracks)
-        # For tracks that are also historical, we need k+1 since we excluded self, then take top k
-        for all_idx in all_to_hist_mapping:
-            k = min(self.config.k_neighbors, n_historical_tracks - 1)  # -1 for self exclusion
-            break
-        else:
-            k = min(self.config.k_neighbors, n_historical_tracks)  # No self exclusion needed
-        
-        top_k_indices = np.argpartition(similarity_matrix, -k, axis=1)[:, -k:]  # shape: (n_all, k)
-        
-        # Get the top-k similarities and trust scores for each track using advanced indexing
-        row_indices = np.arange(n_all_tracks)[:, np.newaxis]  # shape: (n_all, 1)
-        top_k_similarities = similarity_matrix[row_indices, top_k_indices]  # shape: (n_all, k)
-        top_k_trust = trust_scores[top_k_indices]  # shape: (n_all, k)
-        
-        t3 = time.time()
-        print(f"Time taken to compute similarities: {(t3 - t2) * 1000} milliseconds")
-        
-        # Compute softmax weights (V2.5 §4.1)
-        exp_scores = np.exp(self.config.sigma * top_k_similarities)  # shape: (n_all, k)
-        softmax_weights = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)  # shape: (n_all, k)
-        
-        # Trust-weighted average
-        C_t_terms = softmax_weights * top_k_trust  # shape: (n_all, k)
-        C_t_values = np.clip(np.sum(C_t_terms, axis=1), 0, 1)  # shape: (n_all,)
-        # Get max term for debugging purposes
-        # max_terms = np.max(C_t_terms, axis=1)  # shape: (n_all,)
-        
-        t4 = time.time()
-        print(f"Time taken to compute C_t: {(t4 - t3) * 1000} milliseconds")
-        
-        # Build dictionaries mapping (song, artist) -> values
-        knn_similarities = {song_key: float(C_t_val) for song_key, C_t_val in zip(all_track_keys, C_t_values)}
-        # max_terms_dict = {song_key: float(max_term) for song_key, max_term in zip(all_track_keys, max_terms)}
-        
-        self.min_C_t = min(C_t_values)
-        self.max_C_t = max(C_t_values)
-        self.knn_similarities = knn_similarities
-        return knn_similarities
-    
-    
-    def compute_artist_affinity_prior(self, candidate_song_key: Tuple[str, str],
-                                    candidate_embedding: np.ndarray,
-                                    embeddings_data: Dict) -> float:
-        """
-        Compute similarity-conditioned artist affinity B_t (V2.5 §4.2).
-        
-        Args:
-            candidate_song_key: (song, artist) for candidate
-            candidate_embedding: Unit-norm embedding for candidate
-            embeddings_data: Dictionary mapping (song, artist) -> embedding
-            
-        Returns:
-            B_t: Artist affinity prior score [0, 1]
-        """
-        if not self.track_stats or not embeddings_data:
-            return 0.5
-        
-        candidate_artist = candidate_song_key[1]
-        
-        # Find same-artist tracks in history
-        same_artist_tracks = []
-        for song_key, stats in self.track_stats.items():
-            if song_key[1] == candidate_artist and song_key in embeddings_data:
-                same_artist_tracks.append({
-                    'embedding': embeddings_data[song_key],
-                    'n_t': stats['n_t'],
-                    'A_t': stats['A_t']
-                })
-        
-        if not same_artist_tracks:
-            # No same-artist history
-            return 0.5
-        
-        # Compute similarity-weighted affinity (V2.5 §4.2)
-        numerator = 0.0
-        denominator = self.config.epsilon
-        
-        for track in same_artist_tracks:
-            # Cosine similarity (both embeddings are unit-norm)
-            similarity = np.dot(candidate_embedding, track['embedding'])
-            # Only positive similarities, raised to power phi
-            similarity_weight = max(0, similarity) ** self.config.phi
-            
-            numerator += similarity_weight * track['n_t'] * track['A_t']
-            denominator += similarity_weight * track['n_t']
-        
-        B_t = numerator / denominator if denominator > self.config.epsilon else 0.5
-        return float(np.clip(B_t, 0, 1))
-    
 
-    @staticmethod
-    def compute_quantile_normalization(values: List[float]) -> Dict[float, float]:
-        """
-        Compute empirical CDF for quantile normalization (V2.5 §5).
-        
-        Uses all values (including duplicates) to compute true empirical CDF:
-        F(x) = #{v <= x} / N
-        
-        Args:
-            values: List of raw values to normalize
-            
-        Returns:
-            Dictionary mapping raw values to quantile-normalized [0, 1] values
-        """
-        if not values:
-            return {}
-        
-        # Sort ALL values (not just unique ones) for proper ECDF
-        sorted_values = sorted(values)
-        n = len(sorted_values)
-        
-        # Build quantile map using empirical CDF with multiplicities
-        quantile_map = {}
-        
-        for value in sorted_values:
-            if value not in quantile_map:
-                # Count how many values are <= this value
-                count_leq = sum(1 for v in sorted_values if v <= value)
-                # Empirical CDF: F(x) = #{v <= x} / N
-                quantile = count_leq / n
-                # round key to 4 decimal places to avoid floating point precision issues
-                quantile_map[round(value, 4)] = quantile
-        
-        return quantile_map
-    
-
-    def compute_v25_final_score(self, semantic_similarity: float, song_key: Tuple[str, str], song_metadata: Dict) -> Tuple[float, Dict]:
-        """
-        Compute final V2.5 score for a track.
-        
-        Args:
-            semantic_similarity: Query-track semantic similarity [0, 1]
-            song_key: (song, artist) tuple
-            song_metadata: Song metadata dict  
-            
-        Returns:
-            Tuple of (final_score, component_breakdown)
-        """
-        # Semantic relevance (S_t): rescale cosine [-1,1] to [0,1] 
-        S_t = float(np.clip((semantic_similarity + 1) / 2, 0, 1))
-        
-        # Compute three priors (V2.5 §4)
-        # P_t: Popularity prior
-        popularity = song_metadata.get('metadata', {}).get('popularity', 50)
-        P_t = np.clip(popularity / 100.0, 0.0, 1.0)
-        
-        # C_t: kNN similarity prior
-        C_t = self.knn_similarities.get(song_key)
-        # C_t = self.compute_knn_similarity_prior(song_embedding, embeddings_data)
-        
-        # B_t: Artist affinity prior
-        B_t = self.artist_affinities.get(song_key[1], 0.0)
-        # B_t = self.compute_artist_affinity_prior(song_key, song_embedding, embeddings_data)
-
-        C_t_hat = (C_t - self.min_C_t) * (1 / (self.max_C_t - self.min_C_t))
-        
-        # Combined prior utility E_t
-        E_t = (self.config.beta_p * P_t + 
-               self.config.beta_s * C_t_hat + 
-               self.config.beta_a * B_t) / self.config.lambda_E
-        
-        # Get track statistics if available
-        if song_key in self.track_stats:
-            stats = self.track_stats[song_key]
-            Q_t = stats['Q_t']
-            h_t = stats['h_t']
-        else:
-            # No history for this track
-            Q_t = 0.0
-            h_t = 0.0
-        
-        # Discovery control (V2.5 §6.1)
-        d_prime = self.config.d ** self.config.rho
-        
-        # Predicted utility U_t(d) (V2.5 §6.2)
-        U_t = (1 - d_prime) * (h_t * Q_t) + d_prime * (1 - h_t) * E_t
-        
-        # Final score: λ * S_t + (1-λ) * U_t
-        lambda_val = self.config.lambda_val
-        final_score = lambda_val * S_t + (1 - lambda_val) * U_t
-        
-        # Component breakdown for analysis
-        components = {
-            'semantic_similarity': S_t,
-            'semantic_weighted': lambda_val * S_t,
-            'predicted_utility': U_t,
-            'utility_weighted': (1 - lambda_val) * U_t,
-            'final_score': final_score,
-            'lambda': lambda_val,
-            'discovery_slider': self.config.d,
-            'd_prime': d_prime,
-            # Prior components
-            'P_t': P_t,
-            'C_t': C_t,
-            'B_t': B_t,
-            'C_t_hat': C_t_hat,
-            'E_t': E_t,
-            # History components
-            'Q_t': Q_t,
-            'h_t': h_t,
-            'exploit_term': (1 - d_prime) * (h_t * Q_t),
-            'explore_term': d_prime * (1 - h_t) * E_t
-        }
-        
-        return float(np.clip(final_score, 0, 1)), components
 
 
 def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dict], 
@@ -696,8 +761,10 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
 
         # Compute kNN similarities
         engine.compute_knn_similarities(embeddings_data)
-        
-        # V2.5: Reference centroid not needed (uses kNN and artist priors instead)
+
+        # Compute track priors
+        engine.compute_track_priors(songs_metadata, embeddings_data)
+
     else:
         logger.warning("No history data provided - engine will use prior-only scoring")
     
