@@ -26,12 +26,6 @@ class RankingConfig:
         K: float = 5.0,             # Confidence ramp parameter
         lambda_val: float = 0.5,    # Relevance vs utility balance (λ in formula)
         
-        # Discovery slider (user-controlled, default neutral)
-        d: float = 0.5,             # Discovery slider 0=familiar, 1=new
-        H_d: float = 360.0,         # Discovery familiarity half-life in days
-        K_d: float = 8.0,           # Discovery familiarity scaling parameter
-        kappa_d: float = 1.386,     # Discovery strength parameter (ln(4))
-        
         # V2.5: Curved signed evidence parameters
         gamma_s: float = 1.2,       # Completion curvature for success
         gamma_f: float = 1.4,       # Skip curvature for failures
@@ -84,10 +78,6 @@ class RankingConfig:
             self.H_E = H_E
             self.K = K
             self.lambda_val = lambda_val
-            self.d = d
-            self.H_d = H_d
-            self.K_d = K_d
-            self.kappa_d = kappa_d
             self.gamma_s = gamma_s
             self.gamma_f = gamma_f
             self.kappa = kappa
@@ -125,10 +115,6 @@ class RankingConfig:
             'H_E': self.H_E,
             'K': self.K,
             'lambda': self.lambda_val,
-            'd': self.d,
-            'H_d': self.H_d,
-            'K_d': self.K_d,
-            'kappa_d': self.kappa_d,
             'gamma_s': self.gamma_s,
             'gamma_f': self.gamma_f,
             'kappa': self.kappa,
@@ -294,7 +280,6 @@ class RankingEngine:
             F_t = group['f_ti'].sum()  # Total failure evidence  
             n_t = S_t + F_t           # Total evidence
             S_t_a = group['s_ti_a'].sum()  # Total success evidence (artist affinity)
-            S_t_d = group['s_ti_d'].sum()  # Total success evidence (discovery familiarity)
             R_t = group['c_ti'].sum()
             R_t_s = R_t / (R_t + self.config.K_fam)
             z_t = group['w_c_ti'].sum()
@@ -326,9 +311,6 @@ class RankingEngine:
             R_t_rec = (n_t / (n_t + self.config.K_recent))
             h_t = 1 - ((1 - L_t) * ((1 - R_t_rec) ** self.config.psi))
             
-            # Discovery familiarity (long horizon)
-            phi_t = S_t_d / (S_t_d + self.config.K_d)
-
             # Final expoitation quality score
             Q_t = s_t * A_t * m_f_t
             
@@ -337,7 +319,6 @@ class RankingEngine:
                 'F_t': float(F_t),
                 'n_t': float(n_t),
                 'S_t_a': float(S_t_a),
-                'S_t_d': float(S_t_d),
                 'R_t': float(R_t),
                 'R_t_s': float(R_t_s),
                 'z_t': float(z_t),
@@ -347,7 +328,6 @@ class RankingEngine:
                 'f_t': float(np.clip(f_t, 0, 1)),
                 'm_f_t': float(np.clip(m_f_t, 0, 1)),
                 'h_t': float(np.clip(h_t, 0, 1)),
-                'phi_t': float(np.clip(phi_t, 0, 1)),
                 'Q_t': float(np.clip(Q_t, 0, 1)),
                 'play_count': num_plays,
                 'num_completions': num_completions,
@@ -626,12 +606,10 @@ class RankingEngine:
             stats = self.track_stats[song_key]
             Q_t = stats['Q_t']
             h_t = stats['h_t']
-            phi_t = stats['phi_t']
         else:
             # No history for this track - low familiarity
             Q_t = 0.0
             h_t = 0.0
-            phi_t = 0.0
 
         priors = self.track_priors[song_key]
         P_t = priors['P_t']
@@ -644,30 +622,17 @@ class RankingEngine:
         # Core utility (V2.5 revised): keep principled Q_t vs E_t balance
         U_t = h_t * Q_t + (1 - h_t) * E_t_hat
         
-        # Discovery tilt (exponential familiarity-based scaling)
-        # s_d = exp(kappa_d * (d - 0.5) * (1 - 2*phi_t))
-        discovery_bias = (self.config.d - 0.5) * (1 - 2 * phi_t)
-        s_d = np.exp(self.config.kappa_d * discovery_bias)
-        
-        # Discovery-adjusted utility
-        U_t_discovery = s_d * U_t
-        
         # Final score: λ * S_t + (1-λ) * U_t^(d)
         lambda_val = self.config.lambda_val
-        final_score = lambda_val * S_t + (1 - lambda_val) * U_t_discovery
+        final_score = lambda_val * S_t + (1 - lambda_val) * U_t
         
         # Component breakdown for analysis
         components = {
             'semantic_similarity': S_t,
             'semantic_weighted': lambda_val * S_t,
             'core_utility': U_t,
-            'discovery_multiplier': s_d,
-            'discovery_adjusted_utility': U_t_discovery,
-            'utility_weighted': (1 - lambda_val) * U_t_discovery,
             'final_score': final_score,
             'lambda': lambda_val,
-            'discovery_slider': self.config.d,
-            'discovery_bias': discovery_bias,
             # Prior components
             'P_t': P_t,
             'C_t': C_t,
@@ -678,7 +643,6 @@ class RankingEngine:
             # History components
             'Q_t': Q_t,
             'h_t': h_t,
-            'phi_t': phi_t,
             'exploit_term': h_t * Q_t,
             'explore_term': (1 - h_t) * E_t_hat
         }
