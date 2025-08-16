@@ -784,62 +784,10 @@ class SemanticSearchApp {
     }
     
     displayRankingWeights(rankingWeights) {
+        // Hide the old ranking formula components section - we use the new V2.5 ranking system now
         let rankingWeightsContainer = document.getElementById('ranking-weights-container');
-        
-        // Create container if it doesn't exist
-        if (!rankingWeightsContainer) {
-            rankingWeightsContainer = document.createElement('div');
-            rankingWeightsContainer.id = 'ranking-weights-container';
-            rankingWeightsContainer.className = 'ranking-weights-container';
-            
-            // Insert after results header
-            const resultsHeader = document.getElementById('results-header');
-            resultsHeader.parentNode.insertBefore(rankingWeightsContainer, resultsHeader.nextSibling);
-        }
-        
-        // Clear existing content
-        rankingWeightsContainer.innerHTML = '';
-        
-        if (!rankingWeights) {
+        if (rankingWeightsContainer) {
             rankingWeightsContainer.style.display = 'none';
-            return;
-        }
-        
-        // Create ranking weights display with edit functionality
-        const weightsHTML = `
-            <div class="ranking-weights-header">
-                <h4>Ranking Formula Components</h4>
-                <button id="edit-weights-btn" class="edit-weights-btn">Edit</button>
-                ${!rankingWeights.has_history ? '<span class="no-history-note">* No history data - using exploration bonus instead</span>' : ''}
-            </div>
-            <div class="ranking-weights-grid">
-                <div class="weight-item">
-                    <span class="weight-label">Semantic Similarity</span>
-                    <span class="weight-value" data-weight="w_sem">${(rankingWeights.w_sem * 100).toFixed(1)}%</span>
-                </div>
-                <div class="weight-item ${rankingWeights.has_history ? '' : 'no-history'}">
-                    <span class="weight-label">Personal Interest</span>
-                    <span class="weight-value" data-weight="w_int">${(rankingWeights.w_int * 100).toFixed(1)}%</span>
-                    ${!rankingWeights.has_history ? '<span class="no-history-indicator">*</span>' : ''}
-                </div>
-                <div class="weight-item">
-                    <span class="weight-label">Exploration</span>
-                    <span class="weight-value" data-weight="w_ucb">${(rankingWeights.w_ucb * 100).toFixed(1)}%</span>
-                </div>
-                <div class="weight-item">
-                    <span class="weight-label">Popularity</span>
-                    <span class="weight-value" data-weight="w_pop">${(rankingWeights.w_pop * 100).toFixed(1)}%</span>
-                </div>
-            </div>
-        `;
-        
-        rankingWeightsContainer.innerHTML = weightsHTML;
-        rankingWeightsContainer.style.display = 'block';
-        
-        // Add event listener for edit button
-        const editBtn = document.getElementById('edit-weights-btn');
-        if (editBtn) {
-            editBtn.addEventListener('click', () => this.toggleWeightsEditing());
         }
     }
     
@@ -1070,41 +1018,6 @@ class SemanticSearchApp {
     createSongCardHTML(song, options = {}) {
         const { rank, similarity, isQuery = false, fieldValue = null, embedType = null, isSelected = false } = options;
         
-        let metadataHTML = '';
-        let scoringDetailsHTML = '';
-        
-        if (rank && similarity !== undefined) {
-            // Main score display - show final ranking score without percentage
-            const finalScore = song.final_score !== undefined ? song.final_score : similarity;
-            metadataHTML = `
-                <div class="card-metadata">
-                    <span class="card-rank">#${rank}</span>
-                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}</span>
-                </div>
-            `;
-            
-            // Show interpretable score breakdown (sim + aff + exp = final score)
-            if (song.scoring_components) {
-                const components = song.scoring_components;
-                
-                scoringDetailsHTML = `
-                    <div class="scoring-details">
-                        <div class="scoring-component">
-                            <span class="component-label">Sim:</span>
-                            <span class="component-value">${(components.weighted_semantic * 100).toFixed(1)}</span>
-                        </div>
-                        <div class="scoring-component">
-                            <span class="component-label">Aff:</span>
-                            <span class="component-value">${(components.weighted_quality * 100).toFixed(1)}</span>
-                        </div>
-                        <div class="scoring-component">
-                            <span class="component-label">Exp:</span>
-                            <span class="component-value">${(components.weighted_exploration * 100).toFixed(1)}</span>
-                        </div>
-                    </div>
-                `;
-            }
-        }
         
         let tagsHTML = '';
         let playButtonHTML = '';
@@ -1177,12 +1090,36 @@ class SemanticSearchApp {
         }
         
         let footerHTML = '';
-        if (rank && similarity !== undefined) {
+        if (rank && (similarity !== undefined || song.final_score !== undefined)) {
             const finalScore = song.final_score !== undefined ? song.final_score : similarity;
+            
+            // Build scoring components for the middle section (only if we have meaningful breakdown)
+            let scoringComponentsHTML = '';
+            if (song.scoring_components && song.scoring_components.weighted_semantic !== undefined) {
+                const components = song.scoring_components;
+                scoringComponentsHTML = `
+                    <div class="scoring-components">
+                        <span class="scoring-component">
+                            <span class="component-label">Sim:</span>
+                            <span class="component-value">${(components.weighted_semantic * 100).toFixed(1)}</span>
+                        </span>
+                        <span class="scoring-component">
+                            <span class="component-label">Aff:</span>
+                            <span class="component-value">${(components.weighted_quality * 100).toFixed(1)}</span>
+                        </span>
+                        <span class="scoring-component">
+                            <span class="component-label">Exp:</span>
+                            <span class="component-value">${(components.weighted_exploration * 100).toFixed(1)}</span>
+                        </span>
+                    </div>
+                `;
+            }
+            
             footerHTML = `
                 <div class="card-footer">
                     <span class="card-rank">#${rank}</span>
-                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}</span>
+                    ${scoringComponentsHTML}
+                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}%</span>
                 </div>
             `;
         }
@@ -1198,7 +1135,6 @@ class SemanticSearchApp {
                 </div>
             </div>
             ${tagsHTML}
-            ${scoringDetailsHTML}
             ${accordionHTML}
             ${footerHTML}
         `;
@@ -1779,9 +1715,9 @@ class SemanticSearchApp {
         const topArtistsFilter = document.getElementById('top-artists-filter');
         const filterEnabled = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
-        console.log(`🔍 Applying client-side filter - enabled: ${filterEnabled}, top artists count: ${this.topArtists.length}`);
+        console.log(`🔍 Applying client-side filter - enabled: ${filterEnabled}, top artists count: ${this.topArtists ? this.topArtists.length : 0}`);
         
-        if (!filterEnabled || !this.topArtistsLoaded || this.topArtists.length === 0) {
+        if (!filterEnabled || !this.topArtistsLoaded || !this.topArtists || this.topArtists.length === 0) {
             // Show all original results
             console.log(`🔍 Showing all ${this.originalSearchResults.length} original results (filter disabled or no top artists)`);
             this.searchResults = this.originalSearchResults; // Reference, not copy
@@ -1791,7 +1727,7 @@ class SemanticSearchApp {
             // No need to auto-select - user's manual selections remain unchanged
         } else {
             // Filter to only show songs by top artists
-            const topArtistsSet = new Set(this.topArtists.map(artist => artist.toLowerCase()));
+            const topArtistsSet = new Set(this.topArtists.map(artist => artist.name.toLowerCase()));
             console.log(`🔍 Filtering with top artists:`, Array.from(topArtistsSet).slice(0, 5), '...');
             
             const filteredOut = [];
@@ -1869,14 +1805,15 @@ class SemanticSearchApp {
             const data = await response.json();
             
             if (response.ok) {
-                this.topArtists = data.top_artists;
+                this.topArtists = data.artists || [];
                 this.topArtistsLoaded = true;
-                if (data.count === 0) {
+                const count = this.topArtists.length;
+                if (count === 0) {
                     topArtistsText.textContent = 'Only My Top Artists (0)';
                     console.log('⚠️ User has no top artists - may have new account or insufficient listening history');
                 } else {
-                    topArtistsText.textContent = `Only My Top Artists (${data.count})`;
-                    console.log(`✅ Loaded ${data.count} top artists`);
+                    topArtistsText.textContent = `Only My Top Artists (${count})`;
+                    console.log(`✅ Loaded ${count} top artists`);
                 }
             } else {
                 console.error('Failed to load top artists:', data.error);

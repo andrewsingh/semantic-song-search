@@ -808,11 +808,24 @@ body {
 
 .card-footer {
     display: flex;
-    justify-content: space-between;
     align-items: center;
     padding-top: 0.5rem;
     font-size: 0.85rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.card-footer .card-rank {
+    flex: 0 0 auto;
+}
+
+.card-footer .scoring-components {
+    flex: 1 1 auto;
+    justify-content: center;
+}
+
+.card-footer .similarity-score {
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 
 .card-rank {
@@ -826,6 +839,30 @@ body {
     padding: 0.25rem 0.5rem;
     font-weight: 500;
     font-size: 1rem;
+}
+
+/* Scoring components in the middle of footer */
+.scoring-components {
+    display: flex;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: #ccc;
+}
+
+.scoring-component {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+.component-label {
+    color: #999;
+    font-weight: 400;
+}
+
+.component-value {
+    color: #eaeaea;
+    font-weight: 500;
 }
 
 .card-tags {

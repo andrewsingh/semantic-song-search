@@ -52,7 +52,8 @@ class RankingConfig:
         
         # V2.5: kNN similarity prior parameters
         k_neighbors: int = 50,      # Number of kNN neighbors
-        sigma: float = 10.0,        # Softmax temperature for kNN weights        
+        sigma: float = 10.0,        # Softmax temperature for kNN weights
+        knn_embed_type: str = 'full_profile',  # Embedding type for C_t computation
         
         # V2.5: Prior combination weights
         beta_p: float = 0.4,        # Prior weight for popularity
@@ -94,6 +95,7 @@ class RankingConfig:
             self.psi = psi
             self.k_neighbors = k_neighbors
             self.sigma = sigma
+            self.knn_embed_type = knn_embed_type
             self.beta_p = beta_p
             self.beta_s = beta_s
             self.beta_a = beta_a
@@ -131,6 +133,7 @@ class RankingConfig:
             'psi': self.psi,
             'k_neighbors': self.k_neighbors,
             'sigma': self.sigma,
+            'knn_embed_type': self.knn_embed_type,
             'beta_p': self.beta_p,
             'beta_s': self.beta_s,
             'beta_a': self.beta_a,
@@ -150,6 +153,18 @@ class RankingConfig:
         """Update weights from dictionary with validation."""
         for key, value in weights.items():
             try:
+                # Handle string parameters that don't need float conversion
+                if key == 'knn_embed_type':
+                    try:
+                        from . import constants
+                    except ImportError:
+                        import constants
+                    if value in constants.EMBEDDING_TYPES:
+                        self.knn_embed_type = value
+                    else:
+                        logger.warning(f"knn_embed_type must be one of {constants.EMBEDDING_TYPES}, got {value}")
+                    continue
+                
                 float_value = float(value)
                 
                 if key == 'lambda':  # Handle the special case
@@ -335,15 +350,13 @@ class RankingEngine:
         return track_stats
     
 
-    def compute_track_priors(self, songs_metadata: Dict, embeddings_data: Dict) -> None:
+    def compute_track_priors(self, songs_metadata: List[Dict]) -> None:
         """
         Compute per-track priors using V2.5 §4.
         
         Args:
-            song_metadata: Dictionary mapping (song, artist) -> song metadata
-        """ 
-        if not embeddings_data:
-            return {}
+            songs_metadata: List of song metadata dicts
+        """
         
         track_priors = {}
         
@@ -356,7 +369,12 @@ class RankingEngine:
             
             # C_t: kNN similarity prior
             C_t = self.knn_similarities.get(song_key)
-            C_t_hat = np.clip((C_t - self.p05_C_t) * (1 / (self.p95_C_t - self.p05_C_t)), 0, 1)
+            if C_t is not None and self.p05_C_t is not None and self.p95_C_t is not None:
+                C_t_hat = np.clip((C_t - self.p05_C_t) * (1 / (self.p95_C_t - self.p05_C_t)), 0, 1)
+            else:
+                # No kNN data available (no history case)
+                C_t = 0.0
+                C_t_hat = 0.0
             
             # B_t: Artist affinity prior
             B_t = self.artist_affinities.get(song_key[1], 0.0)
@@ -592,6 +610,16 @@ class RankingEngine:
         # Semantic relevance (S_t): rescale cosine [-1,1] to [0,1] 
         S_t = float(np.clip((semantic_similarity + 1) / 2, 0, 1))
         
+        # No-history case: return pure semantic similarity (like V1)
+        if not self.has_history:
+            components = {
+                'semantic_similarity': S_t,
+                'final_score': S_t,
+                'lambda': 1.0,
+                # No score breakdown components for no-history case
+            }
+            return float(np.clip(S_t, 0, 1)), components
+        
         # Get track statistics if available
         if song_key in self.track_stats:
             stats = self.track_stats[song_key]
@@ -649,14 +677,14 @@ class RankingEngine:
     
 
 def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dict], 
-                       embeddings_data: Dict = None, config: RankingConfig = None) -> RankingEngine:
+                       embedding_lookups: Dict = None, config: RankingConfig = None) -> RankingEngine:
     """
     Initialize a complete ranking engine with data.
     
     Args:
         history_df: Listening history DataFrame
         songs_metadata: List of song metadata dicts
-        embeddings_data: Dictionary mapping song_keys to embeddings (unused in V2.5)
+        embedding_lookups: Dictionary mapping embed_type -> {song_key -> embedding}
         config: Optional custom configuration
         
     Returns:
@@ -671,11 +699,16 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
         # Compute artist affinities
         engine.compute_artist_affinities()
 
-        # Compute kNN similarities
-        engine.compute_knn_similarities(embeddings_data)
+        # Compute kNN similarities using only the configured embedding type
+        if embedding_lookups and engine.config.knn_embed_type in embedding_lookups:
+            knn_embeddings = embedding_lookups[engine.config.knn_embed_type]
+            engine.compute_knn_similarities(knn_embeddings)
+            logger.info(f"Using '{engine.config.knn_embed_type}' embeddings for kNN similarities")
+        else:
+            logger.warning(f"kNN embedding type '{engine.config.knn_embed_type}' not available, skipping kNN similarities")
 
         # Compute track priors
-        engine.compute_track_priors(songs_metadata, embeddings_data)
+        engine.compute_track_priors(songs_metadata)
 
     else:
         logger.warning("No history data provided - engine will use prior-only scoring")

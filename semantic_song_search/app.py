@@ -143,7 +143,7 @@ class MusicSearchEngine:
                 if len(self.history_df) > 0:
                     # Initialize ranking engine with history
                     self.ranking_engine = ranking.initialize_ranking_engine(
-                        self.history_df, self.songs, self.embedding_lookup, config
+                        self.history_df, self.songs, self.embedding_lookups, config
                     )
                     self.has_history = True
                     logger.info(f"Initialized ranking with {len(self.history_df)} history entries")
@@ -155,6 +155,8 @@ class MusicSearchEngine:
         # Initialize without history if needed
         if self.ranking_engine is None:
             self.ranking_engine = ranking.RankingEngine(config)
+            # Even without history, we need track priors for scoring
+            self.ranking_engine.compute_track_priors(self.songs)
             logger.info("Initialized ranking engine without history")
     
     def get_text_embedding(self, text: str) -> np.ndarray:
@@ -988,7 +990,7 @@ def top_artists():
         })
         
         return jsonify({
-            'artists': artists_list[:50],  # Limit to top 50
+            'artists': artists_list,  # Return all deduplicated artists (no artificial limit)
             'time_ranges': time_ranges
         })
         
