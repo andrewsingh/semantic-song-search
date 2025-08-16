@@ -49,6 +49,12 @@ class SemanticSearchApp {
         this.autoPlayCheckInterval = null;  // Backup auto-play checker
         this.lastProcessedTrackEnd = null;  // Prevent duplicate track-end processing
         
+        // Personalization controls state
+        this.currentLambdaVal = 0.5;
+        this.currentFamiliarityMin = 0.0;
+        this.currentFamiliarityMax = 1.0;
+        this.hasPersonalizationHistory = false;
+        
         // Analytics tracking
         this.sessionStartTime = Date.now();
         this.searchCount = 0;
@@ -232,6 +238,36 @@ class SemanticSearchApp {
                 });
             }
         });
+        
+        // Personalization controls
+        const lambdaSlider = document.getElementById('lambda-slider');
+        const familiarityMinSlider = document.getElementById('familiarity-min');
+        const familiarityMaxSlider = document.getElementById('familiarity-max');
+        const rerunSearchBtn = document.getElementById('rerun-search-btn');
+        
+        if (lambdaSlider) {
+            lambdaSlider.addEventListener('input', (e) => {
+                this.handleLambdaChange(parseFloat(e.target.value));
+            });
+        }
+        
+        if (familiarityMinSlider) {
+            familiarityMinSlider.addEventListener('input', (e) => {
+                this.handleFamiliarityMinChange(parseFloat(e.target.value));
+            });
+        }
+        
+        if (familiarityMaxSlider) {
+            familiarityMaxSlider.addEventListener('input', (e) => {
+                this.handleFamiliarityMaxChange(parseFloat(e.target.value));
+            });
+        }
+        
+        if (rerunSearchBtn) {
+            rerunSearchBtn.addEventListener('click', () => {
+                this.rerunSearchWithNewParameters();
+            });
+        }
 
     }
     
@@ -445,7 +481,11 @@ class SemanticSearchApp {
                 embed_type: embedType,
                 query: query,
                 k: 20,
-                offset: 0
+                offset: 0,
+                // Personalization parameters
+                lambda_val: this.activeLambdaVal || this.currentLambdaVal || 0.5,
+                familiarity_min: this.activeFamiliarityMin || this.currentFamiliarityMin || 0.0,
+                familiarity_max: this.activeFamiliarityMax || this.currentFamiliarityMax || 1.0
                 // Note: No longer sending filter_top_artists since we do client-side filtering
             };
             
@@ -628,6 +668,10 @@ class SemanticSearchApp {
         // Display ranking weights if available (only for new searches)
         if (!isLoadMore) {
             this.displayRankingWeights(data.ranking_weights);
+            
+            // Show/hide personalization controls based on history availability
+            const hasHistory = data.ranking_weights && data.ranking_weights.has_history;
+            this.showPersonalizationControls(hasHistory);
         }
         
         // Clear results grid only for new searches, not for load more
@@ -1039,33 +1083,23 @@ class SemanticSearchApp {
                 </div>
             `;
             
-            // Detailed scoring components (if available) - show raw values without percentages
+            // Show interpretable score breakdown (sim + aff + exp = final score)
             if (song.scoring_components) {
                 const components = song.scoring_components;
-                const hasHistory = components.has_history;
                 
                 scoringDetailsHTML = `
                     <div class="scoring-details">
                         <div class="scoring-component">
-                            <span class="component-label">Sem:</span>
-                            <span class="component-value">${(components.semantic_weighted * 100).toFixed(1)}&nbsp;</span>
-                            <span class="component-raw">(${(components.semantic_similarity * 100).toFixed(1)})</span>
-                        </div>
-                        <div class="scoring-component ${hasHistory ? '' : 'no-history'}">
-                            <span class="component-label">Per:</span>
-                            <span class="component-value">${(components.interest_weighted * 100).toFixed(1)}&nbsp;</span>
-                            <span class="component-raw">(${(components.personal_interest * 100).toFixed(1)})</span>
-                            ${!hasHistory ? '<span class="no-history-indicator">*</span>' : ''}
+                            <span class="component-label">Sim:</span>
+                            <span class="component-value">${(components.weighted_semantic * 100).toFixed(1)}</span>
                         </div>
                         <div class="scoring-component">
-                            <span class="component-label">Expl:</span>
-                            <span class="component-value">${(components.exploration_weighted * 100).toFixed(1)}&nbsp;</span>
-                            <span class="component-raw">(${(components.exploration_bonus * 100).toFixed(1)})</span>
+                            <span class="component-label">Aff:</span>
+                            <span class="component-value">${(components.weighted_quality * 100).toFixed(1)}</span>
                         </div>
                         <div class="scoring-component">
-                            <span class="component-label">Pop:</span>
-                            <span class="component-value">${(components.popularity_weighted * 100).toFixed(1)}&nbsp;</span>
-                            <span class="component-raw">(${(components.popularity_score * 100).toFixed(1)})</span>
+                            <span class="component-label">Exp:</span>
+                            <span class="component-value">${(components.weighted_exploration * 100).toFixed(1)}</span>
                         </div>
                     </div>
                 `;
@@ -2927,6 +2961,105 @@ class SemanticSearchApp {
             if (label) {
                 label.textContent = `Number of Songs (${availableText}):`;
             }
+        }
+    }
+    
+    // Personalization Controls Handlers
+    handleLambdaChange(value) {
+        this.currentLambdaVal = value;
+        document.getElementById('lambda-value').textContent = value.toFixed(2);
+        this.enableRerunButton();
+        
+        // Track lambda change
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Lambda Value Changed', {
+                'lambda_val': value,
+                'has_active_search': this.searchResults.length > 0
+            });
+        }
+    }
+    
+    handleFamiliarityMinChange(value) {
+        const maxSlider = document.getElementById('familiarity-max');
+        const currentMax = parseFloat(maxSlider.value);
+        
+        // Ensure min doesn't exceed max
+        if (value > currentMax) {
+            value = currentMax;
+            document.getElementById('familiarity-min').value = value;
+        }
+        
+        this.currentFamiliarityMin = value;
+        this.updateFamiliarityRangeDisplay();
+        this.enableRerunButton();
+    }
+    
+    handleFamiliarityMaxChange(value) {
+        const minSlider = document.getElementById('familiarity-min');
+        const currentMin = parseFloat(minSlider.value);
+        
+        // Ensure max doesn't go below min
+        if (value < currentMin) {
+            value = currentMin;
+            document.getElementById('familiarity-max').value = value;
+        }
+        
+        this.currentFamiliarityMax = value;
+        this.updateFamiliarityRangeDisplay();
+        this.enableRerunButton();
+    }
+    
+    updateFamiliarityRangeDisplay() {
+        const display = document.getElementById('familiarity-range-display');
+        display.textContent = `${this.currentFamiliarityMin.toFixed(2)} - ${this.currentFamiliarityMax.toFixed(2)}`;
+    }
+    
+    enableRerunButton() {
+        const rerunBtn = document.getElementById('rerun-search-btn');
+        if (rerunBtn) {
+            rerunBtn.disabled = false;
+        }
+    }
+    
+    disableRerunButton() {
+        const rerunBtn = document.getElementById('rerun-search-btn');
+        if (rerunBtn) {
+            rerunBtn.disabled = true;
+        }
+    }
+    
+    async rerunSearchWithNewParameters() {
+        console.log('🔄 Rerunning search with new personalization parameters...');
+        
+        // Save current values as the "active" values
+        this.activeLambdaVal = this.currentLambdaVal;
+        this.activeFamiliarityMin = this.currentFamiliarityMin;
+        this.activeFamiliarityMax = this.currentFamiliarityMax;
+        
+        // Disable the rerun button
+        this.disableRerunButton();
+        
+        // Track parameter update
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Personalization Parameters Updated', {
+                'lambda_val': this.activeLambdaVal,
+                'familiarity_min': this.activeFamiliarityMin,
+                'familiarity_max': this.activeFamiliarityMax,
+                'has_active_search': this.searchResults.length > 0
+            });
+        }
+        
+        // Rerun the current search if we have one
+        if (this.lastSearchRequestData) {
+            await this.handleSearch();
+        }
+    }
+    
+    showPersonalizationControls(hasHistory) {
+        const controls = document.getElementById('personalization-controls');
+        if (controls) {
+            this.hasPersonalizationHistory = hasHistory;
+            controls.style.display = hasHistory ? 'block' : 'none';
         }
     }
 }

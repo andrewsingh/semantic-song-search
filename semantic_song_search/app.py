@@ -162,7 +162,8 @@ class MusicSearchEngine:
         return data_utils.get_openai_embedding(text, normalize=True)
     
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
-                         discovery_slider: float = 0.5, embed_type: str = 'full_profile') -> Tuple[List[Dict], int]:
+                         embed_type: str = 'full_profile', lambda_val: float = 0.5,
+                         familiarity_min: float = 0.0, familiarity_max: float = 1.0) -> Tuple[List[Dict], int]:
         """
         Perform V2.5 similarity search with personalized ranking.
         
@@ -170,14 +171,16 @@ class MusicSearchEngine:
             query_embedding: Normalized query embedding
             k: Number of results to return
             offset: Pagination offset
-            discovery_slider: Discovery slider value (0=familiar, 1=new)
             embed_type: Type of embeddings to use for similarity ('full_profile', 'sound_aspect', etc.)
+            lambda_val: Weight for semantic vs personal utility (0=personal, 1=semantic)
+            familiarity_min: Minimum familiarity score to include (0.0-1.0)
+            familiarity_max: Maximum familiarity score to include (0.0-1.0)
         
         Returns:
             Tuple of (results, total_count)
         """
-        # Update discovery slider in config
-        self.ranking_engine.config.d = discovery_slider
+        # Update lambda_val in config for scoring
+        self.ranking_engine.config.lambda_val = lambda_val
         
         # Get the appropriate embedding lookup for the specified type
         if embed_type not in self.embedding_lookups:
@@ -214,23 +217,32 @@ class MusicSearchEngine:
             return [], 0
         
         
-        # Compute V2.5 final scores
+        # Compute V2.5 final scores with familiarity filtering
         candidate_scores = []
         
         for candidate in candidates_data:
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 
-                candidate['song_key'], 
-                candidate['song'],
+                candidate['song_key']
             )
             
-            candidate_scores.append({
-                'song_idx': candidate['song_idx'],
-                'song_key': candidate['song_key'],
-                'final_score': final_score,
-                'semantic_similarity': candidate['semantic_similarity'],
-                **components  # Include all component scores for debugging
-            })
+            # Get familiarity score for filtering
+            if candidate['song_key'] in self.ranking_engine.track_priors:
+                fam_t = self.ranking_engine.track_priors[candidate['song_key']]['Fam_t']
+            else:
+                # If no history, use a default low familiarity
+                fam_t = 0.0
+            
+            # Apply familiarity filtering
+            if familiarity_min <= fam_t <= familiarity_max:
+                candidate_scores.append({
+                    'song_idx': candidate['song_idx'],
+                    'song_key': candidate['song_key'],
+                    'final_score': final_score,
+                    'semantic_similarity': candidate['semantic_similarity'],
+                    'familiarity': fam_t,
+                    **components  # Include all component scores for debugging
+                })
         
         # Sort by final score
         candidate_scores.sort(key=lambda x: x['final_score'], reverse=True)
@@ -425,8 +437,18 @@ def search():
         limit = int(data.get('k', data.get('limit', 20)))  # Accept both 'k' and 'limit'
         offset = int(data.get('offset', 0))
         song_idx = data.get('song_idx')
-        discovery_slider = float(data.get('discovery_slider', 0.5))  # Discovery parameter
-        discovery_slider = np.clip(discovery_slider, 0.0, 1.0)  # Ensure valid range
+        
+        # Personalization parameters
+        lambda_val = float(data.get('lambda_val', 0.5))  # Semantic vs personal weight
+        lambda_val = np.clip(lambda_val, 0.0, 1.0)  # Ensure valid range
+        familiarity_min = float(data.get('familiarity_min', 0.0))  # Min familiarity
+        familiarity_max = float(data.get('familiarity_max', 1.0))  # Max familiarity
+        familiarity_min = np.clip(familiarity_min, 0.0, 1.0)
+        familiarity_max = np.clip(familiarity_max, 0.0, 1.0)
+        
+        # Ensure min <= max
+        if familiarity_min > familiarity_max:
+            familiarity_min, familiarity_max = familiarity_max, familiarity_min
         
         # Validate pagination parameters
         if limit <= 0 or limit > 100:  # Reasonable limits
@@ -441,7 +463,8 @@ def search():
             # Text-to-song search
             query_embedding = search_engine.get_text_embedding(query_text)
             results, total_count = search_engine.similarity_search(
-                query_embedding, k=limit, offset=offset, discovery_slider=discovery_slider, embed_type=embed_type
+                query_embedding, k=limit, offset=offset, embed_type=embed_type,
+                lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max
             )
         
         elif search_type == 'song':
@@ -460,7 +483,8 @@ def search():
             if song_key in embedding_lookup:
                 query_embedding = embedding_lookup[song_key]
                 results, total_count = search_engine.similarity_search(
-                    query_embedding, k=limit, offset=offset, discovery_slider=discovery_slider, embed_type=embed_type
+                    query_embedding, k=limit, offset=offset, embed_type=embed_type,
+                    lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max
                 )
             else:
                 return jsonify({'error': f'No {embed_type} embedding available for reference song'}), 400
@@ -481,7 +505,9 @@ def search():
             'search_duration_seconds': round(search_duration, 3),
             'is_paginated_search': offset > 0,
             'returned_count': len(results),
-            'discovery_slider': discovery_slider
+            'lambda_val': lambda_val,
+            'familiarity_min': familiarity_min,
+            'familiarity_max': familiarity_max
         }
         
         # Add query-specific information

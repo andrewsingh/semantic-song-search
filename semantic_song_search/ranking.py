@@ -157,16 +157,7 @@ class RankingConfig:
                         self.lambda_val = float_value
                     else:
                         logger.warning(f"Lambda must be in [0,1], got {float_value}")
-                elif key == 'd':  # Discovery slider
-                    if 0.0 <= float_value <= 1.0:
-                        self.d = float_value
-                    else:
-                        logger.warning(f"Discovery slider must be in [0,1], got {float_value}")
-                elif key == 'kappa_d':  # Discovery strength parameter
-                    if float_value > 0:
-                        self.kappa_d = float_value
-                    else:
-                        logger.warning(f"Discovery strength must be positive, got {float_value}")
+                # Note: Discovery slider 'd' and 'kappa_d' parameters removed in favor of familiarity filtering
                 elif hasattr(self, key):
                     # Additional validation for other parameters
                     if key in ['beta_p', 'beta_s', 'beta_a'] and not 0.0 <= float_value <= 1.0:
@@ -241,7 +232,7 @@ class RankingEngine:
         # Recency weights: w_{t,i} = exp(-ln(2) * (tau - t_{t,i}) / H_c)
         df['w_ti'] = np.maximum(np.exp(-np.log(2) * days_ago / self.config.H_c), 1e-10)
         df['w_ti_a'] = np.maximum(np.exp(-np.log(2) * days_ago / self.config.H_E), 1e-10)
-        df['w_ti_d'] = np.maximum(np.exp(-np.log(2) * days_ago / self.config.H_d), 1e-10)
+        # Note: w_ti_d was for discovery familiarity but is no longer used
         
         # Completion ratios: c_{t,i} = min(ms_played / D_t, 1)
         def calculate_completion(row):
@@ -258,7 +249,7 @@ class RankingEngine:
         df['s_ti'] = df['w_ti'] * (df['c_ti'] ** self.config.gamma_s)
         df['f_ti'] = df['w_ti'] * self.config.kappa * ((1 - df['c_ti']) ** self.config.gamma_f)
         df['s_ti_a'] = df['w_ti_a'] * (df['c_ti'] ** self.config.gamma_s)
-        df['s_ti_d'] = df['w_ti_d'] * (df['c_ti'] ** self.config.gamma_s)
+        # Note: s_ti_d was for discovery familiarity but is no longer used
         df['w_c_ti'] = self.logistic((df['c_ti'] - self.config.theta_c) / self.config.tau_c)
 
 
@@ -626,13 +617,20 @@ class RankingEngine:
         lambda_val = self.config.lambda_val
         final_score = lambda_val * S_t + (1 - lambda_val) * U_t
         
+        # Compute the three interpretable score components
+        weighted_semantic = lambda_val * S_t
+        weighted_quality = (1 - lambda_val) * h_t * Q_t
+        weighted_exploration = (1 - lambda_val) * (1 - h_t) * E_t_hat
+        
         # Component breakdown for analysis
         components = {
             'semantic_similarity': S_t,
-            'semantic_weighted': lambda_val * S_t,
-            'core_utility': U_t,
             'final_score': final_score,
             'lambda': lambda_val,
+            # Interpretable score breakdown (these sum to final_score)
+            'weighted_semantic': weighted_semantic,      # "sim"
+            'weighted_quality': weighted_quality,        # "aff" 
+            'weighted_exploration': weighted_exploration, # "exp"
             # Prior components
             'P_t': P_t,
             'C_t': C_t,
@@ -643,8 +641,7 @@ class RankingEngine:
             # History components
             'Q_t': Q_t,
             'h_t': h_t,
-            'exploit_term': h_t * Q_t,
-            'explore_term': (1 - h_t) * E_t_hat
+            'core_utility': U_t
         }
         
         return float(np.clip(final_score, 0, 1)), components

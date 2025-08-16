@@ -52,6 +52,43 @@
                     
                 </div>
                 
+                <!-- Personalization Controls (shown only when history is available) -->
+                <div id="personalization-controls" class="personalization-controls" style="display: none;">
+                    <div class="control-group">
+                        <div class="slider-container">
+                            <label for="lambda-slider" class="slider-label">
+                                Semantic vs Personal: <span id="lambda-value">0.50</span>
+                            </label>
+                            <input type="range" id="lambda-slider" class="control-slider" 
+                                   min="0" max="1" step="0.05" value="0.5">
+                            <div class="slider-labels">
+                                <span>Personal</span>
+                                <span>Semantic</span>
+                            </div>
+                        </div>
+                        
+                        <div class="slider-container">
+                            <label for="familiarity-range" class="slider-label">
+                                Familiarity Range: <span id="familiarity-range-display">0.00 - 1.00</span>
+                            </label>
+                            <div class="range-slider-container">
+                                <input type="range" id="familiarity-min" class="range-slider range-slider-min" 
+                                       min="0" max="1" step="0.01" value="0">
+                                <input type="range" id="familiarity-max" class="range-slider range-slider-max" 
+                                       min="0" max="1" step="0.01" value="1">
+                            </div>
+                            <div class="slider-labels">
+                                <span>Unfamiliar</span>
+                                <span>Familiar</span>
+                            </div>
+                        </div>
+                        
+                        <button id="rerun-search-btn" class="rerun-search-btn" disabled>
+                            Rerun Search
+                        </button>
+                    </div>
+                </div>
+                
                 <!-- Search Bar -->
                 <div class="search-container">
                     <input type="text" id="search-input" class="search-input" 
