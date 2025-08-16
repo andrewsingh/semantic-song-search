@@ -95,10 +95,26 @@ class MusicSearchEngine:
             raw_embedding_indices, self.songs
         )
         
-        # Build embedding lookup (using full_profile embeddings)
-        self.embedding_lookup = data_utils.build_embedding_lookup(
-            self.embedding_indices, self.songs, 'full_profile'
-        )
+        # Build embedding lookups for all available embedding types
+        self.embedding_lookups = {}
+        try:
+            from . import constants
+        except ImportError:
+            import constants
+            
+        for embed_type in constants.EMBEDDING_TYPES:
+            try:
+                embedding_lookup = data_utils.build_embedding_lookup(
+                    self.embedding_indices, self.songs, embed_type
+                )
+                if embedding_lookup:  # Only store if non-empty
+                    self.embedding_lookups[embed_type] = embedding_lookup
+                    logger.info(f"Built {embed_type} lookup with {len(embedding_lookup)} songs")
+            except Exception as e:
+                logger.warning(f"Failed to build {embed_type} lookup: {e}")
+        
+        # Fallback to full_profile for compatibility 
+        self.embedding_lookup = self.embedding_lookups.get('full_profile', {})
         
         # Build text search index
         self._build_text_search_index()
@@ -146,7 +162,7 @@ class MusicSearchEngine:
         return data_utils.get_openai_embedding(text, normalize=True)
     
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
-                         discovery_slider: float = 0.5) -> Tuple[List[Dict], int]:
+                         discovery_slider: float = 0.5, embed_type: str = 'full_profile') -> Tuple[List[Dict], int]:
         """
         Perform V2.5 similarity search with personalized ranking.
         
@@ -155,6 +171,7 @@ class MusicSearchEngine:
             k: Number of results to return
             offset: Pagination offset
             discovery_slider: Discovery slider value (0=familiar, 1=new)
+            embed_type: Type of embeddings to use for similarity ('full_profile', 'sound_aspect', etc.)
         
         Returns:
             Tuple of (results, total_count)
@@ -162,15 +179,25 @@ class MusicSearchEngine:
         # Update discovery slider in config
         self.ranking_engine.config.d = discovery_slider
         
+        # Get the appropriate embedding lookup for the specified type
+        if embed_type not in self.embedding_lookups:
+            logger.warning(f"Embedding type {embed_type} not available, falling back to full_profile")
+            embed_type = 'full_profile'
+        
+        embedding_lookup = self.embedding_lookups.get(embed_type, {})
+        if not embedding_lookup:
+            logger.error(f"No embeddings available for type {embed_type}")
+            return [], 0
+        
         # V2.5: Compute candidates and their priors for quantile normalization
         candidates_data = []
         
         for i, song in enumerate(self.songs):
             song_key = (song['original_song'], song['original_artist'])
             
-            # Get song embedding
-            if song_key in self.embedding_lookup:
-                song_embedding = self.embedding_lookup[song_key]
+            # Get song embedding for the specified type
+            if song_key in embedding_lookup:
+                song_embedding = embedding_lookup[song_key]
                 semantic_similarity = np.dot(query_embedding, song_embedding)
                 
                 candidates_data.append({
@@ -180,7 +207,7 @@ class MusicSearchEngine:
                     'semantic_similarity': semantic_similarity,
                 })
             else:
-                # No embedding available, skip
+                # No embedding available for this type, skip
                 continue
         
         if not candidates_data:
@@ -229,7 +256,7 @@ class MusicSearchEngine:
                 'cover_url': song.get('metadata', {}).get('cover_url'),
                 'album': song.get('metadata', {}).get('album_name', 'Unknown Album'),
                 'spotify_id': song.get('metadata', {}).get('song_id', ''),
-                'field_value': 'N/A',  # V2.5 uses full_profile by default
+                'field_value': self._get_field_value(song_key, embed_type),
                 'genres': song.get('genres', []),
                 'tags': song.get('tags', []),
                 'final_score': result['final_score'],
@@ -244,6 +271,32 @@ class MusicSearchEngine:
             results.append(result_dict)
         
         return results, total_count
+    
+    def _get_field_value(self, song_key: Tuple[str, str], embed_type: str) -> str:
+        """Get field value for a song and embedding type."""
+        try:
+            if embed_type in self.embedding_indices:
+                indices = self.embedding_indices[embed_type]
+                
+                # Find the song in the embedding data
+                for i, song_idx in enumerate(indices['song_indices']):
+                    if song_idx < len(self.songs):
+                        song = self.songs[song_idx]
+                        if (song['original_song'], song['original_artist']) == song_key:
+                            if 'field_values' in indices and i < len(indices['field_values']):
+                                return str(indices['field_values'][i])
+                            break
+            
+            # Fallback based on embedding type
+            if embed_type == 'full_profile':
+                return 'Full profile'
+            elif embed_type in ['sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']:
+                return embed_type.replace('_', ' ').title()
+            else:
+                return 'N/A'
+        except Exception as e:
+            logger.debug(f"Error getting field value for {song_key}, {embed_type}: {e}")
+            return 'N/A'
     
     def search_songs_by_text(self, query: str, limit: int = 10) -> List[Tuple[int, float, str]]:
         """Search for songs using text similarity (for song-to-song search suggestions)."""
@@ -367,8 +420,9 @@ def search():
     try:
         data = request.get_json()
         query_text = data.get('query', '').strip()
-        search_type = data.get('type', 'text')
-        limit = int(data.get('limit', 20))
+        search_type = data.get('search_type', data.get('type', 'text'))  # Accept both for compatibility
+        embed_type = data.get('embed_type', 'full_profile')  # Add embedding type parameter
+        limit = int(data.get('k', data.get('limit', 20)))  # Accept both 'k' and 'limit'
         offset = int(data.get('offset', 0))
         song_idx = data.get('song_idx')
         discovery_slider = float(data.get('discovery_slider', 0.5))  # Discovery parameter
@@ -387,7 +441,7 @@ def search():
             # Text-to-song search
             query_embedding = search_engine.get_text_embedding(query_text)
             results, total_count = search_engine.similarity_search(
-                query_embedding, k=limit, offset=offset, discovery_slider=discovery_slider
+                query_embedding, k=limit, offset=offset, discovery_slider=discovery_slider, embed_type=embed_type
             )
         
         elif search_type == 'song':
@@ -401,13 +455,15 @@ def search():
             reference_song = search_engine.songs[song_idx]
             song_key = (reference_song['original_song'], reference_song['original_artist'])
             
-            if song_key in search_engine.embedding_lookup:
-                query_embedding = search_engine.embedding_lookup[song_key]
+            # Get embedding for the specified type
+            embedding_lookup = search_engine.embedding_lookups.get(embed_type, {})
+            if song_key in embedding_lookup:
+                query_embedding = embedding_lookup[song_key]
                 results, total_count = search_engine.similarity_search(
-                    query_embedding, k=limit, offset=offset, discovery_slider=discovery_slider
+                    query_embedding, k=limit, offset=offset, discovery_slider=discovery_slider, embed_type=embed_type
                 )
             else:
-                return jsonify({'error': 'No embedding available for reference song'}), 400
+                return jsonify({'error': f'No {embed_type} embedding available for reference song'}), 400
         
         else:
             return jsonify({'error': 'Invalid search type'}), 400
@@ -418,7 +474,7 @@ def search():
         # Track successful search with enhanced context
         search_properties = {
             'search_type': search_type,
-            'embed_type': 'full_profile',  # V2 uses full_profile embedding by default
+            'embed_type': embed_type,
             'results_returned': total_count,
             'results_requested': limit,
             'search_offset': offset,
@@ -451,7 +507,7 @@ def search():
         return jsonify({
             'results': results,
             'search_type': search_type,
-            'embed_type': 'full_profile',
+            'embed_type': embed_type,
             'query': query_text,
             'ranking_weights': search_engine.get_ranking_weights(),
             'pagination': {
@@ -467,9 +523,9 @@ def search():
         # Track search errors
         search_duration = (datetime.now() - start_time).total_seconds()
         track_event('Search Error', {
-            'search_type': search_type,
-            'embed_type': 'full_profile',
-            'query_length': len(query_text) if query_text else 0,
+            'search_type': search_type if 'search_type' in locals() else 'unknown',
+            'embed_type': embed_type if 'embed_type' in locals() else 'unknown',
+            'query_length': len(query_text) if 'query_text' in locals() and query_text else 0,
             'error_message': str(e)[:200],
             'search_duration_seconds': round(search_duration, 3)
         })
