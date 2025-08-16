@@ -75,8 +75,9 @@ class RankingConfig:
 
         #V2.6: Track familiarity parameters
         K_fam: float = 5.0,
-        R_min: float = 3.0,
+        R_min: float = 1.0,
         C_fam: float = 0.2,
+        min_plays: int = 4,
         ):       
             """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -115,6 +116,7 @@ class RankingConfig:
             self.K_fam = K_fam
             self.R_min = R_min
             self.C_fam = C_fam
+            self.min_plays = min_plays
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -154,7 +156,8 @@ class RankingConfig:
             'M_A': self.M_A,
             'K_fam': self.K_fam,
             'R_min': self.R_min,
-            'C_fam': self.C_fam
+            'C_fam': self.C_fam,
+            'min_plays': self.min_plays
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -293,7 +296,7 @@ class RankingEngine:
             S_t_a = group['s_ti_a'].sum()  # Total success evidence (artist affinity)
             S_t_d = group['s_ti_d'].sum()  # Total success evidence (discovery familiarity)
             R_t = group['c_ti'].sum()
-            R_t_s = (R_t / (R_t + self.config.K_fam))
+            R_t_s = R_t / (R_t + self.config.K_fam)
             z_t = group['w_c_ti'].sum()
             k_t = self.logistic((z_t - self.config.K_c) / self.config.tau_K)
             
@@ -399,10 +402,11 @@ class RankingEngine:
             if song_key in self.track_stats:
                 R_t = self.track_stats[song_key]['R_t']
                 R_t_s = self.track_stats[song_key]['R_t_s']
-                if R_t >= self.config.R_min:
-                    Fam_t = self.config.C_fam + (R_t_s * (1 - self.config.C_fam))
+                num_plays = self.track_stats[song_key]['play_count']
+                if num_plays < self.config.min_plays and R_t < self.config.R_min:
+                    Fam_t = B_A_fam * self.config.C_fam
                 else:
-                    Fam_t = (B_A_fam * self.config.C_fam) + (R_t_s * (1 - self.config.C_fam))
+                    Fam_t = self.config.C_fam + (R_t_s * (1 - self.config.C_fam))
             else:
                 Fam_t = B_A_fam * self.config.C_fam
 
@@ -414,6 +418,7 @@ class RankingEngine:
                 'B_t': B_t,
                 'C_t_hat': C_t_hat,
                 'E_t': E_t,
+                'B_A_fam': B_A_fam,
                 'Fam_t': Fam_t
             }
         
@@ -423,7 +428,7 @@ class RankingEngine:
 
     def compute_artist_affinities(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         """
-        Compute per-artist affinities (B_a) from track statistics.
+        Compute per-artist affinities (B_A) from track statistics.
         
         Returns:
             Dictionary mapping artist names to affinity scores
