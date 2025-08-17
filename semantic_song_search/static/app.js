@@ -526,7 +526,7 @@ class SemanticSearchApp {
             this.totalResultsCount = data.pagination.total_count;
             this.hasMoreResults = data.pagination.has_more;
             this.isFiltered = false; // Reset since server doesn't filter anymore
-            this.currentSearchData = data; // Store current search data for reranking
+            // Note: Keep original currentSearchData with request parameters for load more
             
             // Apply client-side filter if checkbox is currently checked
             const topArtistsFilter = document.getElementById('top-artists-filter');
@@ -568,8 +568,14 @@ class SemanticSearchApp {
         try {
             const requestData = {
                 ...this.currentSearchData,
-                offset: this.currentOffset
+                offset: this.currentOffset,
+                // Use current personalization parameters (may have changed since original search)
+                lambda_val: this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5,
+                familiarity_min: this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0,
+                familiarity_max: this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0
             };
+            
+            console.log('🔄 Load more request data:', requestData);
             
             const response = await fetch('/api/search', {
                 method: 'POST',
@@ -580,7 +586,17 @@ class SemanticSearchApp {
             });
             
             if (!response.ok) {
-                throw new Error(`Load more failed: ${response.statusText}`);
+                let errorMessage = `Load more failed: ${response.statusText}`;
+                try {
+                    const errorData = await response.json();
+                    console.error('🔄 Load more error response:', errorData);
+                    if (errorData.error) {
+                        errorMessage = `Load more failed: ${errorData.error}`;
+                    }
+                } catch (e) {
+                    console.error('🔄 Failed to parse error response');
+                }
+                throw new Error(errorMessage);
             }
             
             const data = await response.json();
@@ -932,7 +948,7 @@ class SemanticSearchApp {
         this.totalResultsCount = data.pagination.total_count;
         this.hasMoreResults = data.pagination.has_more;
         this.isFiltered = false;
-        this.currentSearchData = data;
+        // Note: Keep original currentSearchData with request parameters for load more
         
         // Re-render the results
         this.displayResults(data, false); // isLoadMore = false
