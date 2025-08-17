@@ -22,8 +22,7 @@ class RankingConfig:
     def __init__(self, 
         # Core V2.5 parameters - same as V2
         H_c: float = 30.0,          # History half-life in days
-        H_E: float = 90.0,         # Artist history half-life in days
-        K: float = 5.0,             # Confidence ramp parameter
+        H_E: float = 90.0,          # Artist history half-life in days
         lambda_val: float = 0.5,    # Relevance vs utility balance (λ in formula)
         
         # V2.5: Curved signed evidence parameters
@@ -656,6 +655,7 @@ class RankingEngine:
             'semantic_similarity': S_t,
             'final_score': final_score,
             'lambda': lambda_val,
+            'kappa_E': self.config.kappa_E,
             # Interpretable score breakdown (these sum to final_score)
             'raw_semantic': S_t,
             'raw_quality': Q_t,
@@ -674,7 +674,7 @@ class RankingEngine:
             # History components
             'Q_t': Q_t,
             'h_t': h_t,
-            'core_utility': U_t
+            'core_utility': U_t,            
         }
         
         return float(np.clip(final_score, 0, 1)), components
