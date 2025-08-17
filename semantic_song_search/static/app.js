@@ -482,10 +482,10 @@ class SemanticSearchApp {
                 query: query,
                 k: 20,
                 offset: 0,
-                // Personalization parameters
-                lambda_val: this.activeLambdaVal || this.currentLambdaVal || 0.5,
-                familiarity_min: this.activeFamiliarityMin || this.currentFamiliarityMin || 0.0,
-                familiarity_max: this.activeFamiliarityMax || this.currentFamiliarityMax || 1.0
+                // Personalization parameters  
+                lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
+                familiarity_min: this.activeFamiliarityMin !== undefined ? this.activeFamiliarityMin : (this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0),
+                familiarity_max: this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0)
                 // Note: No longer sending filter_top_artists since we do client-side filtering
             };
             
@@ -1119,7 +1119,7 @@ class SemanticSearchApp {
                 <div class="card-footer">
                     <span class="card-rank">#${rank}</span>
                     ${scoringComponentsHTML}
-                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}%</span>
+                    <span class="similarity-score">${(finalScore * 100).toFixed(1)}</span>
                 </div>
             `;
         }
