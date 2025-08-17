@@ -637,6 +637,7 @@ class RankingEngine:
         C_t_hat = priors['C_t_hat']
         E_t = priors['E_t']
         E_t_hat = self.config.kappa_E * E_t
+        Fam_t = priors['Fam_t']
 
         # Core utility (V2.5 revised): keep principled Q_t vs E_t balance
         U_t = h_t * Q_t + (1 - h_t) * E_t_hat
@@ -656,6 +657,9 @@ class RankingEngine:
             'final_score': final_score,
             'lambda': lambda_val,
             # Interpretable score breakdown (these sum to final_score)
+            'raw_semantic': S_t,
+            'raw_quality': Q_t,
+            'raw_exploration': E_t_hat,
             'weighted_semantic': weighted_semantic,      # "sim"
             'weighted_quality': weighted_quality,        # "aff" 
             'weighted_exploration': weighted_exploration, # "exp"
@@ -666,6 +670,7 @@ class RankingEngine:
             'C_t_hat': C_t_hat,
             'E_t': E_t,
             'E_t_hat': E_t_hat,
+            'Fam_t': Fam_t,
             # History components
             'Q_t': Q_t,
             'h_t': h_t,

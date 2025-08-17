@@ -829,6 +829,7 @@ body {
     padding-top: 0.5rem;
     font-size: 0.85rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin-left: -0.6rem !important;
 }
 
 .card-footer .card-rank {
@@ -849,6 +850,7 @@ body {
     color: #eaeaea;
     font-weight: 500;
     font-size: 1rem;
+    margin-right: 0.5rem;
 }
 
 .similarity-score {
@@ -861,7 +863,6 @@ body {
 /* Scoring components in the middle of footer */
 .scoring-components {
     display: flex;
-    gap: 0.5rem;
     font-size: 0.75rem;
     color: #ccc;
 }

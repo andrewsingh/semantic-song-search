@@ -1101,15 +1101,19 @@ class SemanticSearchApp {
                     <div class="scoring-components">
                         <span class="scoring-component">
                             <span class="component-label">Sim:</span>
-                            <span class="component-value">${(components.weighted_semantic * 100).toFixed(1)}</span>
+                            <span class="component-value">${(components.raw_semantic).toFixed(2)}</span>
                         </span>
                         <span class="scoring-component">
                             <span class="component-label">Aff:</span>
-                            <span class="component-value">${(components.weighted_quality * 100).toFixed(1)}</span>
+                            <span class="component-value">${(components.raw_quality).toFixed(2)}</span>
                         </span>
                         <span class="scoring-component">
                             <span class="component-label">Exp:</span>
-                            <span class="component-value">${(components.weighted_exploration * 100).toFixed(1)}</span>
+                            <span class="component-value">${(components.raw_exploration).toFixed(2)}</span>
+                        </span>
+                        <span class="scoring-component">
+                            <span class="component-label">Fam:</span>
+                            <span class="component-value">${(components.Fam_t).toFixed(2)}</span>
                         </span>
                     </div>
                 `;
