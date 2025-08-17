@@ -56,11 +56,11 @@
                 <div id="personalization-controls" class="personalization-controls" style="display: none;">
                     <div class="control-group">
                         <div class="slider-container">
-                            <label for="lambda-slider" class="slider-label">
-                                Semantic vs Personal: <span id="lambda-value">0.50</span>
-                            </label>
-                            <input type="range" id="lambda-slider" class="control-slider" 
-                                   min="0" max="1" step="0.05" value="0.5">
+                            <div class="slider-with-value">
+                                <div class="slider-value-above" id="lambda-value">0.50</div>
+                                <input type="range" id="lambda-slider" class="control-slider" 
+                                       min="0" max="1" step="0.05" value="0.5">
+                            </div>
                             <div class="slider-labels">
                                 <span>Personal</span>
                                 <span>Semantic</span>
@@ -68,14 +68,17 @@
                         </div>
                         
                         <div class="slider-container">
-                            <label for="familiarity-range" class="slider-label">
-                                Familiarity Range: <span id="familiarity-range-display">0.00 - 1.00</span>
-                            </label>
-                            <div class="range-slider-container">
-                                <input type="range" id="familiarity-min" class="range-slider range-slider-min" 
-                                       min="0" max="1" step="0.01" value="0">
-                                <input type="range" id="familiarity-max" class="range-slider range-slider-max" 
-                                       min="0" max="1" step="0.01" value="1">
+                            <div class="range-slider-with-values">
+                                <div class="range-values-above">
+                                    <div class="range-value-above" id="familiarity-min-value">0.00</div>
+                                    <div class="range-value-above" id="familiarity-max-value">1.00</div>
+                                </div>
+                                <div class="range-slider-container">
+                                    <input type="range" id="familiarity-min" class="range-slider range-slider-min" 
+                                           min="0" max="1" step="0.01" value="0">
+                                    <input type="range" id="familiarity-max" class="range-slider range-slider-max" 
+                                           min="0" max="1" step="0.01" value="1">
+                                </div>
                             </div>
                             <div class="slider-labels">
                                 <span>Unfamiliar</span>
@@ -162,7 +165,7 @@
                                         <span class="filter-text">Manual Selection</span>
                                     </label>
                                 </div>
-                                <div class="filter-option">
+                                <div id="top-artists-filter-option" class="filter-option">
                                     <label class="filter-checkbox-label">
                                         <input type="checkbox" id="top-artists-filter" class="filter-checkbox" disabled>
                                         <span id="top-artists-text" class="filter-text">Only My Top Artists</span>
@@ -170,15 +173,20 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="results-info">
-                            <span id="results-count"></span>
-                            <span id="search-info"></span>
-                            <div class="results-spotify-attribution">
-                                <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer" class="results-spotify-logo-link">
-                                    <img src="{{ url_for('static', filename='assets/2024-spotify-full-logo/Full_Logo_Green_RGB.svg') }}" 
-                                         alt="Spotify" class="results-spotify-logo">
-                                </a>
-                            </div>
+                        <div class="results-right">
+                            <!-- Personalization controls will be moved here via JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <!-- Results info moved to separate line -->
+                    <div class="results-info-line">
+                        <span id="results-count"></span>
+                        <span id="search-info"></span>
+                        <div class="results-spotify-attribution">
+                            <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer" class="results-spotify-logo-link">
+                                <img src="{{ url_for('static', filename='assets/2024-spotify-full-logo/Full_Logo_Green_RGB.svg') }}" 
+                                     alt="Spotify" class="results-spotify-logo">
+                            </a>
                         </div>
                     </div>
                 </div>

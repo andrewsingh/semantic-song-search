@@ -2904,7 +2904,13 @@ class SemanticSearchApp {
     // Personalization Controls Handlers
     handleLambdaChange(value) {
         this.currentLambdaVal = value;
-        document.getElementById('lambda-value').textContent = value.toFixed(2);
+        const lambdaDisplay = document.getElementById('lambda-value');
+        if (lambdaDisplay) {
+            lambdaDisplay.textContent = value.toFixed(2);
+            // Position above the lambda slider knob using accurate positioning
+            const slider = document.getElementById('lambda-slider');
+            this.positionSliderValue(slider, lambdaDisplay, value, 0, 1);
+        }
         this.enableRerunButton();
         
         // Track lambda change
@@ -2947,8 +2953,58 @@ class SemanticSearchApp {
     }
     
     updateFamiliarityRangeDisplay() {
-        const display = document.getElementById('familiarity-range-display');
-        display.textContent = `${this.currentFamiliarityMin.toFixed(2)} - ${this.currentFamiliarityMax.toFixed(2)}`;
+        const minDisplay = document.getElementById('familiarity-min-value');
+        const maxDisplay = document.getElementById('familiarity-max-value');
+        
+        if (minDisplay) {
+            minDisplay.textContent = this.currentFamiliarityMin.toFixed(2);
+            // Position above the min slider knob using accurate positioning
+            const minSlider = document.getElementById('familiarity-min');
+            this.positionSliderValue(minSlider, minDisplay, this.currentFamiliarityMin, 0, 1);
+        }
+        if (maxDisplay) {
+            maxDisplay.textContent = this.currentFamiliarityMax.toFixed(2);
+            // Position above the max slider knob using accurate positioning
+            const maxSlider = document.getElementById('familiarity-max');
+            this.positionSliderValue(maxSlider, maxDisplay, this.currentFamiliarityMax, 0, 1);
+        }
+    }
+    
+    // Accurately position slider value display above the slider thumb
+    positionSliderValue(slider, valueDisplay, value, min, max) {
+        if (!slider || !valueDisplay) return;
+        
+        // Calculate the percentage position of the value within the range
+        const percent = (value - min) / (max - min);
+        
+        // Get the slider's bounding rectangle
+        const sliderRect = slider.getBoundingClientRect();
+        
+        // Estimate thumb width (typically 20px for most browsers)
+        const thumbWidth = 20;
+        
+        // Calculate the effective track width (slider width minus thumb width)
+        const trackWidth = sliderRect.width - thumbWidth;
+        
+        // Calculate position: start at half thumb width, then add track progress
+        const position = (thumbWidth / 2) + (percent * trackWidth);
+        
+        // Convert to percentage of total slider width
+        const positionPercent = (position / sliderRect.width) * 100;
+        
+        valueDisplay.style.left = `${positionPercent}%`;
+    }
+    
+    initializeSliderPositions() {
+        // Initialize lambda slider position
+        const lambdaDisplay = document.getElementById('lambda-value');
+        if (lambdaDisplay) {
+            const lambdaPercent = (this.currentLambdaVal - 0) / (1 - 0) * 100;
+            lambdaDisplay.style.left = `${lambdaPercent}%`;
+        }
+        
+        // Initialize familiarity range positions
+        this.updateFamiliarityRangeDisplay();
     }
     
     enableRerunButton() {
@@ -2994,9 +3050,33 @@ class SemanticSearchApp {
     
     showPersonalizationControls(hasHistory) {
         const controls = document.getElementById('personalization-controls');
-        if (controls) {
+        const resultsRight = document.querySelector('.results-right');
+        const topArtistsFilterOption = document.getElementById('top-artists-filter-option');
+        
+        if (controls && resultsRight) {
             this.hasPersonalizationHistory = hasHistory;
-            controls.style.display = hasHistory ? 'block' : 'none';
+            
+            if (hasHistory) {
+                // Move personalization controls to results-right area
+                controls.style.display = 'flex';
+                resultsRight.appendChild(controls);
+                
+                // Initialize slider value positions
+                this.initializeSliderPositions();
+                
+                // Hide top artists filter in history mode
+                if (topArtistsFilterOption) {
+                    topArtistsFilterOption.style.display = 'none';
+                }
+            } else {
+                // Hide personalization controls in no-history mode
+                controls.style.display = 'none';
+                
+                // Show top artists filter in no-history mode
+                if (topArtistsFilterOption) {
+                    topArtistsFilterOption.style.display = 'block';
+                }
+            }
         }
     }
 }

@@ -372,7 +372,7 @@ body {
 
 /* Export to Playlist Section */
 .export-section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
 }
 
 .export-accordion {
@@ -550,6 +550,23 @@ body {
     justify-content: space-between;
     align-items: center;
     width: 100%;
+}
+
+.results-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.results-info-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.9rem;
+    color: #ccc;
+    gap: 1rem;
 }
 
 .results-left {
@@ -1553,12 +1570,66 @@ body {
 
 /* Personalization Controls */
 .personalization-controls {
-    background: rgba(29, 185, 84, 0.08);
-    border: 1px solid rgba(29, 185, 84, 0.2);
-    border-radius: 12px;
     padding: 1rem;
     margin: 1rem 0;
     transition: all 0.3s ease;
+}
+
+/* Personalization controls when moved to results area */
+.results-right .personalization-controls {
+    margin: 0;
+    padding: 0.75rem;
+}
+
+.results-right .control-group {
+    gap: 2rem;
+}
+
+.results-right .slider-container {
+    min-width: 200px;
+}
+
+/* Slider value displays above knobs */
+.slider-with-value {
+    position: relative;
+    margin-bottom: 0.5rem;
+    height: 20px; /* Consistent height for all sliders */
+}
+
+.slider-value-above {
+    position: absolute;
+    top: -25px;
+    left: 50%; /* Initial position, will be updated by JavaScript */
+}
+
+.range-slider-with-values {
+    position: relative;
+    margin-bottom: 0.5rem;
+    height: 20px; /* Consistent height for all sliders */
+}
+
+.range-values-above {
+    position: absolute;
+    top: -25px;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.range-value-above {
+    position: absolute;
+}
+
+.slider-value-above, .range-value-above {
+    transform: translateX(-50%);
+    color: #1DB954;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 10;
 }
 
 .control-group {
@@ -1574,6 +1645,7 @@ body {
     flex-direction: column;
     gap: 0.5rem;
     min-width: 200px;
+    align-items: stretch; /* Ensure consistent alignment */
 }
 
 .slider-label {
@@ -1630,6 +1702,7 @@ body {
     position: relative;
     width: 200px;
     height: 6px;
+    margin-top: 12px; /* Align with lambda slider track position */
 }
 
 .range-slider {
@@ -1696,6 +1769,8 @@ body {
     font-size: 0.75rem;
     color: #888;
     margin-top: 0.25rem;
+    height: 18px; /* Consistent height for text labels */
+    align-items: center;
 }
 
 .rerun-search-btn {

@@ -22,27 +22,27 @@ class RankingConfig:
     def __init__(self, 
         # Core V2.5 parameters - same as V2
         H_c: float = 30.0,          # History half-life in days
-        H_E: float = 270.0,         # Artist history half-life in days
+        H_E: float = 90.0,         # Artist history half-life in days
         K: float = 5.0,             # Confidence ramp parameter
         lambda_val: float = 0.5,    # Relevance vs utility balance (λ in formula)
         
         # V2.5: Curved signed evidence parameters
         gamma_s: float = 1.2,       # Completion curvature for success
         gamma_f: float = 1.4,       # Skip curvature for failures
-        kappa: float = 2.0,         # Skip amplification factor
+        kappa: float = 1.5,         # Skip amplification factor
         
         # V2.5: Beta prior and stability parameters
-        alpha_0: float = 1.0,       # Beta prior alpha
-        beta_0: float = 1.0,        # Beta prior beta
+        alpha_0: float = 3.0,       # Beta prior alpha
+        beta_0: float = 3.0,        # Beta prior beta
         K_s: float = 3.0,           # Stability parameter
 
         # V2.5: Artist affinity prior parameters
         K_E: float = 10.0,           # Artist affinity prior parameter
-        gamma_A: float = 0.7,
+        gamma_A: float = 1.0,
         
         # V2.5: Freshness parameters
         eta: float = 1.2,           # Freshness sharpness
-        tau: float = 0.8,           # Freshness threshold
+        tau: float = 0.7,           # Freshness threshold
         beta_f: float = 1.5,          # Freshness exponent
 
         # V2.5: Familiarity parameters
@@ -66,12 +66,12 @@ class RankingConfig:
         tau_c: float = 0.02,
         K_c: float = 8.0,
         tau_K: float = 2,
-        M_A: float = 15.0,
+        M_A: float = 5.0,
 
         #V2.6: Track familiarity parameters
-        K_fam: float = 5.0,
-        R_min: float = 1.0,
-        C_fam: float = 0.2,
+        K_fam: float = 9.0,
+        R_min: float = 3.0,
+        C_fam: float = 0.25,
         min_plays: int = 4,
         ):       
             """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
