@@ -1,33 +1,45 @@
 #!/usr/bin/env python3
 """
 Generate text embeddings for song profiles using OpenAI's text-embedding-3-large model.
-Creates 5 embeddings per song optimized for semantic music search:
+Creates embeddings per song optimized for semantic music search.
 
-SONG-TO-SONG SEARCH (4 embeddings):
-  1. Full profile: Complete song information formatted as structured text
-  2. Sound aspect: "Sound of [song] by [artist]: [description]"  
-  3. Meaning aspect: "Meaning of [song] by [artist]: [description]"
-  4. Mood aspect: "Mood of [song] by [artist]: [description]"
-
-TEXT-TO-SONG SEARCH (1 embedding):
-  5. Tags + genres: Comma-separated list of tags and genres for query matching
+AVAILABLE EMBEDDING TYPES:
+  1. full_profile: Complete song information formatted as structured text
+  2. sound_aspect: Sound description only  
+  3. meaning_aspect: Meaning description only
+  4. mood_aspect: Mood description only
+  5. tags_genres: Comma-separated list of tags and genres combined
+  6. tags: Comma-separated list of tags only (NEW)
+  7. genres: Comma-separated list of genres only (NEW)
 
 Supports batch processing with automatic saving and crash recovery.
+Each embedding type is stored in a separate .npz file for independent processing.
 
 Usage:
+  # Generate specific embedding types:
   python embed_song_profiles.py -i song_profiles.jsonl \
-                                -o song_embeddings.npz \
-                                -b 50   # optional: batch size (default: 50 songs)
-                                -n 100  # optional: for testing first N songs
+                                -o data/embeddings/ \
+                                --embed_types tags genres
+                                
+  # Generate all embedding types:
+  python embed_song_profiles.py -i song_profiles.jsonl \
+                                -o data/embeddings/ \
+                                --embed_types full_profile sound_aspect meaning_aspect mood_aspect tags_genres tags genres
+                                
+  # Optional flags:
+  python embed_song_profiles.py -i song_profiles.jsonl \
+                                -o data/embeddings/ \
+                                --embed_types tags genres \
+                                -b 50   # batch size (default: 50 songs)
+                                -n 100  # for testing first N songs
   
-  # The output will be a .npz file containing:
+  # The output will be separate .npz files for each embedding type containing:
   # - songs/artists: song names and artists
-  # - embeddings: all embedding vectors  
+  # - embeddings: embedding vectors for this type
   # - song_indices: which song each embedding belongs to
-  # - field_types: embedding type (full_profile, sound_aspect, etc.)
   # - field_values: original text that was embedded
   
-  # Resumable: if the script crashes, just run it again with the same output file
+  # Resumable: if the script crashes, just run it again with the same arguments
 """
 import argparse, asyncio, json, time
 from pathlib import Path
@@ -78,22 +90,71 @@ def format_aspect_embedding(profile: Dict, aspect: str) -> str:
 
 def format_tags_genres(profile: Dict) -> str:
     """Format tags + genres for text-to-song search."""
-    tags = profile.get('tags', [])
-    genres = profile.get('genres', [])
+    tags = profile.get('tags', []) or []
+    genres = profile.get('genres', []) or []
+    
+    # Ensure we have lists (handle None values)
+    if not isinstance(tags, list):
+        tags = []
+    if not isinstance(genres, list):
+        genres = []
     
     # Combine tags first, then genres, as comma-separated string
     all_labels = tags + genres
     return ', '.join(all_labels)
 
 
-def extract_embedding_tasks(profiles: List[Dict]) -> Tuple[List[Dict], List[Tuple]]:
+def format_tags_only(profile: Dict) -> str:
+    """Format tags only for text-to-song search."""
+    tags = profile.get('tags', []) or []
+    
+    # Ensure we have a list (handle None values)
+    if not isinstance(tags, list):
+        tags = []
+    
+    return ', '.join(tags)
+
+
+def format_genres_only(profile: Dict) -> str:
+    """Format genres only for text-to-song search."""
+    genres = profile.get('genres', []) or []
+    
+    # Ensure we have a list (handle None values)
+    if not isinstance(genres, list):
+        genres = []
+    
+    return ', '.join(genres)
+
+
+def extract_embedding_tasks(profiles: List[Dict], embed_types: List[str]) -> Tuple[List[Dict], List[Tuple]]:
     """
-    Extract the 5 embedding tasks per song profile for music search.
+    Extract embedding tasks per song profile for specified embedding types.
+    
+    Args:
+        profiles: List of song profile dictionaries
+        embed_types: List of embedding types to generate
     
     Returns:
         songs_metadata: List of dicts with song info
         embedding_tasks: List of tuples (song_idx, embedding_type, text_value)
     """
+    # Define available embedding type functions
+    embedding_formatters = {
+        'full_profile': format_full_profile,
+        'sound_aspect': lambda p: format_aspect_embedding(p, 'sound'),
+        'meaning_aspect': lambda p: format_aspect_embedding(p, 'meaning'),
+        'mood_aspect': lambda p: format_aspect_embedding(p, 'mood'),
+        'tags_genres': format_tags_genres,
+        'tags': format_tags_only,
+        'genres': format_genres_only
+    }
+    
+    # Validate requested embedding types
+    valid_types = set(embedding_formatters.keys())
+    invalid_types = set(embed_types) - valid_types
+    if invalid_types:
+        raise ValueError(f"Invalid embedding types: {invalid_types}. Valid types: {valid_types}")
+    
     songs_metadata = []
     embedding_tasks = []
     
@@ -104,21 +165,34 @@ def extract_embedding_tasks(profiles: List[Dict]) -> Tuple[List[Dict], List[Tupl
             'artist': profile['original_artist']
         })
         
-        # 1. Full profile embedding (song-to-song search)
-        full_profile_text = format_full_profile(profile)
-        embedding_tasks.append((song_idx, 'full_profile', full_profile_text))
-        
-        # 2-4. Individual aspect embeddings (song-to-song search)
-        for aspect in ['sound', 'meaning', 'mood']:
-            if profile.get(aspect):  # Only create embedding if aspect exists
-                aspect_text = format_aspect_embedding(profile, aspect)
-                embedding_tasks.append((song_idx, f'{aspect}_aspect', aspect_text))
-        
-        # 5. Tags + genres embedding (text-to-song search)
-        if profile.get('tags') or profile.get('genres'):  # Only if we have tags or genres
-            tags_genres_text = format_tags_genres(profile)
-            if tags_genres_text.strip():  # Only if non-empty
-                embedding_tasks.append((song_idx, 'tags_genres', tags_genres_text))
+        # Generate embeddings for requested types
+        for embed_type in embed_types:
+            formatter = embedding_formatters[embed_type]
+            
+            # Special validation for aspect-based embeddings
+            if embed_type.endswith('_aspect'):
+                aspect_name = embed_type.replace('_aspect', '')
+                if not profile.get(aspect_name):
+                    continue  # Skip if aspect doesn't exist
+            
+            # Special validation for tag/genre-based embeddings
+            if embed_type in ['tags_genres', 'tags', 'genres']:
+                if embed_type == 'tags_genres':
+                    if not (profile.get('tags') or profile.get('genres')):
+                        continue
+                elif embed_type == 'tags':
+                    if not profile.get('tags'):
+                        continue
+                elif embed_type == 'genres':
+                    if not profile.get('genres'):
+                        continue
+            
+            # Generate the text for this embedding type
+            text_value = formatter(profile)
+            
+            # Only add task if we have non-empty text
+            if text_value and text_value.strip():
+                embedding_tasks.append((song_idx, embed_type, text_value))
     
     return songs_metadata, embedding_tasks
 
@@ -140,11 +214,14 @@ def log_embedding_examples(songs_metadata: List[Dict], embedding_tasks: List[Tup
         song_info = songs_metadata[song_idx]
         print(f"\n--- Example {i+1}: '{song_info['song']}' by '{song_info['artist']}' ---")
         
-        # Show embeddings in a logical order
-        embedding_order = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+        # Show embeddings in a logical order (only those that exist)
+        all_possible_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
         tasks_dict = {embedding_type: text_value for embedding_type, text_value in tasks}
         
-        for embedding_type in embedding_order:
+        # Only show embedding types that actually exist in the tasks
+        relevant_types = [etype for etype in all_possible_types if etype in tasks_dict]
+        
+        for embedding_type in relevant_types:
             if embedding_type in tasks_dict:
                 text_value = tasks_dict[embedding_type]
                 print(f"\n  {embedding_type.upper().replace('_', ' ')}:")
@@ -157,7 +234,7 @@ def log_embedding_examples(songs_metadata: List[Dict], embedding_tasks: List[Tup
                         print(f"    {line}")
                     if len(text_value.split('\n')) > 4:
                         print(f"    ... ({len(text_value.split('\n')) - 4} more lines)")
-                elif embedding_type == 'tags_genres':
+                elif embedding_type in ['tags_genres', 'tags', 'genres']:
                     # Show tags/genres nicely formatted
                     print(f"    {text_value}")
                 else:
@@ -209,16 +286,27 @@ async def process_embedding_task(task_idx: int, song_idx: int, field_type: str, 
     embedding = await get_embedding(text_value)
     return task_idx, embedding
 
-def load_existing_embeddings(output_base: str) -> Tuple[List[Dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_existing_embeddings(output_base: str, embed_types: List[str]) -> Tuple[List[Dict], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load existing embeddings from separate files by embedding type."""
-    embedding_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+    embedding_types = embed_types  # Only load the requested embedding types
     
     # Check if we're using old combined format or new separate format
     output_path = Path(output_base)
     if output_path.is_file() and output_path.suffix == '.npz':
         # Old combined format - load as before for backwards compatibility
         print(f"Detected old combined format, loading from: {output_base}")
-        return load_existing_embeddings_combined(output_base)
+        songs_metadata, embeddings, song_indices, field_types, field_values = load_existing_embeddings_combined(output_base)
+        
+        # Filter to only requested embedding types for consistency
+        if len(embeddings) > 0:
+            mask = np.isin(field_types, embed_types)
+            embeddings = embeddings[mask]
+            song_indices = song_indices[mask]
+            field_types = field_types[mask]
+            field_values = field_values[mask]
+            print(f"Filtered to {len(embeddings)} embeddings of requested types: {', '.join(embed_types)}")
+        
+        return songs_metadata, embeddings, song_indices, field_types, field_values
     
     # New separate format - output_base should be a directory or base name
     if output_path.is_dir():
@@ -347,7 +435,8 @@ def save_song_embeddings(songs_metadata: List[Dict],
                         song_indices: np.ndarray,
                         field_types: np.ndarray,
                         field_values: np.ndarray,
-                        output_base: str):
+                        output_base: str,
+                        embed_types: List[str]):
     """Save song embeddings to separate files by embedding type."""
     
     # Create songs metadata arrays
@@ -372,11 +461,10 @@ def save_song_embeddings(songs_metadata: List[Dict],
     # Ensure output directory exists
     base_dir.mkdir(parents=True, exist_ok=True)
     
-    # Group embeddings by type and save to separate files
-    embedding_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+    # Group embeddings by type and save to separate files (only for requested types)
     saved_files = []
     
-    for embed_type in embedding_types:
+    for embed_type in embed_types:
         # Find embeddings of this type
         mask = field_types == embed_type
         
@@ -451,12 +539,13 @@ def print_save_summary(songs_metadata: List[Dict],
     print(f"{'='*60}")
 
 # ──────────────────────────────── MAIN DRIVER ────────────────────────────────
-async def main(input_file: str, output_file: str, num_entries: int = None, batch_size: int = 50):
+async def main(input_file: str, output_file: str, embed_types: List[str], num_entries: int = None, batch_size: int = 50):
     """Main function to process all song profiles and generate embeddings in batches."""
     print(f"Loading profiles from {input_file}")
+    print(f"Generating embedding types: {', '.join(embed_types)}")
     
     # Load existing embeddings if any
-    existing_songs_metadata, existing_embeddings, existing_song_indices, existing_field_types, existing_field_values = load_existing_embeddings(output_file)
+    existing_songs_metadata, existing_embeddings, existing_song_indices, existing_field_types, existing_field_values = load_existing_embeddings(output_file, embed_types)
     
     # Create set of already-processed songs for deduplication
     processed_songs = set()
@@ -491,7 +580,7 @@ async def main(input_file: str, output_file: str, num_entries: int = None, batch
         return
     
     # Extract embedding tasks for new songs only
-    new_songs_metadata, new_embedding_tasks = extract_embedding_tasks(profiles_to_process)
+    new_songs_metadata, new_embedding_tasks = extract_embedding_tasks(profiles_to_process, embed_types)
     
     print(f"Extracted {len(new_embedding_tasks)} new embedding tasks.")
     
@@ -566,7 +655,7 @@ async def main(input_file: str, output_file: str, num_entries: int = None, batch
         
         saved_files = save_song_embeddings(
             all_songs_metadata, final_embeddings, final_song_indices,
-            final_field_types, final_field_values, output_file
+            final_field_types, final_field_values, output_file, embed_types
         )
         print(f"Saved batch {batch_num + 1}/{total_batches} - Total: {len(all_songs_metadata)} songs, {len(final_embeddings)} embeddings to {len(saved_files)} files")
 
@@ -581,15 +670,18 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--input", required=True, 
                         help="Input JSONL file with song profiles")
     parser.add_argument("-o", "--output", required=True, 
-                        help="Output directory or base path for separate embedding files (will create 5 .npz files by embedding type)")
+                        help="Output directory or base path for separate embedding files")
+    parser.add_argument("--embed_types", nargs='+', required=True,
+                        choices=['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres'],
+                        help="Embedding types to generate (space-separated)")
     parser.add_argument("-n", "--num_entries", type=int, default=None, 
                         help="Process only first N entries (for testing)")
-    parser.add_argument("-b", "--batch_size", type=int, default=50,
-                        help="Number of songs to process before saving (default: 50)")
+    parser.add_argument("-b", "--batch_size", type=int, default=500,
+                        help="Number of songs to process before saving (default: 500)")
     
     args = parser.parse_args()
     
     t0 = time.perf_counter()
-    asyncio.run(main(args.input, args.output, args.num_entries, args.batch_size))
+    asyncio.run(main(args.input, args.output, args.embed_types, args.num_entries, args.batch_size))
     elapsed = time.perf_counter() - t0
     print(f"\nAll done in {elapsed:.1f}s with {MAX_CONCURRENCY}-way concurrency") 
