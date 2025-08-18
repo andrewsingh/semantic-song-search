@@ -269,6 +269,33 @@ class SemanticSearchApp {
             });
         }
 
+        // Advanced Settings Accordion
+        const advancedSettingsBtn = document.getElementById('advanced-settings-accordion-btn');
+        if (advancedSettingsBtn) {
+            advancedSettingsBtn.addEventListener('click', () => {
+                this.toggleAdvancedSettingsAccordion();
+            });
+        }
+
+        // Advanced Settings Parameter Changes
+        this.initAdvancedSettingsListeners();
+
+        // Advanced Settings Rerun Search Button
+        const advancedRerunBtn = document.getElementById('advanced-rerun-search-btn');
+        if (advancedRerunBtn) {
+            advancedRerunBtn.addEventListener('click', () => {
+                this.rerunSearchWithAdvancedParameters();
+            });
+        }
+
+        // Reset Defaults Button
+        const resetDefaultsBtn = document.getElementById('reset-defaults-btn');
+        if (resetDefaultsBtn) {
+            resetDefaultsBtn.addEventListener('click', () => {
+                this.resetAdvancedParametersToDefaults();
+            });
+        }
+
     }
     
     handleSearchTypeChange(searchType) {
@@ -476,6 +503,10 @@ class SemanticSearchApp {
         this.hideWelcomeMessage();
         
         try {
+            // Get advanced parameters
+            const advancedParams = this.getActiveAdvancedParams();
+            console.log('🔧 Advanced parameters being sent:', advancedParams);
+            
             const requestData = {
                 search_type: searchType,
                 embed_type: embedType,
@@ -485,9 +516,13 @@ class SemanticSearchApp {
                 // Personalization parameters  
                 lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
                 familiarity_min: this.activeFamiliarityMin !== undefined ? this.activeFamiliarityMin : (this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0),
-                familiarity_max: this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0)
+                familiarity_max: this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0),
+                // Advanced ranking parameters
+                ...advancedParams
                 // Note: No longer sending filter_top_artists since we do client-side filtering
             };
+            
+            console.log('🔧 Full request data:', requestData);
             
             if (searchType === 'song' && this.currentQuerySong) {
                 requestData.song_idx = this.currentQuerySong.song_idx;
@@ -1149,7 +1184,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)}</div>
+                    <div class="card-title">${escapeHtml(song.song)} (${song.scoring_components.P_t.toFixed(2)})</div>
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
@@ -3068,10 +3103,229 @@ class SemanticSearchApp {
         }
     }
     
+    // Advanced Settings Methods
+    toggleAdvancedSettingsAccordion() {
+        const accordion = document.querySelector('.advanced-settings-accordion');
+        const content = document.getElementById('advanced-settings-accordion-content');
+        
+        if (accordion && content) {
+            accordion.classList.toggle('expanded');
+            
+            // Initialize parameter values if opening for the first time
+            if (accordion.classList.contains('expanded') && !this.advancedSettingsInitialized) {
+                this.initializeAdvancedSettingsValues();
+                this.advancedSettingsInitialized = true;
+            }
+        }
+    }
+    
+    initAdvancedSettingsListeners() {
+        // Get all parameter input elements
+        const parameterIds = [
+            'H_c', 'H_E', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 'K_s',
+            'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
+            'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
+            'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
+            'C_fam', 'min_plays'
+        ];
+        
+        // Initialize current advanced parameters object
+        this.currentAdvancedParams = {};
+        this.activeAdvancedParams = {};
+        
+        // Add event listeners for each parameter
+        parameterIds.forEach(paramId => {
+            const element = document.getElementById(paramId);
+            if (element) {
+                element.addEventListener('input', (e) => {
+                    this.handleAdvancedParameterChange(paramId, e.target.value);
+                });
+            }
+        });
+    }
+    
+    handleAdvancedParameterChange(paramId, value) {
+        // Convert value to appropriate type
+        let convertedValue;
+        if (paramId === 'knn_embed_type') {
+            convertedValue = value;
+        } else if (paramId === 'k_neighbors' || paramId === 'min_plays') {
+            convertedValue = parseInt(value);
+        } else {
+            convertedValue = parseFloat(value);
+        }
+        
+        // Store the current value
+        this.currentAdvancedParams[paramId] = convertedValue;
+        
+        // Check if any parameters have changed from their active values
+        this.updateAdvancedRerunButtonState();
+    }
+    
+    updateAdvancedRerunButtonState() {
+        const rerunBtn = document.getElementById('advanced-rerun-search-btn');
+        if (!rerunBtn) return;
+        
+        // Check if any parameter has changed from its active value
+        let hasChanges = false;
+        for (const [paramId, currentValue] of Object.entries(this.currentAdvancedParams)) {
+            const activeValue = this.activeAdvancedParams[paramId];
+            if (currentValue !== activeValue) {
+                hasChanges = true;
+                break;
+            }
+        }
+        
+        rerunBtn.disabled = !hasChanges;
+    }
+    
+    async rerunSearchWithAdvancedParameters() {
+        console.log('🔄 Rerunning search with new advanced parameters...');
+        
+        // Save current values as the "active" values
+        this.activeAdvancedParams = { ...this.currentAdvancedParams };
+        
+        // Disable the rerun button
+        const rerunBtn = document.getElementById('advanced-rerun-search-btn');
+        if (rerunBtn) {
+            rerunBtn.disabled = true;
+        }
+        
+        // Track parameter update
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Advanced Parameters Updated', {
+                'parameters': this.activeAdvancedParams,
+                'has_active_search': this.searchResults.length > 0
+            });
+        }
+        
+        // Show confirmation that search was rerun
+        this.showAdvancedSettingsConfirmation();
+        
+        // Rerun the current search if we have one
+        if (this.lastSearchRequestData) {
+            await this.handleSearch();
+        }
+    }
+    
+    showAdvancedSettingsConfirmation() {
+        // Create a temporary confirmation message
+        const rerunBtn = document.getElementById('advanced-rerun-search-btn');
+        if (rerunBtn) {
+            const originalText = rerunBtn.textContent;
+            rerunBtn.textContent = 'Search Updated!';
+            rerunBtn.style.background = 'rgba(29, 185, 84, 0.8)';
+            
+            setTimeout(() => {
+                rerunBtn.textContent = originalText;
+                rerunBtn.style.background = '';
+            }, 2000);
+        }
+    }
+    
+    async initializeAdvancedSettingsValues() {
+        // Fetch default parameters from backend
+        try {
+            const response = await fetch('/api/default_ranking_config');
+            if (response.ok) {
+                const defaultParams = await response.json();
+                this.populateAdvancedSettingsForm(defaultParams);
+                
+                // Set both current and active to defaults initially
+                this.currentAdvancedParams = { ...defaultParams };
+                this.activeAdvancedParams = { ...defaultParams };
+            } else {
+                console.error('Failed to fetch default ranking config');
+                // Fallback to hardcoded defaults
+                this.populateAdvancedSettingsFormWithDefaults();
+            }
+        } catch (error) {
+            console.error('Error fetching default ranking config:', error);
+            this.populateAdvancedSettingsFormWithDefaults();
+        }
+        
+        this.updateAdvancedRerunButtonState();
+    }
+    
+    populateAdvancedSettingsForm(params) {
+        for (const [paramId, value] of Object.entries(params)) {
+            const element = document.getElementById(paramId);
+            if (element) {
+                element.value = value;
+            }
+        }
+    }
+    
+    populateAdvancedSettingsFormWithDefaults() {
+        console.log('🔧 populateAdvancedSettingsFormWithDefaults called');
+        // Hardcoded fallback defaults matching RankingConfig
+        const defaults = {
+            'H_c': 30.0, 'H_E': 90.0, 'gamma_s': 1.2, 'gamma_f': 1.4, 'kappa': 1.5,
+            'alpha_0': 3.0, 'beta_0': 3.0, 'K_s': 3.0, 'K_E': 10.0, 'gamma_A': 1.0,
+            'eta': 1.2, 'tau': 0.7, 'beta_f': 1.5, 'K_life': 10.0, 'K_recent': 5.0,
+            'psi': 1.4, 'k_neighbors': 50, 'sigma': 10.0, 'knn_embed_type': 'full_profile',
+            'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
+            'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
+            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4
+        };
+        
+        console.log('🔧 Setting defaults:', defaults);
+        this.populateAdvancedSettingsForm(defaults);
+        this.currentAdvancedParams = { ...defaults };
+        this.activeAdvancedParams = { ...defaults };
+        console.log('🔧 currentAdvancedParams after defaults:', this.currentAdvancedParams);
+        console.log('🔧 activeAdvancedParams after defaults:', this.activeAdvancedParams);
+    }
+    
+    resetAdvancedParametersToDefaults() {
+        console.log('🔄 Resetting advanced parameters to defaults...');
+        
+        // Re-initialize with defaults
+        this.populateAdvancedSettingsFormWithDefaults();
+        this.updateAdvancedRerunButtonState();
+        
+        // Track reset action
+        if (typeof mixpanel !== 'undefined') {
+            mixpanel.track('Advanced Parameters Reset', {
+                'reset_to_defaults': true
+            });
+        }
+    }
+    
+    getActiveAdvancedParams() {
+        console.log('🔧 getActiveAdvancedParams called');
+        console.log('🔧 activeAdvancedParams:', this.activeAdvancedParams);
+        console.log('🔧 currentAdvancedParams:', this.currentAdvancedParams);
+        
+        // If we don't have active params but have current params, use current params
+        let paramsToUse = this.activeAdvancedParams;
+        if (!paramsToUse || Object.keys(paramsToUse).length === 0) {
+            paramsToUse = this.currentAdvancedParams;
+            console.log('🔧 Using current params since active params not set');
+        }
+        
+        // Return empty object if still no parameters
+        if (!paramsToUse || Object.keys(paramsToUse).length === 0) {
+            console.log('🔧 No advanced parameters available, returning empty object');
+            return {};
+        }
+        
+        // Convert parameter names to match backend expectation
+        const backendParams = {};
+        for (const [key, value] of Object.entries(paramsToUse)) {
+            // Most parameters can be sent directly, but handle special cases if needed
+            backendParams[key] = value;
+        }
+        
+        console.log('🔧 Final backend params:', backendParams);
+        return backendParams;
+    }
+    
     showPersonalizationControls(hasHistory) {
         const controls = document.getElementById('personalization-controls');
         const resultsRight = document.querySelector('.results-right');
         const topArtistsFilterOption = document.getElementById('top-artists-filter-option');
+        const advancedSettingsSection = document.getElementById('advanced-settings-section');
         
         if (controls && resultsRight) {
             this.hasPersonalizationHistory = hasHistory;
@@ -3084,6 +3338,17 @@ class SemanticSearchApp {
                 // Initialize slider value positions
                 this.initializeSliderPositions();
                 
+                // Show advanced settings section in history mode
+                if (advancedSettingsSection) {
+                    advancedSettingsSection.style.display = 'block';
+                }
+                
+                // Initialize advanced parameters with defaults if not already done
+                if (!this.currentAdvancedParams || Object.keys(this.currentAdvancedParams).length === 0) {
+                    console.log('🔧 Initializing advanced parameters with defaults in showPersonalizationControls');
+                    this.populateAdvancedSettingsFormWithDefaults();
+                }
+                
                 // Hide top artists filter in history mode
                 if (topArtistsFilterOption) {
                     topArtistsFilterOption.style.display = 'none';
@@ -3091,6 +3356,11 @@ class SemanticSearchApp {
             } else {
                 // Hide personalization controls in no-history mode
                 controls.style.display = 'none';
+                
+                // Hide advanced settings section in no-history mode
+                if (advancedSettingsSection) {
+                    advancedSettingsSection.style.display = 'none';
+                }
                 
                 // Show top artists filter in no-history mode
                 if (topArtistsFilterOption) {

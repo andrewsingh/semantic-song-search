@@ -76,7 +76,6 @@ class RankingConfig:
             """Initialize with V2.5 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
             self.H_E = H_E
-            self.K = K
             self.lambda_val = lambda_val
             self.gamma_s = gamma_s
             self.gamma_f = gamma_f
@@ -114,7 +113,6 @@ class RankingConfig:
         return {
             'H_c': self.H_c,
             'H_E': self.H_E,
-            'K': self.K,
             'lambda': self.lambda_val,
             'gamma_s': self.gamma_s,
             'gamma_f': self.gamma_f,
@@ -164,6 +162,12 @@ class RankingConfig:
                         logger.warning(f"knn_embed_type must be one of {constants.EMBEDDING_TYPES}, got {value}")
                     continue
                 
+                # Handle integer parameters
+                if key in ['k_neighbors', 'min_plays']:
+                    int_value = int(float(value))  # Convert through float first to handle "50.0" strings
+                    setattr(self, key, int_value)
+                    continue
+                
                 float_value = float(value)
                 
                 if key == 'lambda':  # Handle the special case
@@ -200,6 +204,51 @@ class RankingEngine:
         self.p95_C_t = None
         self.s_base = None
         self.has_history = False
+        
+        # Store original data for re-initialization
+        self.original_history_df = None
+        self.original_songs_metadata = None
+        self.original_embedding_lookups = None
+
+
+    def reinitialize_with_new_config(self, songs_metadata: List[Dict], embedding_lookups: Dict = None, history_df = None):
+        """
+        Re-initialize the ranking engine with new configuration parameters.
+        This recomputes all statistics that depend on the changed parameters.
+        """
+        # Use stored data if not provided
+        if history_df is None:
+            history_df = self.original_history_df
+        if embedding_lookups is None:
+            embedding_lookups = self.original_embedding_lookups
+            
+        if history_df is None or history_df.empty:
+            logger.warning("No history data available for re-initialization")
+            return
+            
+        logger.info("🔧 Re-initializing ranking engine with new parameters...")
+        
+        if not history_df.empty:
+            # Recompute track statistics with new parameters
+            self.compute_track_statistics(history_df, songs_metadata)
+            
+            # Recompute artist affinities
+            self.compute_artist_affinities()
+
+            # Recompute kNN similarities using the configured embedding type
+            if embedding_lookups and self.config.knn_embed_type in embedding_lookups:
+                knn_embeddings = embedding_lookups[self.config.knn_embed_type]
+                self.compute_knn_similarities(knn_embeddings)
+                logger.info(f"🔧 Re-computed kNN similarities using '{self.config.knn_embed_type}' embeddings")
+            else:
+                logger.warning(f"🔧 kNN embedding type '{self.config.knn_embed_type}' not available during re-initialization")
+
+            # Recompute track priors
+            self.compute_track_priors(songs_metadata)
+            
+            logger.info("🔧 Ranking engine re-initialization completed")
+        else:
+            logger.warning("🔧 No history data provided - engine will use prior-only scoring")
 
 
     @staticmethod
@@ -696,6 +745,11 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
         Initialized RankingEngine instance
     """
     engine = RankingEngine(config)
+    
+    # Store original data for potential re-initialization
+    engine.original_history_df = history_df.copy() if not history_df.empty else pd.DataFrame()
+    engine.original_songs_metadata = songs_metadata
+    engine.original_embedding_lookups = embedding_lookups
     
     if not history_df.empty:
         # Compute track statistics

@@ -165,7 +165,8 @@ class MusicSearchEngine:
     
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
-                         familiarity_min: float = 0.0, familiarity_max: float = 1.0) -> Tuple[List[Dict], int]:
+                         familiarity_min: float = 0.0, familiarity_max: float = 1.0,
+                         **advanced_params) -> Tuple[List[Dict], int]:
         """
         Perform V2.5 similarity search with personalized ranking.
         
@@ -183,6 +184,47 @@ class MusicSearchEngine:
         """
         # Update lambda_val in config for scoring
         self.ranking_engine.config.lambda_val = lambda_val
+        logger.info(f"🔧 Updated lambda_val in ranking config: {lambda_val}")
+        
+        # Update advanced parameters if provided
+        if advanced_params:
+            logger.info(f"🔧 Updating ranking config with advanced params: {advanced_params}")
+            
+            # Store old config values to check if re-initialization is needed
+            old_H_c = self.ranking_engine.config.H_c
+            old_H_E = self.ranking_engine.config.H_E
+            old_knn_embed_type = self.ranking_engine.config.knn_embed_type
+            
+            # Update configuration
+            self.ranking_engine.config.update_weights(advanced_params)
+            logger.info(f"🔧 Updated H_c in config: {self.ranking_engine.config.H_c}")
+            
+            # Check if critical parameters that require re-initialization have actually changed
+            needs_reinit = (
+                (old_H_c != self.ranking_engine.config.H_c) or
+                (old_H_E != self.ranking_engine.config.H_E) or
+                (old_knn_embed_type != self.ranking_engine.config.knn_embed_type)
+            )
+            
+            # Add other parameters that affect precomputed statistics
+            if not needs_reinit:
+                # Check if any critical computation parameters changed
+                critical_params = ['gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 
+                                 'K_s', 'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 
+                                 'psi', 'k_neighbors', 'sigma', 'theta_c', 'tau_c', 
+                                 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays']
+                needs_reinit = any(param in advanced_params for param in critical_params)
+            
+            if needs_reinit:
+                logger.info("🔧 Parameters requiring re-initialization changed, rebuilding ranking engine...")
+                self.ranking_engine.reinitialize_with_new_config(
+                    self.songs, 
+                    self.embedding_lookups
+                )
+            else:
+                logger.info("🔧 Only minor parameters changed, no re-initialization needed")
+        else:
+            logger.info("🔧 No advanced parameters provided")
         
         # Get the appropriate embedding lookup for the specified type
         if embed_type not in self.embedding_lookups:
@@ -452,6 +494,25 @@ def search():
         if familiarity_min > familiarity_max:
             familiarity_min, familiarity_max = familiarity_max, familiarity_min
         
+        # Extract advanced ranking parameters
+        advanced_params = {}
+        # List of valid advanced parameter names (matching RankingConfig)
+        valid_advanced_params = {
+            'H_c', 'H_E', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 'K_s',
+            'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
+            'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
+            'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
+            'C_fam', 'min_plays'
+        }
+        
+        for param_name in valid_advanced_params:
+            if param_name in data:
+                advanced_params[param_name] = data[param_name]
+        
+        logger.info(f"🔧 Advanced parameters received: {advanced_params}")
+        logger.info(f"🔧 Lambda value: {lambda_val}")
+        logger.info(f"🔧 Familiarity range: [{familiarity_min}, {familiarity_max}]")
+        
         # Validate pagination parameters
         if limit <= 0 or limit > 100:  # Reasonable limits
             return jsonify({'error': 'limit must be between 1 and 100'}), 400
@@ -466,7 +527,8 @@ def search():
             query_embedding = search_engine.get_text_embedding(query_text)
             results, total_count = search_engine.similarity_search(
                 query_embedding, k=limit, offset=offset, embed_type=embed_type,
-                lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max
+                lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                **advanced_params
             )
         
         elif search_type == 'song':
@@ -486,7 +548,8 @@ def search():
                 query_embedding = embedding_lookup[song_key]
                 results, total_count = search_engine.similarity_search(
                     query_embedding, k=limit, offset=offset, embed_type=embed_type,
-                    lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max
+                    lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                    **advanced_params
                 )
             else:
                 return jsonify({'error': f'No {embed_type} embedding available for reference song'}), 400
@@ -997,6 +1060,17 @@ def top_artists():
     except Exception as e:
         logger.error(f"Error getting top artists: {e}")
         return jsonify({'error': 'Failed to retrieve top artists'}), 500
+
+@app.route('/api/default_ranking_config')
+def get_default_ranking_config():
+    """Get default ranking configuration parameters."""
+    try:
+        # Create a default RankingConfig instance and return its parameters
+        default_config = ranking.RankingConfig()
+        return jsonify(default_config.to_dict())
+    except Exception as e:
+        logger.error(f"Error getting default ranking config: {e}")
+        return jsonify({'error': 'Failed to retrieve default ranking configuration'}), 500
 
 def parse_arguments():
     """Parse command line arguments."""
