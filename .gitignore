@@ -1,9 +1,13 @@
 prompts/*
 notebooks/*
 data/*
-semantic_song_search/design_doc.md
+design_docs/*
 *__pycache__*
 .cache
+.DS_Store
 2024-spotify-full-logo/*
 flask_session/*
 .env
+*.pdf
+*.ipynb
+*.png
