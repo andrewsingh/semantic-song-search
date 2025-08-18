@@ -3280,9 +3280,29 @@ class SemanticSearchApp {
     resetAdvancedParametersToDefaults() {
         console.log('🔄 Resetting advanced parameters to defaults...');
         
-        // Re-initialize with defaults
-        this.populateAdvancedSettingsFormWithDefaults();
+        // Get default values
+        const defaults = {
+            'H_c': 30.0, 'H_E': 90.0, 'gamma_s': 1.2, 'gamma_f': 1.4, 'kappa': 1.5,
+            'alpha_0': 3.0, 'beta_0': 3.0, 'K_s': 3.0, 'K_E': 10.0, 'gamma_A': 1.0,
+            'eta': 1.2, 'tau': 0.7, 'beta_f': 1.5, 'K_life': 10.0, 'K_recent': 5.0,
+            'psi': 1.4, 'k_neighbors': 50, 'sigma': 10.0, 'knn_embed_type': 'full_profile',
+            'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
+            'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
+            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4
+        };
+        
+        // Populate form with defaults
+        this.populateAdvancedSettingsForm(defaults);
+        
+        // Update current params but DON'T update active params 
+        // (so the button will detect changes)
+        this.currentAdvancedParams = { ...defaults };
+        
+        // Update button state - should enable the button if current != active
         this.updateAdvancedRerunButtonState();
+        
+        console.log('🔧 Reset currentAdvancedParams to defaults:', this.currentAdvancedParams);
+        console.log('🔧 activeAdvancedParams unchanged:', this.activeAdvancedParams);
         
         // Track reset action
         if (typeof mixpanel !== 'undefined') {

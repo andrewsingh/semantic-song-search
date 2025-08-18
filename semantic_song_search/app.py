@@ -218,6 +218,7 @@ class MusicSearchEngine:
             if needs_reinit:
                 logger.info("🔧 Parameters requiring re-initialization changed, rebuilding ranking engine...")
                 self.ranking_engine.reinitialize_with_new_config(
+                    self.history_df,
                     self.songs, 
                     self.embedding_lookups
                 )

@@ -204,24 +204,18 @@ class RankingEngine:
         self.p95_C_t = None
         self.s_base = None
         self.has_history = False
-        
-        # Store original data for re-initialization
-        self.original_history_df = None
-        self.original_songs_metadata = None
-        self.original_embedding_lookups = None
 
 
-    def reinitialize_with_new_config(self, songs_metadata: List[Dict], embedding_lookups: Dict = None, history_df = None):
+    def reinitialize_with_new_config(self, history_df: pd.DataFrame, songs_metadata: List[Dict], embedding_lookups: Dict = None):
         """
         Re-initialize the ranking engine with new configuration parameters.
         This recomputes all statistics that depend on the changed parameters.
+        
+        Args:
+            history_df: The original listening history DataFrame
+            songs_metadata: The original songs metadata list
+            embedding_lookups: The original embedding lookups dictionary
         """
-        # Use stored data if not provided
-        if history_df is None:
-            history_df = self.original_history_df
-        if embedding_lookups is None:
-            embedding_lookups = self.original_embedding_lookups
-            
         if history_df is None or history_df.empty:
             logger.warning("No history data available for re-initialization")
             return
@@ -745,11 +739,6 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
         Initialized RankingEngine instance
     """
     engine = RankingEngine(config)
-    
-    # Store original data for potential re-initialization
-    engine.original_history_df = history_df.copy() if not history_df.empty else pd.DataFrame()
-    engine.original_songs_metadata = songs_metadata
-    engine.original_embedding_lookups = embedding_lookups
     
     if not history_df.empty:
         # Compute track statistics
