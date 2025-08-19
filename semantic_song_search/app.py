@@ -163,12 +163,82 @@ class MusicSearchEngine:
         """Get OpenAI embedding for text query."""
         return data_utils.get_openai_embedding(text, normalize=True)
     
+    def get_artist_for_song(self, song_key: Tuple[str, str]) -> str:
+        """Extract artist name from song_key tuple."""
+        return song_key[1]  # song_key is (song_name, artist_name)
+    
+    def get_artist_pop_vibe_embedding(self, artist: str) -> np.ndarray:
+        """Get artist's popularity vibe embedding, returns zero vector if not found."""
+        if (hasattr(self.ranking_engine, 'artist_pop_vibe_embeds') and 
+            artist in self.ranking_engine.artist_pop_vibe_embeds):
+            return self.ranking_engine.artist_pop_vibe_embeds[artist]
+        else:
+            # Return zero vector if artist embedding not found
+            if hasattr(self.ranking_engine, 'artist_pop_vibe_embeds'):
+                logger.debug(f"Artist '{artist}' not found in popularity vibe embeddings")
+            else:
+                logger.debug("Artist popularity vibe embeddings not available")
+            
+            # Detect embedding dimension from existing embeddings or use default
+            embedding_dim = self._get_embedding_dimension()
+            return np.zeros(embedding_dim, dtype=np.float32)
+    
+    def get_artist_personal_vibe_embedding(self, artist: str) -> np.ndarray:
+        """Get artist's personal vibe embedding, returns zero vector if not found."""
+        if (hasattr(self.ranking_engine, 'artist_personal_vibe_embeds') and 
+            artist in self.ranking_engine.artist_personal_vibe_embeds):
+            return self.ranking_engine.artist_personal_vibe_embeds[artist]
+        else:
+            # Return zero vector if artist embedding not found
+            if hasattr(self.ranking_engine, 'artist_personal_vibe_embeds'):
+                logger.debug(f"Artist '{artist}' not found in personal vibe embeddings")
+            else:
+                logger.debug("Artist personal vibe embeddings not available")
+            
+            # Detect embedding dimension from existing embeddings or use default
+            embedding_dim = self._get_embedding_dimension()
+            return np.zeros(embedding_dim, dtype=np.float32)
+    
+    def _get_embedding_dimension(self) -> int:
+        """Get embedding dimension by checking available embeddings or use default."""
+        # Try to get dimension from existing artist embeddings
+        if (hasattr(self.ranking_engine, 'artist_pop_vibe_embeds') and 
+            self.ranking_engine.artist_pop_vibe_embeds):
+            # Get dimension from first available embedding
+            first_embedding = next(iter(self.ranking_engine.artist_pop_vibe_embeds.values()))
+            return first_embedding.shape[0]
+        
+        # Try to get dimension from song embeddings
+        if self.embedding_lookups:
+            for _, lookup in self.embedding_lookups.items():
+                if lookup:
+                    first_embedding = next(iter(lookup.values()))
+                    return first_embedding.shape[0]
+        
+        # Default to 3072 for text-embedding-3-large
+        return 3072
+    
+    def _safe_normalize(self, embedding: np.ndarray) -> np.ndarray:
+        """Safely normalize an embedding vector, handling NaN and zero vectors."""
+        # Replace any NaN or inf values with zeros
+        embedding_clean = np.nan_to_num(embedding, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Compute norm
+        norm = np.linalg.norm(embedding_clean)
+        
+        # Handle zero vector case
+        if norm < 1e-12:
+            return embedding_clean  # Return zero vector as-is
+        
+        return embedding_clean / norm
+    
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
                          familiarity_min: float = 0.0, familiarity_max: float = 1.0,
+                         query_song_key: Tuple[str, str] = None, 
                          **advanced_params) -> Tuple[List[Dict], int]:
         """
-        Perform V2.5 similarity search with personalized ranking.
+        Perform V2.6 similarity search with personalized ranking and multi-dimensional similarity.
         
         Args:
             query_embedding: Normalized query embedding
@@ -178,6 +248,7 @@ class MusicSearchEngine:
             lambda_val: Weight for semantic vs personal utility (0=personal, 1=semantic)
             familiarity_min: Minimum familiarity score to include (0.0-1.0)
             familiarity_max: Maximum familiarity score to include (0.0-1.0)
+            query_song_key: If provided, enables song-to-song search with artist similarities (song_name, artist_name)
         
         Returns:
             Tuple of (results, total_count)
@@ -237,7 +308,7 @@ class MusicSearchEngine:
             logger.error(f"No embeddings available for type {embed_type}")
             return [], 0
         
-        # V2.5: Compute candidates and their priors for quantile normalization
+        # V2.6: Compute candidates and their priors for quantile normalization
         candidates_data = []
         
         for i, song in enumerate(self.songs):
@@ -262,13 +333,57 @@ class MusicSearchEngine:
             return [], 0
         
         
-        # Compute V2.5 final scores with familiarity filtering
+        # Compute V2.6 final scores with familiarity filtering
         candidate_scores = []
         
         for candidate in candidates_data:
+            # Compute artist similarities for multi-dimensional search
+            artist_pop_similarity = 0.0
+            artist_personal_similarity = 0.0
+            
+            try:
+                if query_song_key is not None:
+                    # Song-to-song search: compare artists
+                    query_artist = self.get_artist_for_song(query_song_key)
+                    candidate_artist = self.get_artist_for_song(candidate['song_key'])
+                    
+                    query_pop_embedding = self.get_artist_pop_vibe_embedding(query_artist)
+                    candidate_pop_embedding = self.get_artist_pop_vibe_embedding(candidate_artist)
+                    # Normalize embeddings for proper cosine similarity with NaN handling
+                    query_pop_norm = self._safe_normalize(query_pop_embedding)
+                    candidate_pop_norm = self._safe_normalize(candidate_pop_embedding)
+                    artist_pop_similarity = np.dot(query_pop_norm, candidate_pop_norm)
+                    
+                    query_personal_embedding = self.get_artist_personal_vibe_embedding(query_artist)
+                    candidate_personal_embedding = self.get_artist_personal_vibe_embedding(candidate_artist)
+                    # Normalize embeddings for proper cosine similarity with NaN handling
+                    query_personal_norm = self._safe_normalize(query_personal_embedding)
+                    candidate_personal_norm = self._safe_normalize(candidate_personal_embedding)
+                    artist_personal_similarity = np.dot(query_personal_norm, candidate_personal_norm)
+                    
+                else:
+                    # Text-to-song search: compare query text to candidate artists
+                    candidate_artist = self.get_artist_for_song(candidate['song_key'])
+                    
+                    candidate_pop_embedding = self.get_artist_pop_vibe_embedding(candidate_artist)
+                    # Normalize candidate embedding (query_embedding is already normalized)
+                    candidate_pop_norm = self._safe_normalize(candidate_pop_embedding)
+                    artist_pop_similarity = np.dot(query_embedding, candidate_pop_norm)
+                    
+                    candidate_personal_embedding = self.get_artist_personal_vibe_embedding(candidate_artist)
+                    # Normalize candidate embedding (query_embedding is already normalized)
+                    candidate_personal_norm = self._safe_normalize(candidate_personal_embedding)
+                    artist_personal_similarity = np.dot(query_embedding, candidate_personal_norm)
+                    
+            except Exception as e:
+                logger.warning(f"Error computing artist similarities for {candidate['song_key']}: {e}")
+                # Keep default values of 0.0 for both similarities
+            
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 
-                candidate['song_key']
+                candidate['song_key'],
+                artist_pop_similarity,
+                artist_personal_similarity
             )
             
             # Get familiarity score for filtering
@@ -298,14 +413,14 @@ class MusicSearchEngine:
         end_idx = offset + k
         paginated_results = candidate_scores[start_idx:end_idx]
         
-        # Convert to V2.5 result format
+        # Convert to V2.6 result format
         results = []
         for result in paginated_results:
             song_idx = result['song_idx']
             song = self.songs[song_idx]
             song_key = result['song_key']
             
-            # Build result dict with V2.5 structure
+            # Build result dict with V2.6 structure
             result_dict = {
                 'song_idx': song_idx,
                 'song': song['original_song'],
@@ -317,7 +432,7 @@ class MusicSearchEngine:
                 'genres': song.get('genres', []),
                 'tags': song.get('tags', []),
                 'final_score': result['final_score'],
-                'scoring_components': result  # Include all V2.5 components
+                'scoring_components': result  # Include all V2.6 components
             }
             
             # Add has_history flag for compatibility
@@ -365,11 +480,11 @@ class MusicSearchEngine:
         )
     
     def get_ranking_weights(self) -> Dict:
-        """Get current V2.5 ranking weights for display."""
+        """Get current V2.6 ranking weights for display."""
         config = self.ranking_engine.config
         weights = config.to_dict()
         weights.update({
-            'version': '2.5',
+            'version': '2.6',
             'has_history': self.has_history,
             'history_songs_count': len(self.ranking_engine.track_stats) if self.ranking_engine.track_stats else 0
         })
@@ -550,6 +665,7 @@ def search():
                 results, total_count = search_engine.similarity_search(
                     query_embedding, k=limit, offset=offset, embed_type=embed_type,
                     lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                    query_song_key=song_key,  # Enable song-to-song artist similarities
                     **advanced_params
                 )
             else:

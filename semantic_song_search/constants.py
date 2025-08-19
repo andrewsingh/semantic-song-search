@@ -15,7 +15,7 @@ DEFAULT_SONGS_FILE = "data/eval_set_v2/eval_set_v2_metadata_ready.json"
 DEFAULT_EMBEDDINGS_PATH = "data/eval_set_v2/eval_set_v2_embeddings"
 
 # Embedding Types
-EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
+EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
 
 # Flask Configuration
 DEFAULT_HOST = "127.0.0.1"

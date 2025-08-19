@@ -291,8 +291,8 @@ class SemanticSearchApp {
         // Reset Defaults Button
         const resetDefaultsBtn = document.getElementById('reset-defaults-btn');
         if (resetDefaultsBtn) {
-            resetDefaultsBtn.addEventListener('click', () => {
-                this.resetAdvancedParametersToDefaults();
+            resetDefaultsBtn.addEventListener('click', async () => {
+                await this.resetAdvancedParametersToDefaults();
             });
         }
 
@@ -1148,23 +1148,25 @@ class SemanticSearchApp {
             let scoringComponentsHTML = '';
             if (song.scoring_components && song.scoring_components.weighted_semantic !== undefined) {
                 const components = song.scoring_components;
+                
+                // V2.6: Show the 4 key components: 3 similarity dimensions + familiarity
                 scoringComponentsHTML = `
                     <div class="scoring-components">
-                        <span class="scoring-component">
+                        <span class="scoring-component" title="Track-level similarity">
                             <span class="component-label">Sim:</span>
-                            <span class="component-value">${(components.raw_semantic).toFixed(2)}</span>
+                            <span class="component-value">${(components.S_track || 0).toFixed(2)}</span>
                         </span>
-                        <span class="scoring-component">
-                            <span class="component-label">Aff:</span>
-                            <span class="component-value">${(components.raw_quality).toFixed(2)}</span>
+                        <span class="scoring-component" title="Artist popularity vibe similarity">
+                            <span class="component-label">Pop:</span>
+                            <span class="component-value">${(components.S_artist_pop || 0).toFixed(2)}</span>
                         </span>
-                        <span class="scoring-component">
-                            <span class="component-label">Exp:</span>
-                            <span class="component-value">${(components.raw_exploration).toFixed(2)}</span>
+                        <span class="scoring-component" title="Artist personal vibe similarity">
+                            <span class="component-label">Per:</span>
+                            <span class="component-value">${(components.S_artist_personal || 0).toFixed(2)}</span>
                         </span>
-                        <span class="scoring-component">
+                        <span class="scoring-component" title="Familiarity score">
                             <span class="component-label">Fam:</span>
-                            <span class="component-value">${(components.Fam_t).toFixed(2)}</span>
+                            <span class="component-value">${(components.Fam_t || 0).toFixed(2)}</span>
                         </span>
                     </div>
                 `;
@@ -3126,7 +3128,7 @@ class SemanticSearchApp {
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal'
         ];
         
         // Initialize current advanced parameters object
@@ -3277,32 +3279,35 @@ class SemanticSearchApp {
         console.log('🔧 activeAdvancedParams after defaults:', this.activeAdvancedParams);
     }
     
-    resetAdvancedParametersToDefaults() {
+    async resetAdvancedParametersToDefaults() {
         console.log('🔄 Resetting advanced parameters to defaults...');
         
-        // Get default values
-        const defaults = {
-            'H_c': 30.0, 'H_E': 90.0, 'gamma_s': 1.2, 'gamma_f': 1.4, 'kappa': 1.5,
-            'alpha_0': 3.0, 'beta_0': 3.0, 'K_s': 3.0, 'K_E': 10.0, 'gamma_A': 1.0,
-            'eta': 1.2, 'tau': 0.7, 'beta_f': 1.5, 'K_life': 10.0, 'K_recent': 5.0,
-            'psi': 1.4, 'k_neighbors': 50, 'sigma': 10.0, 'knn_embed_type': 'full_profile',
-            'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
-            'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
-            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4
-        };
-        
-        // Populate form with defaults
-        this.populateAdvancedSettingsForm(defaults);
-        
-        // Update current params but DON'T update active params 
-        // (so the button will detect changes)
-        this.currentAdvancedParams = { ...defaults };
-        
-        // Update button state - should enable the button if current != active
-        this.updateAdvancedRerunButtonState();
-        
-        console.log('🔧 Reset currentAdvancedParams to defaults:', this.currentAdvancedParams);
-        console.log('🔧 activeAdvancedParams unchanged:', this.activeAdvancedParams);
+        try {
+            // Fetch fresh defaults from API
+            const response = await fetch('/api/default_ranking_config');
+            if (response.ok) {
+                const defaults = await response.json();
+                
+                // Populate form with defaults
+                this.populateAdvancedSettingsForm(defaults);
+                
+                // Update current params but DON'T update active params 
+                // (so the button will detect changes)
+                this.currentAdvancedParams = { ...defaults };
+                
+                // Update button state - should enable the button if current != active
+                this.updateAdvancedRerunButtonState();
+                
+                console.log('🔧 Reset currentAdvancedParams to API defaults:', this.currentAdvancedParams);
+                console.log('🔧 activeAdvancedParams unchanged:', this.activeAdvancedParams);
+            } else {
+                console.error('Failed to fetch defaults for reset');
+                return;
+            }
+        } catch (error) {
+            console.error('Error fetching defaults for reset:', error);
+            return;
+        }
         
         // Track reset action
         if (typeof mixpanel !== 'undefined') {
