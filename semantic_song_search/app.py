@@ -261,30 +261,16 @@ class MusicSearchEngine:
         if advanced_params:
             logger.info(f"🔧 Updating ranking config with advanced params: {advanced_params}")
             
-            # Store old config values to check if re-initialization is needed
-            old_H_c = self.ranking_engine.config.H_c
-            old_H_E = self.ranking_engine.config.H_E
-            old_knn_embed_type = self.ranking_engine.config.knn_embed_type
-            
             # Update configuration
             self.ranking_engine.config.update_weights(advanced_params)
             logger.info(f"🔧 Updated H_c in config: {self.ranking_engine.config.H_c}")
             
-            # Check if critical parameters that require re-initialization have actually changed
-            needs_reinit = (
-                (old_H_c != self.ranking_engine.config.H_c) or
-                (old_H_E != self.ranking_engine.config.H_E) or
-                (old_knn_embed_type != self.ranking_engine.config.knn_embed_type)
-            )
-            
-            # Add other parameters that affect precomputed statistics
-            if not needs_reinit:
-                # Check if any critical computation parameters changed
-                critical_params = ['gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 
-                                 'K_s', 'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 
-                                 'psi', 'k_neighbors', 'sigma', 'theta_c', 'tau_c', 
-                                 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays']
-                needs_reinit = any(param in advanced_params for param in critical_params)
+            # Check if any critical parameters that require re-initialization have changed
+            critical_params = ['H_c', 'H_E', 'knn_embed_type', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 
+                             'K_s', 'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 
+                             'psi', 'k_neighbors', 'sigma', 'theta_c', 'tau_c', 
+                             'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays']
+            needs_reinit = any(param in advanced_params for param in critical_params)
             
             if needs_reinit:
                 logger.info("🔧 Parameters requiring re-initialization changed, rebuilding ranking engine...")
