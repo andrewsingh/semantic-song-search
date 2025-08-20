@@ -1390,18 +1390,22 @@ body {
 }
 
 .play-btn {
-    background: #1DB954;
-    color: white;
+    background: #1DB954 !important;
+    color: white !important;
     font-size: 1rem;
     width: 40px;
     height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background-image: none !important;
 }
 
 .play-btn:hover {
-    background: #1ed760;
+    background: #1ed760 !important;
 }
 
 

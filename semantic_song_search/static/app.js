@@ -1,14 +1,12 @@
 // Semantic Song Search App JavaScript
 
-// Utility function to escape HTML and prevent XSS
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
 class SemanticSearchApp {
     constructor() {
+        // Initialize utilities and helpers
+        this.api = new ApiHelper();
+        this.analytics = new AnalyticsHelper();
+        
+        // Search state
         this.currentQuery = null;
         this.currentQuerySong = null;
         this.currentSearchType = 'text'; // Initialize to match HTML default
@@ -19,17 +17,15 @@ class SemanticSearchApp {
         this.totalResultsCount = 0;
         this.hasMoreResults = false;
         this.isLoadingMore = false;
-        this.spotifyPlayer = null;
-        this.deviceId = null;
+        this.searchResultsId = null;
+        
+        // Authentication state
         this.accessToken = null;
-        this.currentTrack = null;
-        this.isPlayerReady = false;
-        this.playerInitPromise = null; // Promise for player initialization
+        this.isAuthenticated = false;
         
         // Top artists filter
         this.topArtists = [];
         this.topArtistsLoaded = false;
-        this.isAuthenticated = false;
         this.isFiltered = false;
         this.originalSearchResults = []; // Store unfiltered results for client-side filtering
         
@@ -37,29 +33,41 @@ class SemanticSearchApp {
         this.isManualSelectionMode = false;
         this.selectedSongs = new Set(); // Set of song indices that are selected
         
-        // Auto-play queue management
-        this.currentSongIndex = -1;  // Index in search results
-        this.isAutoPlayEnabled = true;  // Auto-play always enabled
-        this.searchResultsId = null;  // To detect result changes
-        this.isManualSkip = false;  // Track if user manually skipped
-        this.lastTrackId = null;  // Track last played track for auto-advance detection
-        this.autoAdvancePending = false;  // Prevent multiple rapid auto-advances
-        this.lastAutoAdvanceTime = 0;  // Rate limiting for auto-advances (0 = no previous auto-advance)
-        this.isPlayingSong = false;  // Track if we're currently starting a song
-        this.autoPlayCheckInterval = null;  // Backup auto-play checker
-        this.lastProcessedTrackEnd = null;  // Prevent duplicate track-end processing
-        
         // Personalization controls state
         this.currentLambdaVal = 0.5;
         this.currentFamiliarityMin = 0.0;
         this.currentFamiliarityMax = 1.0;
         this.hasPersonalizationHistory = false;
         
-        // Analytics tracking
-        this.sessionStartTime = Date.now();
-        this.searchCount = 0;
-        this.songsPlayed = 0;
-        this.playlistsCreated = 0;
+        // Cache frequently accessed DOM elements
+        this.domElements = {
+            topArtistsFilter: document.getElementById('top-artists-filter'),
+            resultsGrid: document.getElementById('results-grid'),
+            searchInput: document.getElementById('search-input'),
+            suggestions: document.getElementById('suggestions'),
+            familiarityMin: document.getElementById('familiarity-min'),
+            familiarityMax: document.getElementById('familiarity-max'),
+            exportSection: document.getElementById('export-section'),
+            advancedRerunSearchBtn: document.getElementById('advanced-rerun-search-btn'),
+            rerunSearchBtn: document.getElementById('rerun-search-btn'),
+            manualSelectionToggle: document.getElementById('manual-selection-toggle'),
+            loadMoreContainer: document.getElementById('load-more-container'),
+            exportStatus: document.getElementById('export-status'),
+            exportBtn: document.getElementById('export-btn'),
+            embedType: document.getElementById('embed-type'),
+            resultsContainer: document.getElementById('results-container'),
+            resultsCount: document.getElementById('results-count'),
+            resultsHeader: document.getElementById('results-header'),
+            playBtn: document.getElementById('play-btn'),
+            prevBtn: document.getElementById('prev-btn'),
+            nextBtn: document.getElementById('next-btn'),
+            lambdaSlider: document.getElementById('lambda-slider'),
+            lambdaValue: document.getElementById('lambda-value'),
+            loadMoreBtn: document.getElementById('load-more-btn')
+        };
+        
+        // Initialize Spotify Player
+        this.player = new SpotifyPlayer(this);
         
         this.init();
     }
@@ -71,37 +79,10 @@ class SemanticSearchApp {
         // Ensure currentSearchType is synced with the initial HTML state
         this.currentSearchType = this.getSearchType();
         
-        // Don't initialize player here - it will be initialized when needed in playSong()
-        // this.initSpotifyPlayer();
-        
         // Track initial page load
-        this.trackPageLoad();
+        this.analytics.trackPageLoad();
     }
     
-    trackPageLoad() {
-        if (typeof mixpanel !== 'undefined') {
-            // Get timezone and language information
-            const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            const language = navigator.language || navigator.userLanguage;
-            const languages = navigator.languages || [language];
-            
-            mixpanel.track('Page Loaded', {
-                'page_title': document.title,
-                'url': window.location.href,
-                'referrer': document.referrer,
-                'user_agent': navigator.userAgent,
-                'screen_width': window.screen.width,
-                'screen_height': window.screen.height,
-                'viewport_width': window.innerWidth,
-                'viewport_height': window.innerHeight,
-                'timezone': timezone,
-                'language': language,
-                'languages': languages.join(', '),
-                'platform': navigator.platform,
-                'cookie_enabled': navigator.cookieEnabled
-            });
-        }
-    }
     
     // Helper function to get current search type from segmented control
     getSearchType() {
@@ -114,7 +95,20 @@ class SemanticSearchApp {
         }
     }
     
+    // Helper function to get common tracking properties
+    
     bindEventListeners() {
+        this.bindSearchEventListeners();
+        this.bindAuthEventListeners();
+        this.bindPlayerEventListeners();
+        this.bindExportEventListeners();
+        this.bindFilterEventListeners();
+        this.bindPersonalizationEventListeners();
+        this.bindAdvancedSettingsEventListeners();
+        this.bindSessionEventListeners();
+    }
+    
+    bindSearchEventListeners() {
         // Search type change - segmented control
         const searchTypeRadios = document.querySelectorAll('input[name="search-type"]');
         if (searchTypeRadios.length > 0) {
@@ -130,12 +124,12 @@ class SemanticSearchApp {
         }
         
         // Embedding type change - auto-rerun search if results exist
-        document.getElementById('embed-type').addEventListener('change', (e) => {
+        this.domElements.embedType.addEventListener('change', (e) => {
             this.handleEmbedTypeChange(e.target.value);
         });
         
         // Search input
-        const searchInput = document.getElementById('search-input');
+        const searchInput = this.domElements.searchInput;
         searchInput.addEventListener('input', (e) => {
             this.handleSearchInput(e.target.value);
         });
@@ -146,6 +140,13 @@ class SemanticSearchApp {
             }
         });
         
+        // Load more button
+        this.domElements.loadMoreBtn.addEventListener('click', () => {
+            this.loadMoreResults();
+        });
+    }
+    
+    bindAuthEventListeners() {
         // Login button
         document.getElementById('login-btn').addEventListener('click', () => {
             window.location.href = '/login';
@@ -155,95 +156,71 @@ class SemanticSearchApp {
         document.getElementById('logout-btn').addEventListener('click', () => {
             window.location.href = '/logout';
         });
-        
+    }
+    
+    bindPlayerEventListeners() {
         // Player controls
-        document.getElementById('play-btn').addEventListener('click', () => {
-            this.togglePlayback();
+        this.domElements.playBtn.addEventListener('click', () => {
+            this.player.togglePlayback();
         });
         
-        document.getElementById('prev-btn').addEventListener('click', () => {
-            this.previousTrack();
+        this.domElements.prevBtn.addEventListener('click', () => {
+            this.player.previousTrack();
         });
         
-        document.getElementById('next-btn').addEventListener('click', () => {
-            this.nextTrack();
+        this.domElements.nextBtn.addEventListener('click', () => {
+            this.player.nextTrack();
         });
         
         // Progress bar
         document.getElementById('progress-bar').addEventListener('click', (e) => {
-            this.seekToPosition(e);
+            this.player.seekToPosition(e);
         });
-        
+    }
+    
+    bindExportEventListeners() {
         // Export accordion toggle
         document.getElementById('export-accordion-btn').addEventListener('click', () => {
             this.toggleExportAccordion();
         });
         
         // Export button
-        document.getElementById('export-btn').addEventListener('click', () => {
+        this.domElements.exportBtn.addEventListener('click', () => {
             this.exportToPlaylist();
         });
         
         // Manual selection toggle
-        document.getElementById('manual-selection-toggle').addEventListener('change', (e) => {
+        this.domElements.manualSelectionToggle.addEventListener('change', (e) => {
             this.toggleManualSelection(e.target.checked);
         });
-        
+    }
+    
+    bindFilterEventListeners() {
         // Top artists filter checkbox
-        document.getElementById('top-artists-filter').addEventListener('change', async (e) => {
-            console.log(`🎛️ Top artists filter checkbox changed: ${e.target.checked ? 'CHECKED' : 'UNCHECKED'}`);
-            console.log(`🎛️ Current state - topArtistsLoaded: ${this.topArtistsLoaded}, isAuthenticated: ${this.isAuthenticated}, top artists count: ${this.topArtists.length}`);
-            
+        this.domElements.topArtistsFilter.addEventListener('change', async (e) => {
             // Track filter toggle
-            if (typeof mixpanel !== 'undefined') {
-                mixpanel.track('Top Artists Filter Toggled', {
-                    'filter_enabled': e.target.checked,
-                    'is_authenticated': this.isAuthenticated,
-                    'top_artists_loaded': this.topArtistsLoaded,
-                    'top_artists_count': this.topArtists.length,
-                    'has_existing_results': this.searchResults.length > 0,
-                    'results_count': this.searchResults.length
-                });
-            }
+            this.analytics.trackEvent('Top Artists Filter Toggled', {
+                'filter_enabled': e.target.checked
+            });
             
             // If checked and we don't have top artists yet, load them
             if (e.target.checked && !this.topArtistsLoaded && this.isAuthenticated) {
-                console.log(`🎛️ Loading top artists because checkbox was checked but not loaded yet...`);
                 await this.loadTopArtists();
             }
             
             // If we have existing search results, filter them client-side instead of re-running the search
             if (this.searchResults.length > 0) {
-                console.log(`🔄 Filter toggled to ${e.target.checked ? 'ON' : 'OFF'}, filtering ${this.searchResults.length} existing results client-side...`);
                 this.applyClientSideFilter();
-            } else {
-                console.log(`🔄 No existing results to filter - searchResults.length: ${this.searchResults.length}`);
             }
         });
-        
-        // Load more button
-        document.getElementById('load-more-btn').addEventListener('click', () => {
-            this.loadMoreResults();
-        });
-        
-        // Track when user leaves the page
-        window.addEventListener('beforeunload', () => {
-            const sessionDuration = Math.round((Date.now() - this.sessionStartTime) / 1000);
-            if (typeof mixpanel !== 'undefined') {
-                mixpanel.track('Session Ended', {
-                    'session_duration_seconds': sessionDuration,
-                    'searches_performed': this.searchCount || 0,
-                    'songs_played': this.songsPlayed || 0,
-                    'playlists_created': this.playlistsCreated || 0
-                });
-            }
-        });
-        
+    }
+    
+    bindPersonalizationEventListeners() {
         // Personalization controls
-        const lambdaSlider = document.getElementById('lambda-slider');
-        const familiarityMinSlider = document.getElementById('familiarity-min');
-        const familiarityMaxSlider = document.getElementById('familiarity-max');
-        const rerunSearchBtn = document.getElementById('rerun-search-btn');
+        const lambdaSlider = this.domElements.lambdaSlider;
+        const familiarityMinSlider = this.domElements.familiarityMin;
+        const familiarityMaxSlider = this.domElements.familiarityMax;
+        const rerunSearchBtn = this.domElements.rerunSearchBtn;
         
         if (lambdaSlider) {
             lambdaSlider.addEventListener('input', (e) => {
@@ -268,7 +245,9 @@ class SemanticSearchApp {
                 this.rerunSearchWithNewParameters();
             });
         }
-
+    }
+    
+    bindAdvancedSettingsEventListeners() {
         // Advanced Settings Accordion
         const advancedSettingsBtn = document.getElementById('advanced-settings-accordion-btn');
         if (advancedSettingsBtn) {
@@ -281,7 +260,7 @@ class SemanticSearchApp {
         this.initAdvancedSettingsListeners();
 
         // Advanced Settings Rerun Search Button
-        const advancedRerunBtn = document.getElementById('advanced-rerun-search-btn');
+        const advancedRerunBtn = this.domElements.advancedRerunSearchBtn;
         if (advancedRerunBtn) {
             advancedRerunBtn.addEventListener('click', () => {
                 this.rerunSearchWithAdvancedParameters();
@@ -295,22 +274,31 @@ class SemanticSearchApp {
                 await this.resetAdvancedParametersToDefaults();
             });
         }
-
+    }
+    
+    bindSessionEventListeners() {
+        // Track when user leaves the page
+        window.addEventListener('beforeunload', () => {
+            const sessionDuration = Math.round((Date.now() - this.analytics.sessionStartTime) / 1000);
+            this.analytics.trackEvent('Session Ended', {
+                'session_duration_seconds': sessionDuration,
+                'searches_performed': this.analytics.searchCount || 0,
+                'songs_played': this.analytics.songsPlayed || 0,
+                'playlists_created': this.analytics.playlistsCreated || 0
+            });
+        });
     }
     
     handleSearchTypeChange(searchType) {
-        const suggestionsContainer = document.getElementById('suggestions');
+        const suggestionsContainer = this.domElements.suggestions;
         const querySection = document.getElementById('query-section');
-        const searchInput = document.getElementById('search-input');
+        const searchInput = this.domElements.searchInput;
         
         // Track search type change
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Search Type Changed', {
-                'new_search_type': searchType,
-                'previous_search_type': this.currentSearchType || 'unknown',
-                'has_active_search': this.searchResults.length > 0
-            });
-        }
+        this.analytics.trackEvent('Search Type Changed', {
+            'new_search_type': searchType,
+            'previous_search_type': this.currentSearchType || 'unknown'
+        });
         
         // Update current search type immediately
         this.currentSearchType = searchType;
@@ -327,27 +315,23 @@ class SemanticSearchApp {
     }
     
     handleEmbedTypeChange(embedType) {
-        console.log(`🎛️ Embedding type changed to: ${embedType}`);
         
         // Track embed type change
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Embed Type Changed', {
-                'new_embed_type': embedType,
-                'previous_embed_type': this.currentEmbedType || 'unknown',
-                'has_active_search': this.searchResults.length > 0
-            });
-        }
+        this.analytics.trackEvent('Embed Type Changed', {
+            'new_embed_type': embedType,
+            'previous_embed_type': this.currentEmbedType || 'unknown',
+            'has_active_search': this.searchResults.length > 0
+        });
         
         this.currentEmbedType = embedType;
         
         // Don't auto-rerun if we're currently loading more results
         if (this.isLoadingMore) {
-            console.log(`🔄 Not auto-rerunning search - currently loading more results`);
             return;
         }
         
         // Check if we have existing search results and a query to re-run
-        const query = document.getElementById('search-input').value.trim();
+        const query = this.domElements.searchInput.value.trim();
         const hasResults = this.searchResults.length > 0;
         const hasQuery = query.length > 0;
         
@@ -356,22 +340,19 @@ class SemanticSearchApp {
         const hasValidQuery = hasQuery || (searchType === 'song' && this.currentQuerySong);
         
         if (hasResults && hasValidQuery) {
-            console.log(`🔄 Auto-rerunning search with new embedding type: ${embedType}`);
             // Auto-rerun the search with the new embedding type
             this.handleSearch();
         } else {
-            console.log(`🔄 Not auto-rerunning search - hasResults: ${hasResults}, hasValidQuery: ${hasValidQuery}, searchType: ${searchType}`);
         }
     }
     
     async handleSearchInput(query) {
         const searchType = this.getSearchType();
-        const suggestionsContainer = document.getElementById('suggestions');
+        const suggestionsContainer = this.domElements.suggestions;
         
         if (searchType === 'song' && query.trim().length > 2) {
             try {
-                const response = await fetch(`/api/search_suggestions?query=${encodeURIComponent(query)}`);
-                const suggestions = await response.json();
+                const suggestions = await this.api.get(`/api/search_suggestions?query=${encodeURIComponent(query)}`);
                 this.displaySuggestions(suggestions);
                 suggestionsContainer.style.display = 'block';
             } catch (error) {
@@ -384,7 +365,7 @@ class SemanticSearchApp {
     }
     
     displaySuggestions(suggestions) {
-        const container = document.getElementById('suggestions');
+        const container = this.domElements.suggestions;
         container.innerHTML = '';
         
         suggestions.forEach(suggestion => {
@@ -406,8 +387,8 @@ class SemanticSearchApp {
     
     selectSuggestion(suggestion) {
         this.currentQuerySong = suggestion;
-        document.getElementById('search-input').value = suggestion.label;
-        document.getElementById('suggestions').style.display = 'none';
+        this.domElements.searchInput.value = suggestion.label;
+        this.domElements.suggestions.style.display = 'none';
         this.displayQueryCard(suggestion);
         this.handleSearch();
     }
@@ -422,54 +403,88 @@ class SemanticSearchApp {
     }
     
     async handleSearch() {
-        const searchType = this.getSearchType();
-        const embedType = document.getElementById('embed-type').value;
-        const query = document.getElementById('search-input').value.trim();
-        const topArtistsFilter = document.getElementById('top-artists-filter');
-        let filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
+        const searchParams = this.extractSearchParameters();
+        if (!searchParams.query) return;
         
-        if (!query) return;
-        
-        // Track search initiation on frontend with comprehensive context
-        if (typeof mixpanel !== 'undefined') {
-            const searchProperties = {
-                'search_type': searchType,
-                'embed_type': embedType,
-                'is_filtered': filterTopArtists,
-                'is_manual_selection': this.isManualSelectionMode,
-                'selected_songs_count': this.selectedSongs.size,
-                'has_spotify_auth': this.isAuthenticated,
-                'has_results': this.searchResults.length > 0,
-                'is_new_search': this.searchResultsId !== `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`
-            };
-            
-            // Add query-specific information
-            if (searchType === 'text' && query) {
-                searchProperties.query = query;
-                searchProperties.query_length = query.length;
-            } else if (searchType === 'song' && this.currentQuerySong) {
-                searchProperties.has_query_song = true;
-                searchProperties.query_song_idx = this.currentQuerySong.song_idx;
-                searchProperties.query_song_name = this.currentQuerySong.song || '';
-                searchProperties.query_artist_name = this.currentQuerySong.artist || '';
-            }
-            
-            mixpanel.track('Search Initiated', searchProperties);
-        }
-        
+        this.trackSearchInitiation(searchParams);
         this.searchCount++;
         
-        // If top artists filter is enabled but not loaded, load them first
+        // Handle top artists filter loading
+        const filterTopArtists = await this.ensureTopArtistsLoaded(searchParams.filterTopArtists);
+        
+        const isNewSearch = this.prepareForNewSearch(searchParams);
+        
+        this.showLoading(true);
+        this.hideWelcomeMessage();
+        
+        try {
+            const requestData = this.buildSearchRequest(searchParams);
+            const data = await this.performSearch(requestData);
+            this.processSearchResults(data);
+            
+        } catch (error) {
+            console.error('Search error:', error);
+            this.showError('Search failed. Please try again.');
+        } finally {
+            this.showLoading(false);
+        }
+    }
+    
+    
+    extractSearchParameters() {
+        const searchType = this.getSearchType();
+        const embedType = this.domElements.embedType.value;
+        const query = this.domElements.searchInput.value.trim();
+        const topArtistsFilter = this.domElements.topArtistsFilter;
+        const filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
+        
+        return { searchType, embedType, query, filterTopArtists };
+    }
+    
+    trackSearchInitiation(searchParams) {
+        const { searchType, embedType, query, filterTopArtists } = searchParams;
+        
+        const searchProperties = {
+            'search_type': searchType,
+            'embed_type': embedType,
+            'is_filtered': filterTopArtists,
+            'is_manual_selection': this.isManualSelectionMode,
+            'selected_songs_count': this.selectedSongs.size,
+            'has_spotify_auth': this.isAuthenticated,
+            'has_results': this.searchResults.length > 0,
+            'is_new_search': this.searchResultsId !== `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`
+        };
+        
+        // Add query-specific information
+        if (searchType === 'text' && query) {
+            searchProperties.query = query;
+            searchProperties.query_length = query.length;
+        } else if (searchType === 'song' && this.currentQuerySong) {
+            searchProperties.has_query_song = true;
+            searchProperties.query_song_idx = this.currentQuerySong.song_idx;
+            searchProperties.query_song_name = this.currentQuerySong.song || '';
+            searchProperties.query_artist_name = this.currentQuerySong.artist || '';
+        }
+        
+        this.analytics.trackEvent('Search Initiated', searchProperties);
+    }
+    
+    async ensureTopArtistsLoaded(filterTopArtists) {
         if (filterTopArtists && !this.topArtistsLoaded) {
             await this.loadTopArtists();
             // If loading failed, uncheck the filter and continue without it
             if (!this.topArtistsLoaded) {
-                topArtistsFilter.checked = false;
-                filterTopArtists = false; // Update the variable to reflect the unchecked state
+                this.domElements.topArtistsFilter.checked = false;
+                return false;
             }
         }
+        return filterTopArtists;
+    }
+    
+    prepareForNewSearch(searchParams) {
+        const { searchType, embedType, query } = searchParams;
         
-        // Create a search identifier based on actual search parameters (excluding filter since it's now client-side)
+        // Create a search identifier based on actual search parameters
         const newSearchId = `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`;
         const isNewSearch = this.searchResultsId !== newSearchId;
         
@@ -481,102 +496,85 @@ class SemanticSearchApp {
         // Reset manual selection for new searches
         this.isManualSelectionMode = false;
         this.selectedSongs.clear();
-        const manualSelectionToggle = document.getElementById('manual-selection-toggle');
+        const manualSelectionToggle = this.domElements.manualSelectionToggle;
         if (manualSelectionToggle) {
             manualSelectionToggle.checked = false;
         }
-        // Update export form to show number input instead of selection info
         this.updateExportFormDisplay();
         
         // Reset queue when starting a new search
         if (isNewSearch) {
-            console.log('🎵 New search detected, resetting queue');
             this.searchResultsId = newSearchId;
-            this.resetAutoPlayQueue();
+            this.player.resetAutoPlayQueue();
         }
         
         // Store current search parameters for playlist name auto-population
         this.currentQuery = query;
         this.currentSearchType = searchType;
         
-        this.showLoading(true);
-        this.hideWelcomeMessage();
+        return isNewSearch;
+    }
+    
+    buildSearchRequest(searchParams) {
+        const { searchType, embedType, query } = searchParams;
         
-        try {
-            // Get advanced parameters
-            const advancedParams = this.getActiveAdvancedParams();
-            console.log('🔧 Advanced parameters being sent:', advancedParams);
-            
-            const requestData = {
-                search_type: searchType,
-                embed_type: embedType,
-                query: query,
-                k: 20,
-                offset: 0,
-                // Personalization parameters  
-                lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
-                familiarity_min: this.activeFamiliarityMin !== undefined ? this.activeFamiliarityMin : (this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0),
-                familiarity_max: this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0),
-                // Advanced ranking parameters
-                ...advancedParams
-                // Note: No longer sending filter_top_artists since we do client-side filtering
-            };
-            
-            console.log('🔧 Full request data:', requestData);
-            
-            if (searchType === 'song' && this.currentQuerySong) {
-                requestData.song_idx = this.currentQuerySong.song_idx;
-            }
-            
-            // Store current search data for load more functionality and weight updates
-            this.currentSearchData = { ...requestData };
-            this.lastSearchRequestData = { ...requestData };
-            
-            const response = await fetch('/api/search', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(requestData)
-            });
-            
-            if (!response.ok) {
-                throw new Error(`Search failed: ${response.statusText}`);
-            }
-            
-            const data = await response.json();
-            
-            // Validate API response structure
-            if (!data || typeof data !== 'object') {
-                throw new Error('Invalid API response format');
-            }
-            
-            if (!Array.isArray(data.results)) {
-                throw new Error('API response missing results array');
-            }
-            
-            this.searchResults = data.results;
-            this.originalSearchResults = [...data.results]; // Store original unfiltered results for client-side filtering
-            this.currentOffset = data.pagination.offset + data.pagination.limit;
-            this.totalResultsCount = data.pagination.total_count;
-            this.hasMoreResults = data.pagination.has_more;
-            this.isFiltered = false; // Reset since server doesn't filter anymore
-            // Note: Keep original currentSearchData with request parameters for load more
-            
-            // Apply client-side filter if checkbox is currently checked
-            const topArtistsFilter = document.getElementById('top-artists-filter');
-            if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
-                console.log('🔍 Auto-applying client-side filter after search because checkbox is checked');
-                this.applyClientSideFilter();
-            } else {
-                this.displayResults(data, false);
-            }
-            
-        } catch (error) {
-            console.error('Search error:', error);
-            this.showError('Search failed. Please try again.');
-        } finally {
-            this.showLoading(false);
+        // Get advanced parameters
+        const advancedParams = this.getActiveAdvancedParams();
+        
+        const requestData = {
+            search_type: searchType,
+            embed_type: embedType,
+            query: query,
+            k: 20,
+            offset: 0,
+            // Personalization parameters  
+            lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
+            familiarity_min: this.activeFamiliarityMin !== undefined ? this.activeFamiliarityMin : (this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0),
+            familiarity_max: this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0),
+            // Advanced ranking parameters
+            ...advancedParams
+        };
+        
+        if (searchType === 'song' && this.currentQuerySong) {
+            requestData.song_idx = this.currentQuerySong.song_idx;
+        }
+        
+        // Store current search data for load more functionality and weight updates
+        this.currentSearchData = { ...requestData };
+        this.lastSearchRequestData = { ...requestData };
+        
+        return requestData;
+    }
+    
+    async performSearch(requestData) {
+        const data = await this.api.post('/api/search', requestData);
+        
+        // Validate API response structure
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid API response format');
+        }
+        
+        if (!Array.isArray(data.results)) {
+            throw new Error('API response missing results array');
+        }
+        
+        return data;
+    }
+    
+    processSearchResults(data) {
+        this.searchResults = data.results;
+        this.originalSearchResults = [...data.results]; // Store original unfiltered results for client-side filtering
+        this.currentOffset = data.pagination.offset + data.pagination.limit;
+        this.totalResultsCount = data.pagination.total_count;
+        this.hasMoreResults = data.pagination.has_more;
+        this.isFiltered = false; // Reset since server doesn't filter anymore
+        
+        // Apply client-side filter if checkbox is currently checked
+        const topArtistsFilter = this.domElements.topArtistsFilter;
+        if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
+            this.applyClientSideFilter();
+        } else {
+            this.displayResults(data, false);
         }
     }
     
@@ -586,16 +584,14 @@ class SemanticSearchApp {
         }
         
         // Track load more click
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Load More Clicked', {
-                'current_results_count': this.searchResults.length,
-                'current_offset': this.currentOffset,
-                'search_type': this.currentSearchData.search_type,
-                'embed_type': this.currentSearchData.embed_type,
-                'has_filter_active': document.getElementById('top-artists-filter').checked,
-                'is_manual_selection_mode': this.isManualSelectionMode
-            });
-        }
+        this.analytics.trackEvent('Load More Clicked', {
+            'current_results_count': this.searchResults.length,
+            'current_offset': this.currentOffset,
+            'search_type': this.currentSearchData.search_type,
+            'embed_type': this.currentSearchData.embed_type,
+            'has_filter_active': this.domElements.topArtistsFilter.checked,
+            'is_manual_selection_mode': this.isManualSelectionMode
+        });
         
         this.isLoadingMore = true;
         this.showLoadMoreLoading(true);
@@ -610,7 +606,6 @@ class SemanticSearchApp {
                 familiarity_max: this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0
             };
             
-            console.log('🔄 Load more request data:', requestData);
             
             const response = await fetch('/api/search', {
                 method: 'POST',
@@ -653,13 +648,11 @@ class SemanticSearchApp {
                 data.results.forEach(song => {
                     this.selectedSongs.add(song.song_idx);
                 });
-                console.log(`🎯 Auto-selected ${data.results.length} new songs for manual selection mode`);
             }
             
             // Check if we have client-side filtering active
-            const topArtistsFilter = document.getElementById('top-artists-filter');
+            const topArtistsFilter = this.domElements.topArtistsFilter;
             if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
-                console.log('🔍 Re-applying client-side filter after loading more results');
                 this.applyClientSideFilter();
             } else {
                 // No filtering - just add new results and display
@@ -673,12 +666,10 @@ class SemanticSearchApp {
                 }
             }
             
-            console.log('🎵 Loaded more results, queue now has', this.searchResults.length, 'songs');
             console.log('🎵 Added', data.results.length, 'new songs to queue (was', previousResultsCount, ')');
             
             // If user was at the end of queue and new results loaded, they can now continue
             if (this.currentSongIndex === previousResultsCount - 1 && data.results.length > 0) {
-                console.log('🎵 Queue extended - auto-play can now continue from end of previous results');
             }
             
         } catch (error) {
@@ -691,11 +682,11 @@ class SemanticSearchApp {
     }
     
     displayResults(data, isLoadMore = false) {
-        const resultsHeader = document.getElementById('results-header');
-        const resultsCount = document.getElementById('results-count');
+        const resultsHeader = this.domElements.resultsHeader;
+        const resultsCount = this.domElements.resultsCount;
         const searchInfo = document.getElementById('search-info');
-        const resultsGrid = document.getElementById('results-grid');
-        const loadMoreContainer = document.getElementById('load-more-container');
+        const resultsGrid = this.domElements.resultsGrid;
+        const loadMoreContainer = this.domElements.loadMoreContainer;
         
         // Update header (show current results count with new formatting)
         this.updateResultsCount();
@@ -745,13 +736,13 @@ class SemanticSearchApp {
                 </div>
             `;
             loadMoreContainer.style.display = 'none';
-            document.getElementById('export-section').style.display = 'none';
+            this.domElements.exportSection.style.display = 'none';
             return;
         }
         
         // Show export section when results are available (only for new searches)
         if (!isLoadMore && this.searchResults.length > 0) {
-            document.getElementById('export-section').style.display = 'block';
+            this.domElements.exportSection.style.display = 'block';
             // Update the song count input placeholder to show available results
             this.updateSongCountHint();
         }
@@ -780,8 +771,7 @@ class SemanticSearchApp {
                 isSelected: this.selectedSongs.has(song.song_idx)
             });
             
-            // Don't add the old click listener here - we'll handle it in attachSongCardEventListeners
-            
+                
             // Add accordion toggle functionality
             const accordionToggle = card.querySelector('.accordion-toggle');
             if (accordionToggle) {
@@ -795,7 +785,7 @@ class SemanticSearchApp {
         });
         
         // Ensure results container has correct CSS class for manual selection mode
-        const resultsContainer = document.getElementById('results-container');
+        const resultsContainer = this.domElements.resultsContainer;
         if (this.isManualSelectionMode) {
             resultsContainer.classList.add('manual-selection-mode');
         } else {
@@ -811,15 +801,15 @@ class SemanticSearchApp {
         this.updateLoadMoreButton();
         
         // Update song count hint if export section is visible
-        const exportSection = document.getElementById('export-section');
+        const exportSection = this.domElements.exportSection;
         if (exportSection && exportSection.style.display !== 'none') {
             this.updateSongCountHint();
         }
     }
     
     updateLoadMoreButton() {
-        const loadMoreContainer = document.getElementById('load-more-container');
-        const loadMoreBtn = document.getElementById('load-more-btn');
+        const loadMoreContainer = this.domElements.loadMoreContainer;
+        const loadMoreBtn = this.domElements.loadMoreBtn;
         
         if (this.hasMoreResults && this.searchResults.length > 0) {
             loadMoreContainer.style.display = 'block';
@@ -835,7 +825,6 @@ class SemanticSearchApp {
     }
     
     displayRankingWeights(rankingWeights) {
-        // Hide the old ranking formula components section - we use the new V2.5 ranking system now
         let rankingWeightsContainer = document.getElementById('ranking-weights-container');
         if (rankingWeightsContainer) {
             rankingWeightsContainer.style.display = 'none';
@@ -929,20 +918,7 @@ class SemanticSearchApp {
     }
     
     async updateServerWeights(newWeights) {
-        const response = await fetch('/api/ranking_weights', {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(newWeights)
-        });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to update weights on server');
-        }
-        
-        return await response.json();
+        return await this.api.put('/api/ranking_weights', newWeights);
     }
     
     async performNewSearchWithUpdatedWeights() {
@@ -991,7 +967,7 @@ class SemanticSearchApp {
         this.updateResultsCount();
         
         // Re-apply any active filters
-        const topArtistsFilter = document.getElementById('top-artists-filter');
+        const topArtistsFilter = this.domElements.topArtistsFilter;
         if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.topArtistsLoaded) {
             this.applyClientSideFilter();
         }
@@ -1186,7 +1162,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)} (${song.scoring_components.P_t.toFixed(2)})</div>
+                    <div class="card-title">${escapeHtml(song.song)} ${song.scoring_components?.P_t ? `(${song.scoring_components.P_t.toFixed(2)})` : ''}</div>
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
@@ -1376,11 +1352,11 @@ class SemanticSearchApp {
     }
     
     clearResults() {
-        document.getElementById('results-header').style.display = 'none';
-        document.getElementById('results-grid').innerHTML = '';
-        document.getElementById('load-more-container').style.display = 'none';
+        this.domElements.resultsHeader.style.display = 'none';
+        this.domElements.resultsGrid.innerHTML = '';
+        this.domElements.loadMoreContainer.style.display = 'none';
         document.getElementById('welcome-message').style.display = 'block';
-        document.getElementById('export-section').style.display = 'none';
+        this.domElements.exportSection.style.display = 'none';
         
         // Reset export accordion state
         const accordion = document.querySelector('.export-accordion');
@@ -1402,7 +1378,7 @@ class SemanticSearchApp {
         // Reset manual selection
         this.isManualSelectionMode = false;
         this.selectedSongs.clear();
-        const manualSelectionToggle = document.getElementById('manual-selection-toggle');
+        const manualSelectionToggle = this.domElements.manualSelectionToggle;
         if (manualSelectionToggle) {
             manualSelectionToggle.checked = false;
         }
@@ -1413,73 +1389,21 @@ class SemanticSearchApp {
         this.resetEventListenerTracking();
         
         // Reset auto-play queue
-        this.resetAutoPlayQueue();
+        this.player.resetAutoPlayQueue();
     }
     
     resetEventListenerTracking() {
         // This method doesn't need to do anything since we clear the DOM
         // but it's here for clarity and potential future use
-        console.log('🔄 Event listener tracking reset');
     }
     
-    // Reset auto-play queue state
-    resetAutoPlayQueue() {
-        console.log('🎵 Resetting auto-play queue');
-        this.currentSongIndex = -1;
-        this.lastTrackId = null;
-        this.isManualSkip = false;
-        this.autoAdvancePending = false;
-        this.lastAutoAdvanceTime = 0;
-        this.isPlayingSong = false;
-        this.lastProcessedTrackEnd = null;
-        
-        // Stop current playback when search changes (if playing from our queue)
-        if (this.spotifyPlayer && this.currentTrack) {
-            console.log('🎵 Stopping current playback due to search change');
-            this.spotifyPlayer.pause().catch(error => {
-                console.error('Error pausing during queue reset:', error);
-            });
-        }
-    }
-    
-    // Backup auto-play checker - runs periodically to catch missed track endings
-    startAutoPlayChecker() {
-        if (this.autoPlayCheckInterval) {
-            clearInterval(this.autoPlayCheckInterval);
-        }
-        
-        this.autoPlayCheckInterval = setInterval(async () => {
-            if (!this.isPlayerReady || !this.spotifyPlayer || !this.isAutoPlayEnabled || this.currentSongIndex < 0) {
-                return;
-            }
-            
-            try {
-                const state = await this.spotifyPlayer.getCurrentState();
-                if (state) {
-                    // Less verbose logging for backup checks
-                    this.handleAutoPlayCheck(state, true); // Pass flag to indicate backup check
-                }
-            } catch (error) {
-                console.error('Error in backup auto-play check:', error);
-            }
-        }, 2000); // Check every 2 seconds to be less aggressive
-        
-        console.log('🎵 Started backup auto-play checker');
-    }
     
     // Spotify Authentication and Player
     async checkAuthStatus() {
         try {
-            const response = await fetch('/api/token');
-            if (response.ok) {
-                const data = await response.json();
-                this.accessToken = data.access_token;
-                this.updateAuthStatus(true);
-            } else {
-                this.updateAuthStatus(false);
-                // Auto-prompt for login if not authenticated
-                this.promptForLogin();
-            }
+            const data = await this.api.get('/api/token');
+            this.accessToken = data.access_token;
+            this.updateAuthStatus(true);
         } catch (error) {
             console.error('Auth check failed:', error);
             this.updateAuthStatus(false);
@@ -1518,7 +1442,7 @@ class SemanticSearchApp {
         const text = document.getElementById('auth-text');
         const loginBtn = document.getElementById('login-btn');
         const logoutBtn = document.getElementById('logout-btn');
-        const topArtistsFilter = document.getElementById('top-artists-filter');
+        const topArtistsFilter = this.domElements.topArtistsFilter;
         const topArtistsText = document.getElementById('top-artists-text');
         
         if (isAuthenticated) {
@@ -1548,10 +1472,9 @@ class SemanticSearchApp {
     }
     
     toggleManualSelection(enabled) {
-        console.log(`🎯 Manual selection toggled: ${enabled ? 'ON' : 'OFF'}`);
         
         this.isManualSelectionMode = enabled;
-        const resultsContainer = document.getElementById('results-container');
+        const resultsContainer = this.domElements.resultsContainer;
         
         if (enabled) {
             // Select all current songs by default
@@ -1559,7 +1482,6 @@ class SemanticSearchApp {
             this.searchResults.forEach((song, index) => {
                 this.selectedSongs.add(song.song_idx);
             });
-            console.log(`🎯 Selected ${this.selectedSongs.size} songs by default`);
             
             // Show checkboxes and enable selection styling with CSS class
             resultsContainer.classList.add('manual-selection-mode');
@@ -1567,7 +1489,6 @@ class SemanticSearchApp {
         } else {
             // Clear selections when disabled
             this.selectedSongs.clear();
-            console.log(`🎯 Cleared all selections`);
             
             // Hide checkboxes and disable selection styling
             resultsContainer.classList.remove('manual-selection-mode');
@@ -1584,7 +1505,7 @@ class SemanticSearchApp {
     }
     
     updateAllCardSelections() {
-        const resultsGrid = document.getElementById('results-grid');
+        const resultsGrid = this.domElements.resultsGrid;
         const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
         
         songCards.forEach((card, index) => {
@@ -1610,7 +1531,7 @@ class SemanticSearchApp {
     }
     
     clearAllCardSelections() {
-        const resultsGrid = document.getElementById('results-grid');
+        const resultsGrid = this.domElements.resultsGrid;
         const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
         
         songCards.forEach(card => {
@@ -1625,10 +1546,9 @@ class SemanticSearchApp {
         });
     }
     
-    // refreshSongCards method removed - no longer needed with CSS-based optimization
     
     attachSongCardEventListeners(startIndex = 0) {
-        const resultsGrid = document.getElementById('results-grid');
+        const resultsGrid = this.domElements.resultsGrid;
         const songCards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
         
         // Only attach listeners to cards starting from startIndex to avoid duplicates
@@ -1660,7 +1580,7 @@ class SemanticSearchApp {
                     this.toggleSongSelection(song.song_idx, index);
                 } else {
                     // Normal mode: single click plays
-                    this.playSong(song);
+                    this.player.playSong(song);
                 }
             });
             
@@ -1669,7 +1589,7 @@ class SemanticSearchApp {
             if (playButton) {
                 playButton.addEventListener('click', (e) => {
                     e.stopPropagation(); // Prevent card click
-                    this.playSong(song);
+                    this.player.playSong(song);
                 });
             }
             
@@ -1705,7 +1625,7 @@ class SemanticSearchApp {
     }
     
     updateResultsCount() {
-        const resultsCount = document.getElementById('results-count');
+        const resultsCount = this.domElements.resultsCount;
         if (!resultsCount) return;
         
         let resultsText = `${this.searchResults.length}`;
@@ -1726,21 +1646,17 @@ class SemanticSearchApp {
         resultsCount.textContent = resultsText;
     }
     
-    // attachAccordionEventListeners method removed - accordion listeners are now attached in displayResults directly
     
     toggleSongSelection(songIdx, cardIndex) {
         if (this.selectedSongs.has(songIdx)) {
             this.selectedSongs.delete(songIdx);
-            console.log(`🎯 Deselected song ${songIdx}`);
         } else {
             this.selectedSongs.add(songIdx);
-            console.log(`🎯 Selected song ${songIdx}`);
         }
         
         // Update the card's visual state
         this.updateSongCardSelection(cardIndex, this.selectedSongs.has(songIdx));
         
-        console.log(`🎯 Total selected: ${this.selectedSongs.size} songs`);
         
         // Update results count display to reflect new selection
         this.updateResultsCount();
@@ -1750,7 +1666,7 @@ class SemanticSearchApp {
     }
     
     updateSongCardSelection(cardIndex, isSelected) {
-        const resultsGrid = document.getElementById('results-grid');
+        const resultsGrid = this.domElements.resultsGrid;
         const cards = resultsGrid.querySelectorAll('.song-card:not(.query-card)');
         const card = cards[cardIndex];
         
@@ -1769,10 +1685,9 @@ class SemanticSearchApp {
     }
     
     applyClientSideFilter() {
-        const topArtistsFilter = document.getElementById('top-artists-filter');
+        const topArtistsFilter = this.domElements.topArtistsFilter;
         const filterEnabled = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
-        console.log(`🔍 Applying client-side filter - enabled: ${filterEnabled}, top artists count: ${this.topArtists ? this.topArtists.length : 0}`);
         
         if (!filterEnabled || !this.topArtistsLoaded || !this.topArtists || this.topArtists.length === 0) {
             // Show all original results
@@ -1802,7 +1717,6 @@ class SemanticSearchApp {
             }
             
             this.isFiltered = true;
-            console.log(`🔍 Filter results: ${this.searchResults.length} out of ${this.originalSearchResults.length} songs kept`);
         }
         
         // If in manual selection mode, remove filtered-out songs from selection
@@ -1858,36 +1772,14 @@ class SemanticSearchApp {
         const topArtistsText = document.getElementById('top-artists-text');
         
         try {
-            const response = await fetch('/api/top_artists');
-            const data = await response.json();
-            
-            if (response.ok) {
-                this.topArtists = data.artists || [];
-                this.topArtistsLoaded = true;
-                const count = this.topArtists.length;
-                if (count === 0) {
-                    topArtistsText.textContent = 'Only My Top Artists (0)';
-                    console.log('⚠️ User has no top artists - may have new account or insufficient listening history');
-                } else {
-                    topArtistsText.textContent = `Only My Top Artists (${count})`;
-                    console.log(`✅ Loaded ${count} top artists`);
-                }
+            const data = await this.api.get('/api/top_artists');
+            this.topArtists = data.artists || [];
+            this.topArtistsLoaded = true;
+            const count = this.topArtists.length;
+            if (count === 0) {
+                topArtistsText.textContent = 'Only My Top Artists (0)';
             } else {
-                console.error('Failed to load top artists:', data.error);
-                topArtistsText.textContent = 'Only My Top Artists';
-                
-                // If authentication error, disable the filter
-                if (response.status === 401 || response.status === 403) {
-                    const topArtistsFilter = document.getElementById('top-artists-filter');
-                    topArtistsFilter.checked = false;
-                    topArtistsFilter.disabled = true;
-                    
-                    // Special handling for scope insufficient error
-                    if (data.requires_reauth) {
-                        this.showError('Top artists filter requires additional permissions. Please logout and login again to enable this feature.');
-                        this.updateAuthStatus(false);
-                    }
-                }
+                topArtistsText.textContent = `Only My Top Artists (${count})`;
             }
         } catch (error) {
             console.error('Error loading top artists:', error);
@@ -1895,670 +1787,6 @@ class SemanticSearchApp {
         }
     }
     
-    initSpotifyPlayer() {
-        console.log('🎧 initSpotifyPlayer called');
-        console.log('🎧 Access token available?', this.accessToken ? 'Yes' : 'No');
-        
-        if (!this.accessToken) {
-            console.log('❌ No access token, skipping player initialization');
-            return Promise.reject(new Error('No access token'));
-        }
-        
-        if (!window.Spotify) {
-            console.log('⏳ Spotify SDK not loaded, retrying in 1 second...');
-            return new Promise((resolve, reject) => {
-                setTimeout(() => {
-                    this.initSpotifyPlayer().then(resolve).catch(reject);
-                }, 1000);
-            });
-        }
-        
-        // Return existing promise if initialization is already in progress
-        if (this.playerInitPromise) {
-            console.log('🎧 Player initialization already in progress, returning existing promise');
-            return this.playerInitPromise;
-        }
-        
-        console.log('✅ Spotify SDK loaded, creating player...');
-        
-        // Create a promise for player initialization
-        this.playerInitPromise = new Promise((resolve, reject) => {
-            const player = new window.Spotify.Player({
-                name: 'Semantic Song Search',
-                getOAuthToken: cb => { 
-                    console.log('🔑 Token requested by Spotify SDK');
-                    cb(this.accessToken); 
-                },
-                volume: 0.5
-            });
-            
-            // Error handling
-            player.addListener('initialization_error', ({ message }) => {
-                console.error('❌ Failed to initialize:', message);
-                this.playerInitPromise = null;
-                reject(new Error(`Initialization error: ${message}`));
-            });
-            
-            player.addListener('authentication_error', ({ message }) => {
-                console.error('❌ Failed to authenticate:', message);
-                this.updateAuthStatus(false);
-                this.playerInitPromise = null;
-                reject(new Error(`Authentication error: ${message}`));
-            });
-            
-            player.addListener('account_error', ({ message }) => {
-                console.error('❌ Failed to validate Spotify account:', message);
-                this.playerInitPromise = null;
-                reject(new Error(`Account error: ${message}`));
-            });
-            
-            player.addListener('playback_error', ({ message }) => {
-                console.error('❌ Failed to perform playback:', message);
-            });
-            
-            // Playback status updates
-            player.addListener('player_state_changed', (state) => {
-                console.log('🎵 Player state changed:', state);
-                if (!state) return;
-                
-                // Debug logging for auto-play troubleshooting
-                if (state.track_window.current_track) {
-                    console.log('🎵 State details:', {
-                        paused: state.paused,
-                        position: state.position,
-                        duration: state.duration,
-                        loading: state.loading,
-                        trackId: state.track_window.current_track.id,
-                        autoPlayEnabled: this.isAutoPlayEnabled,
-                        currentIndex: this.currentSongIndex,
-                        manualSkip: this.isManualSkip,
-                        timeSinceLastAdvance: Date.now() - this.lastAutoAdvanceTime
-                    });
-                }
-                
-                this.updatePlayerUI(state);
-                this.updatePlayingCards(state.track_window.current_track);
-                
-                // Auto-play next song when current track ends
-                this.handleAutoPlayCheck(state);
-            });
-            
-            // Ready
-            player.addListener('ready', ({ device_id }) => {
-                console.log('✅ Player ready with Device ID:', device_id);
-                this.deviceId = device_id;
-                this.spotifyPlayer = player;
-                this.isPlayerReady = true;
-                this.playerInitPromise = null; // Clear the promise since we're done
-                
-                // Start backup auto-play checker (disabled for now to avoid interference)
-                // this.startAutoPlayChecker();
-                
-                resolve(device_id);
-            });
-            
-            // Not Ready
-            player.addListener('not_ready', ({ device_id }) => {
-                console.log('❌ Device ID has gone offline:', device_id);
-                this.isPlayerReady = false;
-                
-                // Stop backup checker when player goes offline
-                if (this.autoPlayCheckInterval) {
-                    clearInterval(this.autoPlayCheckInterval);
-                    this.autoPlayCheckInterval = null;
-                }
-            });
-            
-            // Connect to the player!
-            console.log('🔗 Connecting to Spotify...');
-            player.connect().then(success => {
-                if (success) {
-                    console.log('✅ Successfully connected to Spotify Web Playback SDK');
-                } else {
-                    console.error('❌ Failed to connect to Spotify Web Playback SDK');
-                    this.playerInitPromise = null;
-                    reject(new Error('Failed to connect to Spotify Web Playback SDK'));
-                }
-            }).catch(error => {
-                console.error('❌ Error connecting to Spotify:', error);
-                this.playerInitPromise = null;
-                reject(error);
-            });
-        });
-        
-        return this.playerInitPromise;
-    }
-    
-    async playSong(song, isAutoAdvance = false) {
-        console.log('🎵 playSong called with:', song, 'isAutoAdvance:', isAutoAdvance);
-        
-        // Check if user is authenticated before trying to play
-        if (!this.isAuthenticated || !this.accessToken) {
-            // Don't auto-prompt for auto-advances (to avoid interrupting user)
-            if (!isAutoAdvance) {
-                const shouldLogin = confirm(
-                    "You need to connect your Spotify account to play songs.\n\n" +
-                    "Would you like to login to Spotify now?"
-                );
-                
-                if (shouldLogin) {
-                    window.location.href = '/login';
-                    return;
-                }
-            }
-            console.log('❌ Cannot play song - not authenticated');
-            return;
-        }
-        
-        // Prevent concurrent playSong calls
-        if (this.isPlayingSong) {
-            console.log('🎵 Already playing a song, ignoring request');
-            return;
-        }
-        
-        // Rate limiting only for auto-advances, not manual song clicks
-        // Be very lenient for auto-advances to allow natural track progression
-        const now = Date.now();
-        const timeSinceLastAdvance = now - this.lastAutoAdvanceTime;
-        
-        if (isAutoAdvance && this.lastAutoAdvanceTime > 0 && timeSinceLastAdvance < 100) {
-            console.log('🎵 Rate limiting auto-advance - too soon since last play request');
-            console.log('🎵 Time since last advance:', timeSinceLastAdvance, 'ms');
-            return;
-        }
-        
-        console.log('🎵 Player ready?', this.isPlayerReady);
-        console.log('🎵 Access token?', this.accessToken ? 'Yes' : 'No');
-        console.log('🎵 Device ID?', this.deviceId);
-        console.log('🎵 Spotify ID?', song.spotify_id);
-        
-        if (!song.spotify_id) {
-            console.log('❌ No Spotify ID for song');
-            return;
-        }
-        
-        if (!this.isPlayerReady) {
-            console.log('🔄 Player not ready, initializing and waiting...');
-            try {
-                await this.initSpotifyPlayer();
-                console.log('✅ Player initialization completed, proceeding with playback');
-            } catch (error) {
-                console.error('❌ Failed to initialize player:', error);
-                return;
-            }
-        }
-        
-        this.isPlayingSong = true;
-        if (isAutoAdvance) {
-            this.lastAutoAdvanceTime = now;
-            // Reset the auto-advance pending flag since we're now actually starting the song
-            this.autoAdvancePending = false;
-            console.log('🎵 Auto-advance: Reset autoAdvancePending flag, set lastAutoAdvanceTime');
-        }
-        console.log('✅ Starting playback for:', song.song, 'by', song.artist);
-        
-        try {
-            // Transfer playback to our device first if needed
-            await this.ensureDeviceActive();
-            
-            console.log('🎵 Playing track with URI:', `spotify:track:${song.spotify_id}`);
-            
-            // Find and store the index of this song in current results for queue management
-            this.currentSongIndex = this.searchResults.findIndex(result => 
-                result.spotify_id === song.spotify_id
-            );
-            console.log('🎵 Current song index in results:', this.currentSongIndex);
-            
-            // If song not found in current results, it might be from a previous search
-            if (this.currentSongIndex === -1) {
-                console.log('🎵 Song not found in current results - might be from previous search');
-            }
-            
-            // Play the track
-            const response = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${this.deviceId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.accessToken}`
-                },
-                body: JSON.stringify({
-                    uris: [`spotify:track:${song.spotify_id}`]
-                })
-            });
-            
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('❌ Spotify API error:', response.status, errorText);
-                throw new Error(`Spotify API error: ${response.status} - ${errorText}`);
-            }
-            
-            console.log('✅ Playback started successfully');
-            this.currentTrack = song;
-            this.lastTrackId = song.spotify_id;  // Track for auto-advance detection
-            
-            // Track song play
-            if (typeof mixpanel !== 'undefined') {
-                mixpanel.track('Song Played', {
-                    'song_spotify_id': song.spotify_id || 'unknown',
-                    'song_title': song.song || 'unknown',
-                    'artist': song.artist || 'unknown',
-                    'play_method': isAutoAdvance ? 'auto_advance' : 'manual_click',
-                    'similarity_score': song.similarity || 0,
-                    'position_in_results': this.searchResults.findIndex(r => r.song_idx === song.song_idx) + 1,
-                    'is_authenticated': this.isAuthenticated
-                });
-            }
-            
-            if (!isAutoAdvance) { // Only count manual plays
-                this.songsPlayed++;
-            }
-            
-            // Reset the playing flag after successful start
-            // The song is now playing, so we're no longer "starting" it
-            setTimeout(() => {
-                this.isPlayingSong = false;
-                this.lastProcessedTrackEnd = null; // Reset for new song
-                // Reset manual skip flag since a new song is now playing successfully
-                if (this.isManualSkip) {
-                    console.log('🎵 Resetting manual skip flag - new song playing successfully');
-                    this.isManualSkip = false;
-                }
-                console.log('🎵 Reset isPlayingSong flag and trackEnd processing after successful playback start');
-            }, 1000); // Give it a second to start playing
-            
-        } catch (error) {
-            console.error('❌ Error playing song:', error);
-            
-            // Track song play failures
-            if (typeof mixpanel !== 'undefined') {
-                mixpanel.track('Song Play Failed', {
-                    'song_spotify_id': song.spotify_id || 'unknown',
-                    'song_title': song.song || 'unknown',
-                    'artist': song.artist || 'unknown',
-                    'error_message': error.message || 'Unknown error',
-                    'play_method': isAutoAdvance ? 'auto_advance' : 'manual_click'
-                });
-            }
-            
-            // Reset current song index on error to prevent queue issues
-            this.currentSongIndex = -1;
-            
-            // Show user-friendly error message
-            console.log(`Unable to play "${song.song}" by ${song.artist}. ${error.message || 'Please make sure Spotify is running and you have Premium.'}`);
-            
-            // Reset flags on error
-            this.isPlayingSong = false;
-            if (isAutoAdvance) {
-                this.autoAdvancePending = false;
-                console.log('🎵 Reset autoAdvancePending flag due to error during auto-advance');
-            }
-            // Also reset manual skip flag on error to prevent getting stuck
-            if (this.isManualSkip) {
-                console.log('🎵 Resetting manual skip flag due to playback error');
-                this.isManualSkip = false;
-            }
-        }
-    }
-    
-    async ensureDeviceActive() {
-        try {
-            const response = await fetch('https://api.spotify.com/v1/me/player/devices', {
-                headers: {
-                    'Authorization': `Bearer ${this.accessToken}`
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`Spotify API error: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            if (!data.devices) {
-                throw new Error('No devices found in Spotify API response');
-            }
-            
-            const ourDevice = data.devices.find(device => device.id === this.deviceId);
-            
-            if (!ourDevice || !ourDevice.is_active) {
-                // Transfer playback to our device
-                await fetch('https://api.spotify.com/v1/me/player', {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${this.accessToken}`
-                    },
-                    body: JSON.stringify({
-                        device_ids: [this.deviceId],
-                        play: false
-                    })
-                });
-            }
-        } catch (error) {
-            console.error('Error ensuring device active:', error);
-        }
-    }
-    
-    async togglePlayback() {
-        if (!this.spotifyPlayer) return;
-        
-        // Rate limiting for play/pause button
-        const now = Date.now();
-        if (now - this.lastAutoAdvanceTime < 500) {
-            console.log('🎵 Toggle playback too soon, ignoring');
-            return;
-        }
-        
-        try {
-            // Mark as manual interaction to prevent auto-play conflicts
-            this.isManualSkip = true;
-            this.autoAdvancePending = false; // Reset any pending auto-advance
-            // Don't set lastAutoAdvanceTime for manual interactions - only for actual auto-advances
-            await this.spotifyPlayer.togglePlay();
-            
-            // Reset manual skip flag after a short delay
-            setTimeout(() => {
-                this.isManualSkip = false;
-            }, 1000);
-        } catch (error) {
-            console.error('Error toggling playback:', error);
-        }
-    }
-    
-    async previousTrack() {
-        console.log('🎵 previousTrack called - using search results queue');
-        
-        // Rate limiting for manual clicks
-        const now = Date.now();
-        if (now - this.lastAutoAdvanceTime < 1000) {
-            console.log('🎵 Manual previous track too soon, ignoring');
-            return;
-        }
-        
-        this.isManualSkip = true;  // Mark as manual skip for consistency
-        this.autoAdvancePending = false; // Reset any pending auto-advance
-        await this.playPreviousInResults();
-    }
-    
-    async nextTrack() {
-        console.log('🎵 nextTrack called - using search results queue');
-        
-        // Rate limiting for manual clicks
-        const now = Date.now();
-        if (now - this.lastAutoAdvanceTime < 1000) {
-            console.log('🎵 Manual next track too soon, ignoring');
-            return;
-        }
-        
-        this.isManualSkip = true;  // Mark as manual skip
-        this.autoAdvancePending = false; // Reset any pending auto-advance
-        await this.playNextInResults();
-    }
-    
-    async seekToPosition(event) {
-        if (!this.spotifyPlayer) return;
-        
-        const progressBar = event.currentTarget;
-        const rect = progressBar.getBoundingClientRect();
-        const clickX = event.clientX - rect.left;
-        const progressBarWidth = rect.width;
-        const percentage = clickX / progressBarWidth;
-        
-        try {
-            const state = await this.spotifyPlayer.getCurrentState();
-            if (state) {
-                const positionMs = Math.floor(state.duration * percentage);
-                await this.spotifyPlayer.seek(positionMs);
-            }
-        } catch (error) {
-            console.error('Error seeking:', error);
-        }
-    }
-    
-    // Auto-play queue management methods
-    handleAutoPlayCheck(state, isBackupCheck = false) {
-        // Basic checks - exit early if conditions not met
-        if (!state || !this.isAutoPlayEnabled || this.currentSongIndex < 0 || this.isPlayingSong || this.autoAdvancePending) {
-            return;
-        }
-        
-        const currentTrack = state.track_window.current_track;
-        if (!currentTrack) return;
-        
-        // Debug: Show current track info
-        if (!isBackupCheck) {
-            console.log('🎵 Track info:', {
-                currentTrackId: currentTrack.id,
-                lastTrackId: this.lastTrackId,
-                trackChanged: currentTrack.id !== this.lastTrackId,
-                manualSkipFlag: this.isManualSkip
-            });
-        }
-        
-        // Rate limiting - don't check too frequently (but be less aggressive)
-        const now = Date.now();
-        if (now - this.lastAutoAdvanceTime < 1000) { // More lenient 1 second
-            return;
-        }
-        
-        // Multiple ways to detect track ending - be more flexible
-        const position = state.position || 0;
-        const duration = state.duration || 0;
-        
-        // Method 1: Traditional end-of-track detection (more lenient)
-        const isNearEnd = state.paused && 
-                         duration > 10000 && // Only for tracks longer than 10 seconds (reduced)
-                         position >= duration - 2000 && // Within 2 seconds of end (more lenient)
-                         position > duration * 0.8; // Must have played at least 80% (more lenient)
-        
-        // Method 2: Position equals duration (exact end)
-        const isAtExactEnd = state.paused && position >= duration && duration > 0;
-        
-        // Method 3: Position very close to duration percentage-wise
-        const isAtPercentageEnd = state.paused && 
-                                 duration > 0 && 
-                                 (position / duration) >= 0.98; // 98% through
-        
-        // Method 4: Spotify sometimes reports position as 0 when track ends
-        // But make sure this isn't the very start of the track by checking we had a valid lastTrackId
-        const isPausedAtZero = state.paused && 
-                              position === 0 && 
-                              this.lastTrackId === currentTrack.id && 
-                              duration > 0 &&
-                              !state.loading; // Don't trigger on loading states
-        
-        const shouldAutoAdvance = (isNearEnd || isAtExactEnd || isAtPercentageEnd || isPausedAtZero) && 
-                                 !this.isManualSkip && 
-                                 !state.loading;
-        
-        // Create a unique identifier for this track ending to prevent duplicate processing
-        // Use a longer time window to prevent rapid repeats
-        const trackEndId = `${currentTrack.id}_${Math.floor(now / 3000)}`; // Unique per track per 3 seconds
-        
-        if (!isBackupCheck) {
-            console.log('🎵 Auto-advance check:', {
-                isNearEnd, isAtExactEnd, isAtPercentageEnd, isPausedAtZero,
-                shouldAutoAdvance, position, duration, paused: state.paused,
-                manualSkip: this.isManualSkip, loading: state.loading,
-                trackEndId, lastProcessed: this.lastProcessedTrackEnd,
-                blockingReason: shouldAutoAdvance ? null : (
-                    this.isManualSkip ? 'manual skip flag' : 
-                    state.loading ? 'still loading' :
-                    !(isNearEnd || isAtExactEnd || isAtPercentageEnd || isPausedAtZero) ? 'no end condition met' : 'unknown'
-                )
-            });
-        }
-        
-        if (shouldAutoAdvance) {
-            // Prevent duplicate processing of the same track ending
-            if (this.lastProcessedTrackEnd === trackEndId) {
-                if (!isBackupCheck) {
-                    console.log('🎵 Already processed this track ending, skipping');
-                }
-                return;
-            }
-            
-            console.log('🎵 ✅ Track ended naturally - advancing to next');
-            console.log('🎵 Trigger reason:', {
-                isNearEnd, isAtExactEnd, isAtPercentageEnd, isPausedAtZero
-            });
-            console.log('🎵 Current song index:', this.currentSongIndex);
-            console.log('🎵 Total results:', this.searchResults.length);
-            
-            // Mark this track ending as processed
-            this.lastProcessedTrackEnd = trackEndId;
-            
-            // Set pending flag and advance immediately (no setTimeout wrapper)
-            this.autoAdvancePending = true;
-            // Don't set lastAutoAdvanceTime here - let playSong set it when actually starting
-            
-            // Call directly without setTimeout to avoid race condition
-            console.log('🎵 About to call playNextInResults with autoAdvancePending:', this.autoAdvancePending);
-            this.playNextInResults(true);
-        }
-        
-        // Update last track ID
-        if (currentTrack.id !== this.lastTrackId) {
-            console.log('🎵 Track changed from', this.lastTrackId, 'to', currentTrack.id);
-            console.log('🎵 Manual skip flag before track change:', this.isManualSkip);
-            this.lastTrackId = currentTrack.id;
-            
-            // Reset processing tracking for new track
-            this.lastProcessedTrackEnd = null;
-            
-            // Reset manual skip flag after track changes, with delay
-            // NOTE: This is backup logic - the main reset happens in playSong timeout
-            if (this.isManualSkip) {
-                setTimeout(() => {
-                    console.log('🎵 Backup: Resetting manual skip flag via track change detection');
-                    this.isManualSkip = false;
-                }, 2000); // Longer delay as backup
-            }
-        }
-    }
-    
-    async playNextInResults(isAutoAdvance = false) {
-        console.log('🎵 playNextInResults called, isAutoAdvance:', isAutoAdvance);
-        console.log('🎵 Current index:', this.currentSongIndex);
-        console.log('🎵 Total results:', this.searchResults.length);
-        console.log('🎵 All flags:', {
-            isPlayingSong: this.isPlayingSong,
-            autoAdvancePending: this.autoAdvancePending,
-            isAutoPlayEnabled: this.isAutoPlayEnabled,
-            timeSinceLastAdvance: Date.now() - this.lastAutoAdvanceTime,
-            lastAutoAdvanceTime: this.lastAutoAdvanceTime
-        });
-        
-        // Prevent concurrent calls, but allow auto-advance to proceed
-        if (this.isPlayingSong || (this.autoAdvancePending && !isAutoAdvance)) {
-            console.log('🎵 Already advancing or playing, ignoring call');
-            console.log('🎵 Flags - isPlayingSong:', this.isPlayingSong, 'autoAdvancePending:', this.autoAdvancePending, 'isAutoAdvance:', isAutoAdvance);
-            return;
-        }
-        
-        if (this.currentSongIndex >= 0 && 
-            this.currentSongIndex < this.searchResults.length - 1) {
-            
-            const nextSong = this.searchResults[this.currentSongIndex + 1];
-            console.log('🎵 Playing next song:', nextSong.song, 'by', nextSong.artist);
-            
-            // Pass the isAutoAdvance flag to playSong
-            await this.playSong(nextSong, isAutoAdvance);
-            
-        } else if (this.currentSongIndex === this.searchResults.length - 1) {
-            // End of queue
-            console.log('🎵 Reached end of search results');
-            
-            if (this.hasMoreResults) {
-                console.log('🎵 More results available, but not auto-loading for now');
-            }
-            
-            // Reset auto-advance flag at end of queue
-            if (isAutoAdvance) {
-                this.autoAdvancePending = false;
-                console.log('🎵 Reset autoAdvancePending flag - reached end of queue');
-            }
-            
-            // Stop playback gracefully
-            try {
-                if (this.spotifyPlayer) {
-                    await this.spotifyPlayer.pause();
-                }
-            } catch (error) {
-                console.error('Error pausing at end of queue:', error);
-            }
-        } else {
-            // Invalid state - reset flags
-            console.log('🎵 Invalid queue state, resetting flags');
-            if (isAutoAdvance) {
-                this.autoAdvancePending = false;
-            }
-        }
-    }
-    
-    async playPreviousInResults(isAutoAdvance = false) {
-        console.log('🎵 playPreviousInResults called, isAutoAdvance:', isAutoAdvance);
-        console.log('🎵 Current index:', this.currentSongIndex);
-        
-        if (this.currentSongIndex > 0) {
-            const prevSong = this.searchResults[this.currentSongIndex - 1];
-            console.log('🎵 Playing previous song:', prevSong.song, 'by', prevSong.artist);
-            await this.playSong(prevSong, isAutoAdvance);
-        } else {
-            console.log('🎵 Already at beginning of search results');
-        }
-    }
-    
-    updatePlayerUI(state) {
-        const track = state.track_window.current_track;
-        const isPaused = state.paused;
-        
-        // Update track info
-        const coverUrl = track.album?.images?.[0]?.url || '';
-        document.getElementById('player-cover').src = coverUrl;
-        document.getElementById('player-title').textContent = track.name || 'Unknown Track';
-        document.getElementById('player-artist').textContent = track.artists?.map(artist => artist.name).join(', ') || 'Unknown Artist';
-        
-        // Update play button
-        const playBtn = document.getElementById('play-btn');
-        playBtn.textContent = isPaused ? '▶' : '⏸';
-        
-        // Update progress
-        this.updateProgress(state.position, state.duration);
-    }
-    
-    updateProgress(position, duration) {
-        const progressFilled = document.getElementById('progress-filled');
-        const currentTime = document.getElementById('current-time');
-        const totalTime = document.getElementById('total-time');
-        
-        const progressPercent = duration > 0 ? (position / duration) * 100 : 0;
-        progressFilled.style.width = `${progressPercent}%`;
-        
-        currentTime.textContent = this.formatTime(position);
-        totalTime.textContent = this.formatTime(duration);
-    }
-    
-    updatePlayingCards(currentTrack) {
-        if (!currentTrack) return;
-        
-        const currentSpotifyId = currentTrack.id;
-        
-        document.querySelectorAll('.song-card').forEach(card => {
-            if (card.dataset.spotifyId === currentSpotifyId) {
-                card.classList.add('playing');
-            } else {
-                card.classList.remove('playing');
-            }
-        });
-    }
-    
-    formatTime(ms) {
-        const minutes = Math.floor(ms / 60000);
-        const seconds = Math.floor((ms % 60000) / 1000);
-        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-    }
-    
-
     
     generatePlaylistName() {
         if (!this.currentSearchType || !this.currentQuery) {
@@ -2601,14 +1829,12 @@ class SemanticSearchApp {
         accordion.classList.toggle('expanded');
         
         if (accordion.classList.contains('expanded')) {
-            console.log('🎵 Export accordion expanded');
             
             // Auto-populate playlist name based on current search
             const playlistNameInput = document.getElementById('playlist-name');
             if (playlistNameInput) {
                 const autoName = this.generatePlaylistName();
                 playlistNameInput.value = autoName;
-                console.log('🎵 Auto-populated playlist name:', autoName);
             }
             
             // Check if user is authenticated when opening accordion
@@ -2622,13 +1848,29 @@ class SemanticSearchApp {
                 this.hideExportStatus();
             }
         } else {
-            console.log('🎵 Export accordion collapsed');
             // Hide status when closing accordion
             this.hideExportStatus();
         }
     }
     
     async exportToPlaylist() {
+        const validation = this.validateExportInputs();
+        if (!validation.isValid) {
+            return;
+        }
+        
+        const { playlistName, songCount } = validation;
+        const exportElements = this.getExportElements();
+        
+        const spotifyIds = await this.prepareSongsForExport(songCount);
+        if (!spotifyIds) {
+            return;
+        }
+        
+        await this.performPlaylistCreation(playlistName, songCount, spotifyIds, exportElements);
+    }
+    
+    validateExportInputs() {
         // Check if user is authenticated before trying to create playlist
         if (!this.isAuthenticated || !this.accessToken) {
             const shouldLogin = confirm(
@@ -2638,19 +1880,15 @@ class SemanticSearchApp {
             
             if (shouldLogin) {
                 window.location.href = '/login';
-                return;
+                return { isValid: false };
             }
             
             this.showExportStatus('Please login to Spotify to create playlists.', 'error');
-            return;
+            return { isValid: false };
         }
         
         const playlistNameInput = document.getElementById('playlist-name');
         const songCountInput = document.getElementById('song-count');
-        const exportBtn = document.getElementById('export-btn');
-        const exportStatus = document.getElementById('export-status');
-        const exportButtonText = document.querySelector('.export-button-text');
-        const exportButtonLoading = document.querySelector('.export-button-loading');
         
         // Get input values
         const playlistName = playlistNameInput.value.trim();
@@ -2659,20 +1897,19 @@ class SemanticSearchApp {
         // Validate inputs
         if (!playlistName) {
             this.showExportStatus('Please enter a playlist name.', 'error');
-            return;
+            return { isValid: false };
         }
         
         if (this.isManualSelectionMode) {
             // In manual selection mode, use the number of selected songs
             songCount = this.selectedSongs.size;
-            console.log(`🎯 Manual selection mode: exporting ${songCount} selected songs`);
         } else {
             // In normal mode, validate the song count input
             songCount = parseInt(songCountInput.value);
             
             if (isNaN(songCount) || songCount < 1 || songCount > 100) {
                 this.showExportStatus('Number of songs must be between 1 and 100.', 'error');
-                return;
+                return { isValid: false };
             }
             
             // Additional check for extremely large requests when auto-loading is involved
@@ -2683,35 +1920,43 @@ class SemanticSearchApp {
                     `Continue with auto-loading?`
                 );
                 if (!proceed) {
-                    return;
+                    return { isValid: false };
                 }
             }
         }
         
         if (!this.searchResults || this.searchResults.length === 0) {
             this.showExportStatus('No search results available to export.', 'error');
-            return;
+            return { isValid: false };
         }
         
         // Additional validation for manual selection mode
         if (this.isManualSelectionMode && this.selectedSongs.size === 0) {
             this.showExportStatus('No songs selected. Please check at least one song to export.', 'error');
-            return;
+            return { isValid: false };
         }
         
         // Check authentication
         if (!this.accessToken) {
-            console.log('🎵 No access token available for export');
             this.showExportStatus('Please <a href="/login" style="color: #1ed760; text-decoration: underline;">login to Spotify</a> first.', 'error');
-            return;
+            return { isValid: false };
         }
         
-        console.log('🎵 Access token available, proceeding with export');
-        
+        return { isValid: true, playlistName, songCount };
+    }
+    
+    getExportElements() {
+        return {
+            exportBtn: this.domElements.exportBtn,
+            exportStatus: this.domElements.exportStatus,
+            exportButtonText: document.querySelector('.export-button-text'),
+            exportButtonLoading: document.querySelector('.export-button-loading')
+        };
+    }
+    
+    async prepareSongsForExport(songCount) {
         // Check if we need to load more results
         if (songCount > this.searchResults.length && this.hasMoreResults) {
-            console.log(`🎵 Requested ${songCount} songs but only have ${this.searchResults.length}. Auto-loading more results...`);
-            
             // Show loading message
             this.showExportStatus(`Loading more results to reach ${songCount} songs...`, 'info');
             
@@ -2726,7 +1971,6 @@ class SemanticSearchApp {
             const selectedSongsInResults = this.searchResults.filter(song => this.selectedSongs.has(song.song_idx));
             
             if (songCount > selectedSongsInResults.length) {
-                console.log(`🎯 User requested ${songCount} songs but only ${selectedSongsInResults.length} are selected and available`);
                 this.showExportStatus(
                     `You requested ${songCount} songs but only ${selectedSongsInResults.length} are selected. ` +
                     `Proceeding with ${selectedSongsInResults.length} tracks.`,
@@ -2735,11 +1979,9 @@ class SemanticSearchApp {
             }
             
             songsToExport = selectedSongsInResults.slice(0, songCount);
-            console.log(`🎯 Manual selection mode: exporting ${songsToExport.length} selected songs out of ${this.selectedSongs.size} total selected`);
         } else {
             // Normal mode: export first N songs  
             songsToExport = this.searchResults.slice(0, songCount);
-            console.log(`🎵 Normal mode: exporting first ${songsToExport.length} songs`);
         }
         
         const spotifyIds = songsToExport
@@ -2748,7 +1990,7 @@ class SemanticSearchApp {
         
         if (spotifyIds.length === 0) {
             this.showExportStatus('No valid Spotify tracks found in search results.', 'error');
-            return;
+            return null;
         }
         
         if (spotifyIds.length < songCount) {
@@ -2764,6 +2006,12 @@ class SemanticSearchApp {
             }
         }
         
+        return spotifyIds;
+    }
+    
+    async performPlaylistCreation(playlistName, songCount, spotifyIds, exportElements) {
+        const { exportBtn, exportButtonText, exportButtonLoading } = exportElements;
+        
         // Show loading state
         exportBtn.disabled = true;
         exportButtonText.style.display = 'none';
@@ -2771,31 +2019,13 @@ class SemanticSearchApp {
         this.hideExportStatus();
         
         try {
-            console.log(`🎵 Creating playlist "${playlistName}" with ${spotifyIds.length} songs`);
-            
             // Create AbortController for timeout
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
             
             // Prepare search context for tracking
-            const searchContext = {
-                search_type: this.currentSearchType,
-                embed_type: this.currentEmbedType,
-                is_filtered: this.isFiltered,
-                is_manual_selection: this.isManualSelectionMode,
-                selected_songs_count: this.selectedSongs.size
-            };
+            const searchContext = this.buildSearchContext();
             
-            // Add query-specific context
-            if (this.currentSearchType === 'text' && this.currentQuery) {
-                searchContext.query = this.currentQuery;
-                searchContext.query_length = this.currentQuery.length;
-            } else if (this.currentSearchType === 'song' && this.currentQuerySong) {
-                searchContext.query_song_idx = this.currentQuerySong.song_idx;
-                searchContext.query_song_name = this.currentQuerySong.song || '';
-                searchContext.query_artist_name = this.currentQuerySong.artist || '';
-            }
-
             const response = await fetch('/api/create_playlist', {
                 method: 'POST',
                 headers: {
@@ -2815,66 +2045,13 @@ class SemanticSearchApp {
             const data = await response.json();
             
             if (response.ok && data.success) {
-                const requestedText = data.track_count < songCount ? 
-                    ` (${songCount} requested)` : '';
-                const message = `
-                    ✅ Playlist created successfully!<br>
-                    <strong>${data.playlist_name}</strong><br>
-                    ${data.track_count} tracks added${requestedText}<br>
-                    <a href="${data.playlist_url}" target="_blank" style="color: #1ed760; text-decoration: underline; font-weight: bold;">
-                        🎵 Open in Spotify ↗
-                    </a>
-                `;
-                this.showExportStatus(message, 'success');
-                console.log('🎵 Playlist created:', data);
-                
-                // Track successful playlist creation (for session counter only - main event tracked by backend)
-                this.playlistsCreated++;
+                this.handlePlaylistCreationSuccess(data, songCount);
             } else {
-                // Handle specific error cases
-                if (response.status === 403 && data.error && 
-                    (data.error.includes('permissions') || data.error.includes('Insufficient'))) {
-                    // Clear the access token and prompt for re-authentication
-                    console.log('🎵 Insufficient permissions detected, clearing auth state');
-                    this.accessToken = null;
-                    this.updateAuthStatus(false);
-                    
-                    // Re-check auth status since backend may have cleared session
-                    setTimeout(() => this.checkAuthStatus(), 1000);
-                    
-                    this.showExportStatus(
-                        '🔐 Playlist creation requires additional permissions.<br>' +
-                        'Your current login doesn\'t have playlist creation access.<br>' +
-                        '<strong>The session has been cleared.</strong><br>' +
-                        '<a href="/login" style="color: #1ed760; text-decoration: underline; font-weight: bold;">Click here to re-authenticate</a> ' +
-                        'with playlist permissions.',
-                        'error'
-                    );
-                    return;
-                } else if (response.status === 401) {
-                    // Token expired or invalid
-                    this.accessToken = null;
-                    this.updateAuthStatus(false);
-                    this.showExportStatus(
-                        'Your Spotify session has expired. Please <a href="/login" style="color: #1ed760; text-decoration: underline;">login again</a>.',
-                        'error'
-                    );
-                    return;
-                }
-                throw new Error(data.error || 'Failed to create playlist');
+                this.handlePlaylistCreationError(response, data);
             }
             
         } catch (error) {
-            console.error('🎵 Export error:', error);
-            
-            let errorMessage = 'Failed to create playlist. Please try again.';
-            if (error.name === 'AbortError') {
-                errorMessage = 'Request timed out. Please check your connection and try again.';
-            } else if (error.message) {
-                errorMessage = error.message;
-            }
-            
-            this.showExportStatus(errorMessage, 'error');
+            this.handlePlaylistCreationException(error);
         } finally {
             // Reset button state
             exportBtn.disabled = false;
@@ -2883,8 +2060,93 @@ class SemanticSearchApp {
         }
     }
     
+    buildSearchContext() {
+        const searchContext = {
+            search_type: this.currentSearchType,
+            embed_type: this.currentEmbedType,
+            is_filtered: this.isFiltered,
+            is_manual_selection: this.isManualSelectionMode,
+            selected_songs_count: this.selectedSongs.size
+        };
+        
+        // Add query-specific context
+        if (this.currentSearchType === 'text' && this.currentQuery) {
+            searchContext.query = this.currentQuery;
+            searchContext.query_length = this.currentQuery.length;
+        } else if (this.currentSearchType === 'song' && this.currentQuerySong) {
+            searchContext.query_song_idx = this.currentQuerySong.song_idx;
+            searchContext.query_song_name = this.currentQuerySong.song || '';
+            searchContext.query_artist_name = this.currentQuerySong.artist || '';
+        }
+        
+        return searchContext;
+    }
+    
+    handlePlaylistCreationSuccess(data, songCount) {
+        const requestedText = data.track_count < songCount ? 
+            ` (${songCount} requested)` : '';
+        const message = `
+            ✅ Playlist created successfully!<br>
+            <strong>${data.playlist_name}</strong><br>
+            ${data.track_count} tracks added${requestedText}<br>
+            <a href="${data.playlist_url}" target="_blank" style="color: #1ed760; text-decoration: underline; font-weight: bold;">
+                🎵 Open in Spotify ↗
+            </a>
+        `;
+        this.showExportStatus(message, 'success');
+        
+        // Track successful playlist creation (for session counter only - main event tracked by backend)
+        this.playlistsCreated++;
+    }
+    
+    handlePlaylistCreationError(response, data) {
+        // Handle specific error cases
+        if (response.status === 403 && data.error && 
+            (data.error.includes('permissions') || data.error.includes('Insufficient'))) {
+            // Clear the access token and prompt for re-authentication
+            this.accessToken = null;
+            this.updateAuthStatus(false);
+            
+            // Re-check auth status since backend may have cleared session
+            setTimeout(() => this.checkAuthStatus(), 1000);
+            
+            this.showExportStatus(
+                '🔐 Playlist creation requires additional permissions.<br>' +
+                'Your current login doesn\'t have playlist creation access.<br>' +
+                '<strong>The session has been cleared.</strong><br>' +
+                '<a href="/login" style="color: #1ed760; text-decoration: underline; font-weight: bold;">Click here to re-authenticate</a> ' +
+                'with playlist permissions.',
+                'error'
+            );
+            return;
+        } else if (response.status === 401) {
+            // Token expired or invalid
+            this.accessToken = null;
+            this.updateAuthStatus(false);
+            this.showExportStatus(
+                'Your Spotify session has expired. Please <a href="/login" style="color: #1ed760; text-decoration: underline;">login again</a>.',
+                'error'
+            );
+            return;
+        }
+        throw new Error(data.error || 'Failed to create playlist');
+    }
+    
+    handlePlaylistCreationException(error) {
+        console.error('🎵 Export error:', error);
+        
+        let errorMessage = 'Failed to create playlist. Please try again.';
+        if (error.name === 'AbortError') {
+            errorMessage = 'Request timed out. Please check your connection and try again.';
+        } else if (error.message) {
+            errorMessage = error.message;
+        }
+        
+        this.showExportStatus(errorMessage, 'error');
+    }
+    
     showExportStatus(message, type) {
-        const exportStatus = document.getElementById('export-status');
+        const exportStatus = this.domElements.exportStatus;
         exportStatus.innerHTML = message;
         exportStatus.className = `export-status ${type}`;
         exportStatus.style.display = 'block';
@@ -2898,14 +2160,13 @@ class SemanticSearchApp {
     }
     
     hideExportStatus() {
-        const exportStatus = document.getElementById('export-status');
+        const exportStatus = this.domElements.exportStatus;
         exportStatus.style.display = 'none';
     }
     
     async autoLoadMoreForExport(targetCount) {
         // Keep loading more results until we have enough songs or no more results available
         while (this.searchResults.length < targetCount && this.hasMoreResults) {
-            console.log(`🎵 Auto-loading more results: have ${this.searchResults.length}, need ${targetCount}`);
             
             try {
                 await this.loadMoreResults();
@@ -2920,7 +2181,6 @@ class SemanticSearchApp {
         }
         
         if (this.searchResults.length < targetCount && !this.hasMoreResults) {
-            console.log(`🎵 Reached end of results: have ${this.searchResults.length}, requested ${targetCount}`);
             this.showExportStatus(
                 `Only ${this.searchResults.length} songs available in total. Proceeding with all available songs.`,
                 'info'
@@ -2928,7 +2188,6 @@ class SemanticSearchApp {
             // Brief pause to show the info message
             await new Promise(resolve => setTimeout(resolve, 2000));
         } else {
-            console.log(`🎵 Successfully loaded ${this.searchResults.length} results for export`);
         }
     }
     
@@ -2950,7 +2209,6 @@ class SemanticSearchApp {
             
             songCountInput.title = `Currently ${availableText}`;
             
-            // Update placeholder text
             const label = document.querySelector('label[for="song-count"]');
             if (label) {
                 label.textContent = `Number of Songs (${availableText}):`;
@@ -2961,32 +2219,30 @@ class SemanticSearchApp {
     // Personalization Controls Handlers
     handleLambdaChange(value) {
         this.currentLambdaVal = value;
-        const lambdaDisplay = document.getElementById('lambda-value');
+        const lambdaDisplay = this.domElements.lambdaValue;
         if (lambdaDisplay) {
             lambdaDisplay.textContent = value.toFixed(2);
             // Position above the lambda slider knob using accurate positioning
-            const slider = document.getElementById('lambda-slider');
+            const slider = this.domElements.lambdaSlider;
             this.positionSliderValue(slider, lambdaDisplay, value, 0, 1);
         }
         this.enableRerunButton();
         
         // Track lambda change
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Lambda Value Changed', {
-                'lambda_val': value,
-                'has_active_search': this.searchResults.length > 0
-            });
-        }
+        this.analytics.trackEvent('Lambda Value Changed', {
+            'lambda_val': value,
+            'has_active_search': this.searchResults.length > 0
+        });
     }
     
     handleFamiliarityMinChange(value) {
-        const maxSlider = document.getElementById('familiarity-max');
+        const maxSlider = this.domElements.familiarityMax;
         const currentMax = parseFloat(maxSlider.value);
         
         // Ensure min doesn't exceed max
         if (value > currentMax) {
             value = currentMax;
-            document.getElementById('familiarity-min').value = value;
+            this.domElements.familiarityMin.value = value;
         }
         
         this.currentFamiliarityMin = value;
@@ -2995,13 +2251,13 @@ class SemanticSearchApp {
     }
     
     handleFamiliarityMaxChange(value) {
-        const minSlider = document.getElementById('familiarity-min');
+        const minSlider = this.domElements.familiarityMin;
         const currentMin = parseFloat(minSlider.value);
         
         // Ensure max doesn't go below min
         if (value < currentMin) {
             value = currentMin;
-            document.getElementById('familiarity-max').value = value;
+            this.domElements.familiarityMax.value = value;
         }
         
         this.currentFamiliarityMax = value;
@@ -3016,13 +2272,13 @@ class SemanticSearchApp {
         if (minDisplay) {
             minDisplay.textContent = this.currentFamiliarityMin.toFixed(2);
             // Position above the min slider knob using accurate positioning
-            const minSlider = document.getElementById('familiarity-min');
+            const minSlider = this.domElements.familiarityMin;
             this.positionSliderValue(minSlider, minDisplay, this.currentFamiliarityMin, 0, 1);
         }
         if (maxDisplay) {
             maxDisplay.textContent = this.currentFamiliarityMax.toFixed(2);
             // Position above the max slider knob using accurate positioning
-            const maxSlider = document.getElementById('familiarity-max');
+            const maxSlider = this.domElements.familiarityMax;
             this.positionSliderValue(maxSlider, maxDisplay, this.currentFamiliarityMax, 0, 1);
         }
     }
@@ -3054,7 +2310,7 @@ class SemanticSearchApp {
     
     initializeSliderPositions() {
         // Initialize lambda slider position
-        const lambdaDisplay = document.getElementById('lambda-value');
+        const lambdaDisplay = this.domElements.lambdaValue;
         if (lambdaDisplay) {
             const lambdaPercent = (this.currentLambdaVal - 0) / (1 - 0) * 100;
             lambdaDisplay.style.left = `${lambdaPercent}%`;
@@ -3065,21 +2321,20 @@ class SemanticSearchApp {
     }
     
     enableRerunButton() {
-        const rerunBtn = document.getElementById('rerun-search-btn');
+        const rerunBtn = this.domElements.rerunSearchBtn;
         if (rerunBtn) {
             rerunBtn.disabled = false;
         }
     }
     
     disableRerunButton() {
-        const rerunBtn = document.getElementById('rerun-search-btn');
+        const rerunBtn = this.domElements.rerunSearchBtn;
         if (rerunBtn) {
             rerunBtn.disabled = true;
         }
     }
     
     async rerunSearchWithNewParameters() {
-        console.log('🔄 Rerunning search with new personalization parameters...');
         
         // Save current values as the "active" values
         this.activeLambdaVal = this.currentLambdaVal;
@@ -3090,14 +2345,12 @@ class SemanticSearchApp {
         this.disableRerunButton();
         
         // Track parameter update
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Personalization Parameters Updated', {
-                'lambda_val': this.activeLambdaVal,
-                'familiarity_min': this.activeFamiliarityMin,
-                'familiarity_max': this.activeFamiliarityMax,
-                'has_active_search': this.searchResults.length > 0
-            });
-        }
+        this.analytics.trackEvent('Personalization Parameters Updated', {
+            'lambda_val': this.activeLambdaVal,
+            'familiarity_min': this.activeFamiliarityMin,
+            'familiarity_max': this.activeFamiliarityMax,
+            'has_active_search': this.searchResults.length > 0
+        });
         
         // Rerun the current search if we have one
         if (this.lastSearchRequestData) {
@@ -3165,7 +2418,7 @@ class SemanticSearchApp {
     }
     
     updateAdvancedRerunButtonState() {
-        const rerunBtn = document.getElementById('advanced-rerun-search-btn');
+        const rerunBtn = this.domElements.advancedRerunSearchBtn;
         if (!rerunBtn) return;
         
         // Check if any parameter has changed from its active value
@@ -3182,24 +2435,21 @@ class SemanticSearchApp {
     }
     
     async rerunSearchWithAdvancedParameters() {
-        console.log('🔄 Rerunning search with new advanced parameters...');
         
         // Save current values as the "active" values
         this.activeAdvancedParams = { ...this.currentAdvancedParams };
         
         // Disable the rerun button
-        const rerunBtn = document.getElementById('advanced-rerun-search-btn');
+        const rerunBtn = this.domElements.advancedRerunSearchBtn;
         if (rerunBtn) {
             rerunBtn.disabled = true;
         }
         
         // Track parameter update
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Advanced Parameters Updated', {
-                'parameters': this.activeAdvancedParams,
-                'has_active_search': this.searchResults.length > 0
-            });
-        }
+        this.analytics.trackEvent('Advanced Parameters Updated', {
+            'parameters': this.activeAdvancedParams,
+            'has_active_search': this.searchResults.length > 0
+        });
         
         // Show confirmation that search was rerun
         this.showAdvancedSettingsConfirmation();
@@ -3212,7 +2462,7 @@ class SemanticSearchApp {
     
     showAdvancedSettingsConfirmation() {
         // Create a temporary confirmation message
-        const rerunBtn = document.getElementById('advanced-rerun-search-btn');
+        const rerunBtn = this.domElements.advancedRerunSearchBtn;
         if (rerunBtn) {
             const originalText = rerunBtn.textContent;
             rerunBtn.textContent = 'Search Updated!';
@@ -3228,19 +2478,12 @@ class SemanticSearchApp {
     async initializeAdvancedSettingsValues() {
         // Fetch default parameters from backend
         try {
-            const response = await fetch('/api/default_ranking_config');
-            if (response.ok) {
-                const defaultParams = await response.json();
-                this.populateAdvancedSettingsForm(defaultParams);
-                
-                // Set both current and active to defaults initially
-                this.currentAdvancedParams = { ...defaultParams };
-                this.activeAdvancedParams = { ...defaultParams };
-            } else {
-                console.error('Failed to fetch default ranking config');
-                // Fallback to hardcoded defaults
-                this.populateAdvancedSettingsFormWithDefaults();
-            }
+            const defaultParams = await this.api.get('/api/default_ranking_config');
+            this.populateAdvancedSettingsForm(defaultParams);
+            
+            // Set both current and active to defaults initially
+            this.currentAdvancedParams = { ...defaultParams };
+            this.activeAdvancedParams = { ...defaultParams };
         } catch (error) {
             console.error('Error fetching default ranking config:', error);
             this.populateAdvancedSettingsFormWithDefaults();
@@ -3259,7 +2502,6 @@ class SemanticSearchApp {
     }
     
     populateAdvancedSettingsFormWithDefaults() {
-        console.log('🔧 populateAdvancedSettingsFormWithDefaults called');
         // Hardcoded fallback defaults matching RankingConfig
         const defaults = {
             'H_c': 30.0, 'H_E': 90.0, 'gamma_s': 1.2, 'gamma_f': 1.4, 'kappa': 1.5,
@@ -3271,67 +2513,47 @@ class SemanticSearchApp {
             'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4
         };
         
-        console.log('🔧 Setting defaults:', defaults);
         this.populateAdvancedSettingsForm(defaults);
         this.currentAdvancedParams = { ...defaults };
         this.activeAdvancedParams = { ...defaults };
-        console.log('🔧 currentAdvancedParams after defaults:', this.currentAdvancedParams);
-        console.log('🔧 activeAdvancedParams after defaults:', this.activeAdvancedParams);
     }
     
     async resetAdvancedParametersToDefaults() {
-        console.log('🔄 Resetting advanced parameters to defaults...');
         
         try {
             // Fetch fresh defaults from API
-            const response = await fetch('/api/default_ranking_config');
-            if (response.ok) {
-                const defaults = await response.json();
-                
-                // Populate form with defaults
-                this.populateAdvancedSettingsForm(defaults);
-                
-                // Update current params but DON'T update active params 
-                // (so the button will detect changes)
-                this.currentAdvancedParams = { ...defaults };
-                
-                // Update button state - should enable the button if current != active
-                this.updateAdvancedRerunButtonState();
-                
-                console.log('🔧 Reset currentAdvancedParams to API defaults:', this.currentAdvancedParams);
-                console.log('🔧 activeAdvancedParams unchanged:', this.activeAdvancedParams);
-            } else {
-                console.error('Failed to fetch defaults for reset');
-                return;
-            }
+            const defaults = await this.api.get('/api/default_ranking_config');
+            
+            // Populate form with defaults
+            this.populateAdvancedSettingsForm(defaults);
+            
+            // Update current params but DON'T update active params 
+            // (so the button will detect changes)
+            this.currentAdvancedParams = { ...defaults };
+            
+            // Update button state - should enable the button if current != active
+            this.updateAdvancedRerunButtonState();
         } catch (error) {
             console.error('Error fetching defaults for reset:', error);
             return;
         }
         
         // Track reset action
-        if (typeof mixpanel !== 'undefined') {
-            mixpanel.track('Advanced Parameters Reset', {
-                'reset_to_defaults': true
-            });
-        }
+        this.analytics.trackEvent('Advanced Parameters Reset', {
+            'reset_to_defaults': true
+        });
     }
     
     getActiveAdvancedParams() {
-        console.log('🔧 getActiveAdvancedParams called');
-        console.log('🔧 activeAdvancedParams:', this.activeAdvancedParams);
-        console.log('🔧 currentAdvancedParams:', this.currentAdvancedParams);
         
         // If we don't have active params but have current params, use current params
         let paramsToUse = this.activeAdvancedParams;
         if (!paramsToUse || Object.keys(paramsToUse).length === 0) {
             paramsToUse = this.currentAdvancedParams;
-            console.log('🔧 Using current params since active params not set');
         }
         
         // Return empty object if still no parameters
         if (!paramsToUse || Object.keys(paramsToUse).length === 0) {
-            console.log('🔧 No advanced parameters available, returning empty object');
             return {};
         }
         
@@ -3342,7 +2564,6 @@ class SemanticSearchApp {
             backendParams[key] = value;
         }
         
-        console.log('🔧 Final backend params:', backendParams);
         return backendParams;
     }
     
@@ -3370,7 +2591,6 @@ class SemanticSearchApp {
                 
                 // Initialize advanced parameters with defaults if not already done
                 if (!this.currentAdvancedParams || Object.keys(this.currentAdvancedParams).length === 0) {
-                    console.log('🔧 Initializing advanced parameters with defaults in showPersonalizationControls');
                     this.populateAdvancedSettingsFormWithDefaults();
                 }
                 
@@ -3403,6 +2623,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Handle Spotify Web Playback SDK ready callback
 window.onSpotifyWebPlaybackSDKReady = () => {
-    console.log('Spotify Web Playback SDK is ready');
     // Player will be initialized when needed in playSong() - no need to initialize here
 }; 
