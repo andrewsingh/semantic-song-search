@@ -202,47 +202,9 @@ class MusicSearchEngine:
         """Extract artist name from song_key tuple."""
         return song_key[1]  # song_key is (song_name, artist_name)
     
-    def get_artist_pop_vibe_embedding(self, artist: str) -> np.ndarray:
-        """Get artist's popularity vibe embedding, returns zero vector if not found."""
-        if (hasattr(self.ranking_engine, 'artist_pop_vibe_embeds') and 
-            artist in self.ranking_engine.artist_pop_vibe_embeds):
-            return self.ranking_engine.artist_pop_vibe_embeds[artist]
-        else:
-            # Return zero vector if artist embedding not found
-            if hasattr(self.ranking_engine, 'artist_pop_vibe_embeds'):
-                logger.debug(f"Artist '{artist}' not found in popularity vibe embeddings")
-            else:
-                logger.debug("Artist popularity vibe embeddings not available")
-            
-            # Detect embedding dimension from existing embeddings or use default
-            embedding_dim = self._get_embedding_dimension()
-            return np.zeros(embedding_dim, dtype=np.float32)
-    
-    def get_artist_personal_vibe_embedding(self, artist: str) -> np.ndarray:
-        """Get artist's personal vibe embedding, returns zero vector if not found."""
-        if (hasattr(self.ranking_engine, 'artist_personal_vibe_embeds') and 
-            artist in self.ranking_engine.artist_personal_vibe_embeds):
-            return self.ranking_engine.artist_personal_vibe_embeds[artist]
-        else:
-            # Return zero vector if artist embedding not found
-            if hasattr(self.ranking_engine, 'artist_personal_vibe_embeds'):
-                logger.debug(f"Artist '{artist}' not found in personal vibe embeddings")
-            else:
-                logger.debug("Artist personal vibe embeddings not available")
-            
-            # Detect embedding dimension from existing embeddings or use default
-            embedding_dim = self._get_embedding_dimension()
-            return np.zeros(embedding_dim, dtype=np.float32)
     
     def _get_embedding_dimension(self) -> int:
-        """Get embedding dimension by checking available embeddings or use default."""
-        # Try to get dimension from existing artist embeddings
-        if (hasattr(self.ranking_engine, 'artist_pop_vibe_embeds') and 
-            self.ranking_engine.artist_pop_vibe_embeds):
-            # Get dimension from first available embedding
-            first_embedding = next(iter(self.ranking_engine.artist_pop_vibe_embeds.values()))
-            return first_embedding.shape[0]
-        
+        """Get embedding dimension by checking available embeddings or use default."""        
         # Try to get dimension from song embeddings
         if self.embedding_lookups:
             for _, lookup in self.embedding_lookups.items():

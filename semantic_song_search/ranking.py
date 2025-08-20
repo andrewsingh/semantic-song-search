@@ -218,9 +218,6 @@ class RankingEngine:
         self.s_base = None
         self.has_history = False
 
-        self.artist_pop_vibe_embeds = {}
-        self.artist_personal_vibe_embeds = {}
-
 
     def reinitialize_with_new_config(self, history_df: pd.DataFrame, songs_metadata: List[Dict], embedding_lookups: Dict = None):
         """
@@ -244,14 +241,6 @@ class RankingEngine:
             
             # Recompute artist affinities
             self.compute_artist_affinities()
-
-            # Recompute artist vibe embeddings (requires tags embeddings and track stats)
-            if embedding_lookups and 'tags' in embedding_lookups:
-                self.compute_artist_pop_vibe_embeds(songs_metadata, embedding_lookups)
-                self.compute_artist_personal_vibe_embeds(songs_metadata, embedding_lookups)
-                logger.info("🔧 Re-computed artist vibe embeddings using 'tags' embeddings")
-            else:
-                logger.warning("🔧 'tags' embeddings not available during re-initialization, skipping artist vibe embeddings")
 
             # Recompute kNN similarities using the configured embedding type
             if embedding_lookups and self.config.knn_embed_type in embedding_lookups:
@@ -514,155 +503,6 @@ class RankingEngine:
         return artist_affinities, artist_familiarities
     
 
-    def compute_artist_pop_vibe_embeds(self, songs_metadata: List[Dict], embeddings_data: Dict) -> None:
-        """
-        Compute per-artist popularity vibe embeddings.
-        
-        For each artist, computes a weighted average of the 'tags' embeddings for their songs,
-        weighted by each song's Spotify popularity value (from metadata).
-        
-        Args:
-            songs_metadata: List of song metadata dicts containing popularity scores
-            embeddings_data: Dict mapping embed_type -> {song_key -> embedding_vector}
-        """
-        logger.info("Computing per-artist popularity vibe embeddings...")
-        
-        # Check if we have tags embeddings
-        if 'tags' not in embeddings_data:
-            logger.warning("No 'tags' embeddings found - skipping artist popularity vibe computation")
-            self.artist_pop_vibe_embeds = {}
-            return
-        
-        tags_embeddings = embeddings_data['tags']
-        artist_data = {}  # artist -> {embeddings: [], weights: []}
-        
-        # Collect embeddings and weights for each artist
-        for song_meta in songs_metadata:
-            song_key = (song_meta['original_song'], song_meta['original_artist'])
-            artist = song_meta['original_artist']
-            
-            # Get the tags embedding for this song
-            if song_key not in tags_embeddings:
-                continue  # Skip if no tags embedding available
-                
-            # Get the popularity weight (should be in [0, 1] from metadata)
-            popularity = 0.0
-            if 'metadata' in song_meta and song_meta['metadata']:
-                spotify_meta = song_meta['metadata']
-                if 'popularity' in spotify_meta:
-                    # Spotify popularity is 0-100, normalize to [0, 1]
-                    popularity = spotify_meta['popularity'] / 100.0
-            
-            # Skip songs with zero popularity (no contribution to weighted average)
-            if popularity <= 0:
-                continue
-                
-            # Add to artist's data
-            if artist not in artist_data:
-                artist_data[artist] = {'embeddings': [], 'weights': []}
-            
-            artist_data[artist]['embeddings'].append(tags_embeddings[song_key])
-            artist_data[artist]['weights'].append(popularity)
-        
-        # Compute weighted averages for each artist
-        artist_pop_vibe_embeds = {}
-        for artist, data in artist_data.items():
-            if not data['embeddings']:
-                continue  # Skip artists with no valid songs
-                
-            embeddings = np.array(data['embeddings'])  # shape: (n_songs, embed_dim)
-            weights = np.array(data['weights'])        # shape: (n_songs,)
-            
-            # Compute weighted average
-            total_weight = np.sum(weights)
-            if total_weight > 0:
-                weighted_embedding = np.average(embeddings, axis=0, weights=weights)
-                artist_pop_vibe_embeds[artist] = weighted_embedding
-        
-        logger.info(f"Computed popularity vibe embeddings for {len(artist_pop_vibe_embeds)} artists")
-        self.artist_pop_vibe_embeds = artist_pop_vibe_embeds
-    
-    
-    def compute_artist_personal_vibe_embeds(self, songs_metadata: List[Dict], embeddings_data: Dict) -> None:
-        """
-        Compute per-artist personal vibe embeddings.
-        
-        For each artist, computes a weighted average of the 'tags' embeddings for their songs,
-        weighted by the user's saturated total play time (R_t_s) from track_stats.
-        If a song is not in track_stats, R_t_s = 0.
-        
-        Args:
-            songs_metadata: List of song metadata dicts
-            embeddings_data: Dict mapping embed_type -> {song_key -> embedding_vector}
-        """
-        logger.info("Computing per-artist personal vibe embeddings...")
-        
-        # Check if we have tags embeddings
-        if 'tags' not in embeddings_data:
-            logger.warning("No 'tags' embeddings found - skipping artist personal vibe computation")
-            self.artist_personal_vibe_embeds = {}
-            return
-        
-        # Check if we have track stats (personal listening data)
-        if not hasattr(self, 'track_stats') or not self.track_stats:
-            logger.warning("No track_stats found - skipping artist personal vibe computation")
-            self.artist_personal_vibe_embeds = {}
-            return
-        
-        tags_embeddings = embeddings_data['tags']
-        artist_data = {}  # artist -> {embeddings: [], weights: []}
-        
-        # Collect embeddings and weights for each artist
-        for song_meta in songs_metadata:
-            song_key = (song_meta['original_song'], song_meta['original_artist'])
-            artist = song_meta['original_artist']
-            
-            # Get the tags embedding for this song
-            if song_key not in tags_embeddings:
-                continue  # Skip if no tags embedding available
-                
-            # Get the personal weight (R_t_s) from track_stats
-            personal_weight = 0.0
-            if song_key in self.track_stats:
-                track_data = self.track_stats[song_key]
-                if 'R_t_s' in track_data:
-                    personal_weight = np.clip(track_data['R_t_s'], 0, 1)
-            
-            # Note: We include songs with zero personal weight (R_t_s = 0) 
-            # as they still represent the artist's catalog
-            
-            # Add to artist's data
-            if artist not in artist_data:
-                artist_data[artist] = {'embeddings': [], 'weights': []}
-            
-            artist_data[artist]['embeddings'].append(tags_embeddings[song_key])
-            artist_data[artist]['weights'].append(personal_weight)
-        
-        # Compute weighted averages for each artist
-        artist_personal_vibe_embeds = {}
-        for artist, data in artist_data.items():
-            if not data['embeddings']:
-                continue  # Skip artists with no valid songs
-                
-            embeddings = np.array(data['embeddings'])  # shape: (n_songs, embed_dim)
-            weights = np.array(data['weights'])        # shape: (n_songs,)
-            
-            # Check if we have any non-zero weights for this artist
-            total_weight = np.sum(weights)
-            if total_weight > 0:
-                # Use weighted average with personal listening weights
-                weighted_embedding = np.average(embeddings, axis=0, weights=weights)
-            else:
-                # If no personal listening data, use unweighted average
-                # This represents the artist's overall catalog vibe
-                weighted_embedding = np.mean(embeddings, axis=0)
-            
-            artist_personal_vibe_embeds[artist] = weighted_embedding
-        
-        logger.info(f"Computed personal vibe embeddings for {len(artist_personal_vibe_embeds)} artists")
-        self.artist_personal_vibe_embeds = artist_personal_vibe_embeds
-    
-    
     def compute_knn_similarities(self, embeddings_data: Dict) -> Dict[Tuple[str, str], float]:
         """
         Compute kNN similarity prior C_t for all tracks in embeddings_data (V2.5 §4.1).
@@ -961,14 +801,6 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
         
         # Compute artist affinities
         engine.compute_artist_affinities()
-
-        # Compute artist vibe embeddings (requires tags embeddings and track stats)
-        if embedding_lookups and 'tags' in embedding_lookups:
-            engine.compute_artist_pop_vibe_embeds(songs_metadata, embedding_lookups)
-            engine.compute_artist_personal_vibe_embeds(songs_metadata, embedding_lookups)
-            logger.info("Computed artist vibe embeddings using 'tags' embeddings")
-        else:
-            logger.warning("'tags' embeddings not available, skipping artist vibe embeddings")
 
         # Compute kNN similarities using only the configured embedding type
         if embedding_lookups and engine.config.knn_embed_type in embedding_lookups:
