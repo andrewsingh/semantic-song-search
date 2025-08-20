@@ -634,7 +634,8 @@ class MusicSearchEngine:
                     if 'genres' in self.embedding_lookups and candidate['song_key'] in self.embedding_lookups['genres']:
                         candidate_genre_embedding = self.embedding_lookups['genres'][candidate['song_key']]
                         candidate_genre_norm = self._safe_normalize(candidate_genre_embedding)
-                        genre_similarity = np.dot(genre_query_embedding, candidate_genre_norm)
+                        genre_query_norm = self._safe_normalize(genre_query_embedding)
+                        genre_similarity = np.dot(genre_query_norm, candidate_genre_norm)
                         # Normalize to [0, 1] range
                         genre_similarity = np.clip((genre_similarity + 1) / 2, 0, 1)
                     else:
@@ -889,7 +890,7 @@ def search():
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'alpha_genre'
         }
         
         for param_name in valid_advanced_params:

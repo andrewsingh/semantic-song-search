@@ -81,6 +81,13 @@ class SemanticSearchApp {
         // Ensure currentSearchType is synced with the initial HTML state
         this.currentSearchType = this.getSearchType();
         
+        // Initialize genre search bar visibility based on initial search type
+        if (this.currentSearchType === 'text') {
+            this.domElements.genreSearchContainer.style.display = 'block';
+        } else {
+            this.domElements.genreSearchContainer.style.display = 'none';
+        }
+        
         // Track initial page load
         this.analytics.trackPageLoad();
     }
@@ -2531,7 +2538,9 @@ class SemanticSearchApp {
             'psi': 1.4, 'k_neighbors': 50, 'sigma': 10.0, 'knn_embed_type': 'full_profile',
             'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
             'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
-            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4
+            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4,
+            'beta_track': 0.6, 'beta_artist_pop': 0.2, 'beta_artist_personal': 0.2,
+            'alpha_genre': 0.5
         };
         
         this.populateAdvancedSettingsForm(defaults);
