@@ -44,6 +44,7 @@
                     
                     <select id="embed-type" class="config-dropdown">
                         <option value="tags_genres">Tags & Genres</option>
+                        <option value="tags">Tags</option>
                         <option value="sound_aspect">Sound</option>
                         <option value="meaning_aspect">Meaning</option>
                         <option value="mood_aspect">Mood</option>
@@ -92,7 +93,13 @@
                     </div>
                 </div>
                 
-                <!-- Search Bar -->
+                <!-- Genre Search Bar (for dual similarity) -->
+                <div class="genre-search-container" id="genre-search-container" style="display: none;">
+                    <input type="text" id="genre-search-input" class="genre-search-input" 
+                           placeholder="🏷️ Describe genres you want... (e.g., &quot;pop rock alternative&quot;, &quot;jazz blues&quot;)">
+                </div>
+                
+                <!-- Main Search Bar -->
                 <div class="search-container">
                     <input type="text" id="search-input" class="search-input" 
                            placeholder="🔍 Describe the vibe you're looking for... (e.g., &quot;upbeat summery pop&quot;, &quot;motivational workout hip hop&quot;)">
@@ -272,6 +279,10 @@
                                         <div class="param-row">
                                             <label for="beta_artist_personal" class="param-label">Artist Personal Vibe Weight:</label>
                                             <input type="number" id="beta_artist_personal" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="alpha_genre" class="param-label">Genre vs Semantic Weight:</label>
+                                            <input type="number" id="alpha_genre" class="param-input" step="0.1" min="0" max="1">
                                         </div>
                                     </div>
                                 </div>

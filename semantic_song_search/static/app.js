@@ -63,7 +63,9 @@ class SemanticSearchApp {
             nextBtn: document.getElementById('next-btn'),
             lambdaSlider: document.getElementById('lambda-slider'),
             lambdaValue: document.getElementById('lambda-value'),
-            loadMoreBtn: document.getElementById('load-more-btn')
+            loadMoreBtn: document.getElementById('load-more-btn'),
+            genreSearchContainer: document.getElementById('genre-search-container'),
+            genreSearchInput: document.getElementById('genre-search-input')
         };
         
         // Initialize Spotify Player
@@ -137,6 +139,15 @@ class SemanticSearchApp {
         searchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 this.handleSearch();
+            }
+        });
+        
+        // Genre search input (for dual similarity)
+        const genreSearchInput = this.domElements.genreSearchInput;
+        genreSearchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                // Focus on main search input when Enter is pressed in genre search
+                this.domElements.searchInput.focus();
             }
         });
         
@@ -305,11 +316,15 @@ class SemanticSearchApp {
         
         if (searchType === 'song') {
             searchInput.placeholder = "🔍 Search for a song or artist... (e.g., \"Espresso\", \"Sabrina Carpenter\")";
+            // Hide genre search for song-to-song search
+            this.domElements.genreSearchContainer.style.display = 'none';
             this.clearResults();
         } else {
             searchInput.placeholder = "🔍 Describe the vibe you're looking for... (e.g., \"upbeat summery pop\", \"motivational workout hip hop\")";
             suggestionsContainer.style.display = 'none';
             querySection.style.display = 'none';
+            // Show genre search for text-to-song search
+            this.domElements.genreSearchContainer.style.display = 'block';
             this.clearResults();
         }
     }
@@ -435,10 +450,11 @@ class SemanticSearchApp {
         const searchType = this.getSearchType();
         const embedType = this.domElements.embedType.value;
         const query = this.domElements.searchInput.value.trim();
+        const genreQuery = this.domElements.genreSearchInput.value.trim();
         const topArtistsFilter = this.domElements.topArtistsFilter;
         const filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
-        return { searchType, embedType, query, filterTopArtists };
+        return { searchType, embedType, query, genreQuery, filterTopArtists };
     }
     
     trackSearchInitiation(searchParams) {
@@ -516,7 +532,7 @@ class SemanticSearchApp {
     }
     
     buildSearchRequest(searchParams) {
-        const { searchType, embedType, query } = searchParams;
+        const { searchType, embedType, query, genreQuery } = searchParams;
         
         // Get advanced parameters
         const advancedParams = this.getActiveAdvancedParams();
@@ -534,6 +550,11 @@ class SemanticSearchApp {
             // Advanced ranking parameters
             ...advancedParams
         };
+        
+        // Add genre query if provided
+        if (genreQuery) {
+            requestData.genre_query = genreQuery;
+        }
         
         if (searchType === 'song' && this.currentQuerySong) {
             requestData.song_idx = this.currentQuerySong.song_idx;
@@ -2381,7 +2402,7 @@ class SemanticSearchApp {
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'alpha_genre'
         ];
         
         // Initialize current advanced parameters object

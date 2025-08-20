@@ -496,6 +496,7 @@ class MusicSearchEngine:
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
                          familiarity_min: float = 0.0, familiarity_max: float = 1.0,
                          query_song_key: Tuple[str, str] = None, 
+                         genre_query_embedding: np.ndarray = None,
                          **advanced_params) -> Tuple[List[Dict], int]:
         """
         Perform V2.6 similarity search with personalized ranking and multi-dimensional similarity.
@@ -509,6 +510,7 @@ class MusicSearchEngine:
             familiarity_min: Minimum familiarity score to include (0.0-1.0)
             familiarity_max: Maximum familiarity score to include (0.0-1.0)
             query_song_key: If provided, enables song-to-song search with artist similarities (song_name, artist_name)
+            genre_query_embedding: Optional genre query embedding for dual similarity scoring
         
         Returns:
             Tuple of (results, total_count)
@@ -529,7 +531,7 @@ class MusicSearchEngine:
             critical_params = ['H_c', 'H_E', 'knn_embed_type', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 
                              'K_s', 'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 
                              'psi', 'k_neighbors', 'sigma', 'theta_c', 'tau_c', 
-                             'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays']
+                             'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays', 'alpha_genre']
             needs_reinit = any(param in advanced_params for param in critical_params)
             
             if needs_reinit:
@@ -624,11 +626,30 @@ class MusicSearchEngine:
                 logger.warning(f"Error computing V2 artist similarities for {candidate['song_key']}: {e}")
                 # Keep default values of 0.0 for both similarities
             
+            # Compute genre similarity if genre query embedding is provided
+            genre_similarity = None
+            if genre_query_embedding is not None:
+                try:
+                    # Get genre embedding for the candidate song
+                    if 'genres' in self.embedding_lookups and candidate['song_key'] in self.embedding_lookups['genres']:
+                        candidate_genre_embedding = self.embedding_lookups['genres'][candidate['song_key']]
+                        candidate_genre_norm = self._safe_normalize(candidate_genre_embedding)
+                        genre_similarity = np.dot(genre_query_embedding, candidate_genre_norm)
+                        # Normalize to [0, 1] range
+                        genre_similarity = np.clip((genre_similarity + 1) / 2, 0, 1)
+                    else:
+                        # No genre embedding available for this song
+                        genre_similarity = 0.0
+                except Exception as e:
+                    logger.warning(f"Error computing genre similarity for {candidate['song_key']}: {e}")
+                    genre_similarity = 0.0
+            
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 
                 candidate['song_key'],
                 artist_pop_similarity,
-                artist_personal_similarity
+                artist_personal_similarity,
+                genre_similarity
             )
             
             # Get familiarity score for filtering
@@ -841,6 +862,7 @@ def search():
     try:
         data = request.get_json()
         query_text = data.get('query', '').strip()
+        genre_query = data.get('genre_query', '').strip()  # Optional genre query for dual similarity
         search_type = data.get('search_type', data.get('type', 'text'))  # Accept both for compatibility
         embed_type = data.get('embed_type', 'full_profile')  # Add embedding type parameter
         limit = int(data.get('k', data.get('limit', 20)))  # Accept both 'k' and 'limit'
@@ -890,9 +912,16 @@ def search():
         if search_type == 'text':
             # Text-to-song search
             query_embedding = search_engine.get_text_embedding(query_text)
+            
+            # Get genre query embedding if genre query is provided
+            genre_query_embedding = None
+            if genre_query:
+                genre_query_embedding = search_engine.get_text_embedding(genre_query)
+                
             results, total_count = search_engine.similarity_search(
                 query_embedding, k=limit, offset=offset, embed_type=embed_type,
                 lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                genre_query_embedding=genre_query_embedding,
                 **advanced_params
             )
         
@@ -911,10 +940,17 @@ def search():
             embedding_lookup = search_engine.embedding_lookups.get(embed_type, {})
             if song_key in embedding_lookup:
                 query_embedding = embedding_lookup[song_key]
+                
+                # Get genre embedding for the reference song (for genre similarity)
+                genre_query_embedding = None
+                if 'genres' in search_engine.embedding_lookups and song_key in search_engine.embedding_lookups['genres']:
+                    genre_query_embedding = search_engine.embedding_lookups['genres'][song_key]
+                
                 results, total_count = search_engine.similarity_search(
                     query_embedding, k=limit, offset=offset, embed_type=embed_type,
                     lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
                     query_song_key=song_key,  # Enable song-to-song artist similarities
+                    genre_query_embedding=genre_query_embedding,
                     **advanced_params
                 )
             else:
