@@ -79,6 +79,16 @@ class MusicSearchEngine:
         self.has_history = False
         self.history_df = None
         
+        # Similarity matrices for optimized search
+        self.user_similarity_matrix = None  # For current user-selected embedding type
+        self.artist_similarity_matrix = None  # For artist similarity computations
+        self.user_matrix_embed_type = None  # Track which embedding type user matrix uses
+        self.artist_matrix_embed_type = constants.DEFAULT_ARTIST_MATRIX_EMBED_TYPE  # Default embedding type for artist similarity
+        
+        # Performance optimization mappings
+        self.song_key_to_index = {}  # (song, artist) -> index mapping for O(1) lookups
+        self.artist_to_songs = {}  # artist -> [(song_key, index, song_metadata)] mapping
+        
         # Load all data
         self._load_all_data()
     
@@ -116,6 +126,9 @@ class MusicSearchEngine:
         # Fallback to full_profile for compatibility 
         self.embedding_lookup = self.embedding_lookups.get('full_profile', {})
         
+        # Build performance optimization mappings
+        self._build_performance_mappings()
+        
         # Build text search index
         self._build_text_search_index()
         
@@ -123,6 +136,28 @@ class MusicSearchEngine:
         self._initialize_ranking_engine()
         
         logger.info(f"Loaded {len(self.songs)} songs with embeddings")
+    
+    def _build_performance_mappings(self):
+        """Build optimization mappings for fast lookups."""
+        logger.info("Building performance optimization mappings...")
+        
+        # Build song_key to index mapping
+        self.song_key_to_index = {}
+        self.artist_to_songs = {}
+        
+        for i, song in enumerate(self.songs):
+            song_key = (song['original_song'], song['original_artist'])
+            artist = song['original_artist']
+            
+            # Build song key to index mapping
+            self.song_key_to_index[song_key] = i
+            
+            # Build artist to songs mapping
+            if artist not in self.artist_to_songs:
+                self.artist_to_songs[artist] = []
+            self.artist_to_songs[artist].append((song_key, i, song))
+        
+        logger.info(f"Built mappings for {len(self.songs)} songs and {len(self.artist_to_songs)} artists")
     
     def _build_text_search_index(self):
         """Build text search index for song/artist/album matching."""
@@ -232,6 +267,269 @@ class MusicSearchEngine:
         
         return embedding_clean / norm
     
+    def compute_similarity_matrix(self, embed_type: str) -> np.ndarray:
+        """
+        Compute N×N similarity matrix for all songs using specified embedding type.
+        
+        Args:
+            embed_type: Type of embeddings to use ('full_profile', 'tags', etc.)
+            
+        Returns:
+            N×N numpy array where element [i,j] is similarity between song i and song j
+        """
+        if embed_type not in self.embedding_lookups:
+            logger.warning(f"Embedding type '{embed_type}' not available for similarity matrix")
+            return None
+            
+        embedding_lookup = self.embedding_lookups[embed_type]
+        if not embedding_lookup:
+            logger.warning(f"No embeddings found for type '{embed_type}'")
+            return None
+        
+        logger.info(f"Computing {len(self.songs)}×{len(self.songs)} similarity matrix for '{embed_type}' embeddings...")
+        
+        # Create ordered list of embeddings matching song order
+        embeddings_list = []
+        valid_indices = []
+        
+        for i, song in enumerate(self.songs):
+            song_key = (song['original_song'], song['original_artist'])
+            if song_key in embedding_lookup:
+                embeddings_list.append(embedding_lookup[song_key])
+                valid_indices.append(i)
+            else:
+                # Add zero vector for missing embeddings
+                embedding_dim = self._get_embedding_dimension()
+                embeddings_list.append(np.zeros(embedding_dim))
+                valid_indices.append(i)
+        
+        # Convert to matrix: shape (N, embedding_dim)
+        embeddings_matrix = np.array(embeddings_list)
+        
+        # Normalize all embeddings for cosine similarity
+        norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
+        # Avoid division by zero
+        norms = np.where(norms < 1e-12, 1.0, norms)
+        embeddings_matrix_norm = embeddings_matrix / norms
+        
+        # Compute similarity matrix: (N, embedding_dim) @ (embedding_dim, N) = (N, N)
+        similarity_matrix = embeddings_matrix_norm @ embeddings_matrix_norm.T
+        
+        logger.info(f"Completed similarity matrix computation for '{embed_type}' ({similarity_matrix.shape})")
+        return similarity_matrix
+    
+    def get_similarity_matrix(self, embed_type: str, matrix_type: str = 'user') -> np.ndarray:
+        """
+        Get or compute similarity matrix for specified embedding type.
+        
+        Args:
+            embed_type: Embedding type to use
+            matrix_type: 'user' for user matrix, 'artist' for artist matrix
+            
+        Returns:
+            Similarity matrix or None if computation fails
+        """
+        if matrix_type == 'user':
+            # Check if we already have the right user matrix
+            if (self.user_similarity_matrix is not None and 
+                self.user_matrix_embed_type == embed_type):
+                return self.user_similarity_matrix
+            
+            # Compute new user matrix
+            logger.info(f"Computing user similarity matrix for embedding type: {embed_type}")
+            self.user_similarity_matrix = self.compute_similarity_matrix(embed_type)
+            self.user_matrix_embed_type = embed_type
+            return self.user_similarity_matrix
+            
+        elif matrix_type == 'artist':
+            # Check if we already have the right artist matrix
+            if (self.artist_similarity_matrix is not None and 
+                self.artist_matrix_embed_type == embed_type):
+                return self.artist_similarity_matrix
+            
+            # Compute new artist matrix
+            logger.info(f"Computing artist similarity matrix for embedding type: {embed_type}")
+            self.artist_similarity_matrix = self.compute_similarity_matrix(embed_type)
+            self.artist_matrix_embed_type = embed_type
+            return self.artist_similarity_matrix
+        
+        else:
+            raise ValueError(f"Invalid matrix_type: '{matrix_type}'. Must be 'user' or 'artist'")
+    
+    def set_artist_similarity_embed_type(self, embed_type: str) -> bool:
+        """
+        Set the embedding type to use for artist similarity calculations.
+        
+        Args:
+            embed_type: Embedding type to use ('tags', 'tags_genres', 'full_profile', etc.)
+            
+        Returns:
+            True if successfully set, False if embedding type not available
+        """
+        if embed_type not in self.embedding_lookups:
+            logger.warning(f"Embedding type '{embed_type}' not available for artist similarity")
+            return False
+        
+        if embed_type != self.artist_matrix_embed_type:
+            logger.info(f"Changing artist similarity embedding type from '{self.artist_matrix_embed_type}' to '{embed_type}'")
+            self.artist_matrix_embed_type = embed_type
+            # Clear existing artist matrix to force recomputation
+            self.artist_similarity_matrix = None
+        
+        return True
+    
+    def ensure_artist_similarity_matrix(self) -> bool:
+        """
+        Ensure artist similarity matrix is computed for current embed type.
+        
+        Returns:
+            True if matrix is available, False if computation failed
+        """
+        if self.artist_similarity_matrix is None:
+            logger.info(f"Initializing artist similarity matrix with '{self.artist_matrix_embed_type}' embeddings")
+            self.artist_similarity_matrix = self.compute_similarity_matrix(self.artist_matrix_embed_type)
+            return self.artist_similarity_matrix is not None
+        return True
+    
+    def compute_artist_similarity_v2(self, query_song_key: Tuple[str, str], candidate_song_key: Tuple[str, str], 
+                                   query_embedding: np.ndarray = None) -> Tuple[float, float]:
+        """
+        Compute artist similarity using score-then-average approach (V2) - OPTIMIZED.
+        
+        Args:
+            query_song_key: (song, artist) tuple for query song (for song-to-song search)
+            candidate_song_key: (song, artist) tuple for candidate song
+            query_embedding: Normalized query embedding (for text-to-song search)
+            
+        Returns:
+            Tuple of (popularity_similarity, personal_similarity)
+        """
+        # Ensure artist similarity matrix is available
+        if not self.ensure_artist_similarity_matrix():
+            logger.warning("Artist similarity matrix not available, falling back to zero similarities")
+            return 0.0, 0.0
+        
+        candidate_artist = candidate_song_key[1]
+        
+        # Use optimized artist-to-songs mapping for O(1) lookup
+        if candidate_artist not in self.artist_to_songs:
+            return 0.0, 0.0
+        
+        artist_songs_data = self.artist_to_songs[candidate_artist]
+        
+        # Get query song index for song-to-song searches (O(1) lookup)
+        query_idx = None
+        if query_song_key is not None:
+            query_idx = self.song_key_to_index.get(query_song_key)
+            if query_idx is None:
+                logger.warning(f"Query song {query_song_key} not found in index")
+                return 0.0, 0.0
+        
+        # Compute individual similarities for each song by the candidate artist
+        similarities = []
+        popularity_weights = []
+        personal_weights = []
+        
+        # Pre-fetch embedding lookup for text-to-song searches
+        embedding_lookup = None
+        if query_song_key is None and self.artist_matrix_embed_type in self.embedding_lookups:
+            embedding_lookup = self.embedding_lookups[self.artist_matrix_embed_type]
+        
+        for song_key, song_idx, song_metadata in artist_songs_data:
+            # Get similarity score
+            if query_song_key is not None:
+                # Song-to-song search: use precomputed matrix (O(1) lookup)
+                similarity = self.artist_similarity_matrix[query_idx, song_idx]
+            else:
+                # Text-to-song search: compute against query embedding
+                if embedding_lookup and song_key in embedding_lookup:
+                    candidate_embedding = embedding_lookup[song_key]
+                    candidate_norm = self._safe_normalize(candidate_embedding)
+                    similarity = np.dot(query_embedding, candidate_norm)
+                else:
+                    similarity = 0.0
+            
+            # normalize simlarity to [0, 1]
+            similarity = np.clip((similarity + 1) / 2, 0, 1)
+            similarities.append(similarity)
+            
+            # Get popularity weight from cached metadata
+            popularity_weight = 0.0
+            if ('metadata' in song_metadata and song_metadata['metadata'] and 
+                'popularity' in song_metadata['metadata']):
+                popularity_weight = song_metadata['metadata']['popularity'] / 100.0
+            
+            popularity_weights.append(popularity_weight)
+            
+            # Get personal weight (R_t_s)
+            personal_weight = 0.0
+            if (hasattr(self.ranking_engine, 'track_stats') and 
+                self.ranking_engine.track_stats and 
+                song_key in self.ranking_engine.track_stats):
+                track_data = self.ranking_engine.track_stats[song_key]
+                if 'R_t' in track_data:
+                    personal_weight = np.clip(track_data['R_t'], 0, 1)
+            
+            personal_weights.append(personal_weight)
+        
+        # Handle empty similarities list
+        if not similarities:
+            return 0.0, 0.0
+        
+        # Compute weighted averages of similarity scores
+        similarities = np.array(similarities)
+        popularity_weights = np.array(popularity_weights)
+        personal_weights = np.array(personal_weights)
+        
+        # Popularity-weighted average
+        pop_total_weight = np.sum(popularity_weights)
+        if pop_total_weight > 1e-12:  # More robust zero check
+            artist_pop_similarity = np.average(similarities, weights=popularity_weights)
+        else:
+            artist_pop_similarity = np.mean(similarities)
+        
+        # Personal-weighted average
+        personal_total_weight = np.sum(personal_weights)
+        if personal_total_weight > 1e-12:  # More robust zero check
+            artist_personal_similarity = np.average(similarities, weights=personal_weights)
+        else:
+            # Fallback to unweighted average if no personal listening data
+            artist_personal_similarity = np.mean(similarities)
+        
+        return float(artist_pop_similarity), float(artist_personal_similarity)
+    
+    def get_song_embedding(self, song_idx: int, embed_type: str = 'full_profile') -> np.ndarray:
+        """
+        Get embedding for a specific song by index.
+        
+        Args:
+            song_idx: Index of the song in self.songs
+            embed_type: Type of embedding to retrieve
+            
+        Returns:
+            Song embedding as numpy array
+            
+        Raises:
+            IndexError: If song_idx is out of range
+            ValueError: If embed_type is not available
+            KeyError: If song has no embedding of the specified type
+        """
+        if song_idx >= len(self.songs) or song_idx < 0:
+            raise IndexError(f"Song index {song_idx} out of range (0-{len(self.songs)-1})")
+        
+        if embed_type not in self.embedding_lookups:
+            available_types = list(self.embedding_lookups.keys())
+            raise ValueError(f"Embedding type '{embed_type}' not available. Available types: {available_types}")
+        
+        song = self.songs[song_idx]
+        song_key = (song['original_song'], song['original_artist'])
+        
+        embedding_lookup = self.embedding_lookups[embed_type]
+        if song_key not in embedding_lookup:
+            raise KeyError(f"No '{embed_type}' embedding for song: {song_key}")
+        
+        return embedding_lookup[song_key]
+    
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
                          familiarity_min: float = 0.0, familiarity_max: float = 1.0,
@@ -297,23 +595,50 @@ class MusicSearchEngine:
         # V2.6: Compute candidates and their priors for quantile normalization
         candidates_data = []
         
+        # Try to use precomputed similarity matrix for song-to-song searches
+        use_precomputed_matrix = False
+        query_song_idx = None
+        user_matrix = None
+        
+        if query_song_key is not None:
+            # Song-to-song search: try to use precomputed matrix
+            user_matrix = self.get_similarity_matrix(embed_type, 'user')
+            if user_matrix is not None:
+                # Find query song index
+                for i, song in enumerate(self.songs):
+                    if (song['original_song'], song['original_artist']) == query_song_key:
+                        query_song_idx = i
+                        break
+                
+                if query_song_idx is not None:
+                    use_precomputed_matrix = True
+                    logger.debug(f"Using precomputed similarity matrix for song-to-song search")
+        
         for i, song in enumerate(self.songs):
             song_key = (song['original_song'], song['original_artist'])
             
-            # Get song embedding for the specified type
-            if song_key in embedding_lookup:
-                song_embedding = embedding_lookup[song_key]
-                semantic_similarity = np.dot(query_embedding, song_embedding)
-                
-                candidates_data.append({
-                    'song_idx': i,
-                    'song_key': song_key,
-                    'song': song,
-                    'semantic_similarity': semantic_similarity,
-                })
+            # Compute semantic similarity
+            if use_precomputed_matrix:
+                # Use precomputed matrix for song-to-song search
+                semantic_similarity = user_matrix[query_song_idx, i]
             else:
-                # No embedding available for this type, skip
-                continue
+                # Use direct embedding computation
+                if song_key in embedding_lookup:
+                    song_embedding = embedding_lookup[song_key]
+                    semantic_similarity = np.dot(query_embedding, song_embedding)
+                else:
+                    # No embedding available for this type, skip
+                    continue
+            
+            # normalize semantic similarity to [0, 1]
+            semantic_similarity = np.clip((semantic_similarity + 1) / 2, 0, 1)
+            
+            candidates_data.append({
+                'song_idx': i,
+                'song_key': song_key,
+                'song': song,
+                'semantic_similarity': semantic_similarity,
+            })
         
         if not candidates_data:
             return [], 0
@@ -328,41 +653,13 @@ class MusicSearchEngine:
             artist_personal_similarity = 0.0
             
             try:
-                if query_song_key is not None:
-                    # Song-to-song search: compare artists
-                    query_artist = self.get_artist_for_song(query_song_key)
-                    candidate_artist = self.get_artist_for_song(candidate['song_key'])
-                    
-                    query_pop_embedding = self.get_artist_pop_vibe_embedding(query_artist)
-                    candidate_pop_embedding = self.get_artist_pop_vibe_embedding(candidate_artist)
-                    # Normalize embeddings for proper cosine similarity with NaN handling
-                    query_pop_norm = self._safe_normalize(query_pop_embedding)
-                    candidate_pop_norm = self._safe_normalize(candidate_pop_embedding)
-                    artist_pop_similarity = np.dot(query_pop_norm, candidate_pop_norm)
-                    
-                    query_personal_embedding = self.get_artist_personal_vibe_embedding(query_artist)
-                    candidate_personal_embedding = self.get_artist_personal_vibe_embedding(candidate_artist)
-                    # Normalize embeddings for proper cosine similarity with NaN handling
-                    query_personal_norm = self._safe_normalize(query_personal_embedding)
-                    candidate_personal_norm = self._safe_normalize(candidate_personal_embedding)
-                    artist_personal_similarity = np.dot(query_personal_norm, candidate_personal_norm)
-                    
-                else:
-                    # Text-to-song search: compare query text to candidate artists
-                    candidate_artist = self.get_artist_for_song(candidate['song_key'])
-                    
-                    candidate_pop_embedding = self.get_artist_pop_vibe_embedding(candidate_artist)
-                    # Normalize candidate embedding (query_embedding is already normalized)
-                    candidate_pop_norm = self._safe_normalize(candidate_pop_embedding)
-                    artist_pop_similarity = np.dot(query_embedding, candidate_pop_norm)
-                    
-                    candidate_personal_embedding = self.get_artist_personal_vibe_embedding(candidate_artist)
-                    # Normalize candidate embedding (query_embedding is already normalized)
-                    candidate_personal_norm = self._safe_normalize(candidate_personal_embedding)
-                    artist_personal_similarity = np.dot(query_embedding, candidate_personal_norm)
-                    
+                # Use V2 score-then-average artist similarity method
+                artist_pop_similarity, artist_personal_similarity = self.compute_artist_similarity_v2(
+                    query_song_key, candidate['song_key'], query_embedding
+                )
+                
             except Exception as e:
-                logger.warning(f"Error computing artist similarities for {candidate['song_key']}: {e}")
+                logger.warning(f"Error computing V2 artist similarities for {candidate['song_key']}: {e}")
                 # Keep default values of 0.0 for both similarities
             
             final_score, components = self.ranking_engine.compute_v25_final_score(
@@ -472,7 +769,11 @@ class MusicSearchEngine:
         weights.update({
             'version': '2.6',
             'has_history': self.has_history,
-            'history_songs_count': len(self.ranking_engine.track_stats) if self.ranking_engine.track_stats else 0
+            'history_songs_count': len(self.ranking_engine.track_stats) if self.ranking_engine.track_stats else 0,
+            'artist_similarity_embed_type': self.artist_matrix_embed_type,
+            'user_matrix_embed_type': self.user_matrix_embed_type,
+            'has_artist_matrix': self.artist_similarity_matrix is not None,
+            'has_user_matrix': self.user_similarity_matrix is not None
         })
         return weights
 
@@ -1174,6 +1475,53 @@ def get_default_ranking_config():
     except Exception as e:
         logger.error(f"Error getting default ranking config: {e}")
         return jsonify({'error': 'Failed to retrieve default ranking configuration'}), 500
+
+@app.route('/api/artist_similarity_config', methods=['GET'])
+def get_artist_similarity_config():
+    """Get current artist similarity configuration."""
+    try:
+        if search_engine is None:
+            return jsonify({'error': 'Search engine not initialized'}), 500
+        
+        config = {
+            'artist_embed_type': search_engine.artist_matrix_embed_type,
+            'available_types': list(search_engine.embedding_lookups.keys()),
+            'has_matrix': search_engine.artist_similarity_matrix is not None
+        }
+        return jsonify(config)
+    except Exception as e:
+        logger.error(f"Error getting artist similarity config: {e}")
+        return jsonify({'error': 'Failed to retrieve artist similarity configuration'}), 500
+
+@app.route('/api/artist_similarity_config', methods=['PUT'])
+def set_artist_similarity_config():
+    """Set artist similarity embedding type."""
+    try:
+        if search_engine is None:
+            return jsonify({'error': 'Search engine not initialized'}), 500
+        
+        data = request.get_json()
+        if not data or 'artist_embed_type' not in data:
+            return jsonify({'error': 'Missing artist_embed_type parameter'}), 400
+        
+        embed_type = data['artist_embed_type']
+        
+        # Validate and set the embedding type
+        success = search_engine.set_artist_similarity_embed_type(embed_type)
+        if not success:
+            return jsonify({'error': f'Invalid embedding type: {embed_type}'}), 400
+        
+        # Return updated configuration
+        config = {
+            'artist_embed_type': search_engine.artist_matrix_embed_type,
+            'available_types': list(search_engine.embedding_lookups.keys()),
+            'has_matrix': search_engine.artist_similarity_matrix is not None
+        }
+        return jsonify(config)
+        
+    except Exception as e:
+        logger.error(f"Error setting artist similarity config: {e}")
+        return jsonify({'error': 'Failed to set artist similarity configuration'}), 500
 
 def parse_arguments():
     """Parse command line arguments."""

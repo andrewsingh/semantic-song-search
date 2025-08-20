@@ -819,24 +819,19 @@ class RankingEngine:
         Note: Method name preserved as v25 for backward compatibility, but implements V2.6 algorithm.
         
         Args:
-            semantic_similarity: Query-track semantic similarity [-1, 1]
+            semantic_similarity: Query-track semantic similarity [0, 1]
             song_key: (song, artist) tuple
-            artist_pop_similarity: Query-artist popularity vibe similarity [-1, 1] (default: 0.0)
-            artist_personal_similarity: Query-artist personal vibe similarity [-1, 1] (default: 0.0)
+            artist_pop_similarity: Query-artist popularity vibe similarity [0, 1] (default: 0.0)
+            artist_personal_similarity: Query-artist personal vibe similarity [0, 1] (default: 0.0)
             
         Returns:
             Tuple of (final_score, component_breakdown)
         """
         # Multi-dimensional similarity: combine track, artist popularity, and artist personal similarities
         # Handle NaN values by replacing with zero
-        semantic_similarity = 0.0 if np.isnan(semantic_similarity) else semantic_similarity
-        artist_pop_similarity = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
-        artist_personal_similarity = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
-        
-        # Rescale all cosine similarities from [-1,1] to [0,1]
-        S_track = float(np.clip((semantic_similarity + 1) / 2, 0, 1))
-        S_artist_pop = float(np.clip((artist_pop_similarity + 1) / 2, 0, 1))
-        S_artist_personal = float(np.clip((artist_personal_similarity + 1) / 2, 0, 1))
+        S_track = 0.0 if np.isnan(semantic_similarity) else semantic_similarity
+        S_artist_pop = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
+        S_artist_personal = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
         
         # Compute weighted combined similarity
         total_weight = self.config.beta_track + self.config.beta_artist_pop + self.config.beta_artist_personal
