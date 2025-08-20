@@ -73,13 +73,13 @@ class RankingConfig:
         C_fam: float = 0.25,
         min_plays: int = 4,
         
-        # V2.6: Artist similarity weights (for multi-dimensional similarity)
-        beta_track: float = 0.6,         # Weight for track-level similarity
-        beta_artist_pop: float = 0.2,    # Weight for artist popularity vibe similarity  
-        beta_artist_personal: float = 0.2, # Weight for artist personal vibe similarity
-        
-        # Genre similarity weighting
-        alpha_genre: float = 0.5,        # Weight for genre vs semantic similarity (0=semantic only, 1=genre only)
+        # V2.6: Similarity search weights (track, artist, genre, popularity) - these weights should sum to 1
+        beta_track: float = 0.5,         # Weight for track-level similarity
+        beta_genre: float = 0.2,        # Weight for genre vs semantic similarity
+        beta_artist_pop: float = 0.15,    # Weight for artist popularity vibe similarity  
+        beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity
+        beta_pop: float = 0.15,        # Weight for track popularity vs semantic similarity
+
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -118,7 +118,8 @@ class RankingConfig:
             self.beta_track = beta_track
             self.beta_artist_pop = beta_artist_pop
             self.beta_artist_personal = beta_artist_personal
-            self.alpha_genre = alpha_genre
+            self.beta_genre = beta_genre
+            self.beta_pop = beta_pop
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -159,7 +160,8 @@ class RankingConfig:
             'beta_track': self.beta_track,
             'beta_artist_pop': self.beta_artist_pop,
             'beta_artist_personal': self.beta_artist_personal,
-            'alpha_genre': self.alpha_genre
+            'beta_genre': self.beta_genre,
+            'beta_pop': self.beta_pop
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -191,17 +193,22 @@ class RankingConfig:
                         self.lambda_val = float_value
                     else:
                         logger.warning(f"Lambda must be in [0,1], got {float_value}")
-                elif key == 'alpha_genre':  # Handle alpha_genre validation
+                elif key == 'beta_genre':  # Handle beta_genre validation
                     if 0.0 <= float_value <= 1.0:
-                        self.alpha_genre = float_value
+                        self.beta_genre = float_value
                     else:
-                        logger.warning(f"alpha_genre must be in [0,1], got {float_value}")
+                        logger.warning(f"beta_genre must be in [0,1], got {float_value}")
+                elif key == 'beta_pop':  # Handle beta_pop validation
+                    if 0.0 <= float_value <= 1.0:
+                        self.beta_pop = float_value
+                    else:
+                        logger.warning(f"beta_pop must be in [0,1], got {float_value}")
                 # Note: Discovery slider 'd' and 'kappa_d' parameters removed in favor of familiarity filtering
                 elif hasattr(self, key):
                     # Additional validation for other parameters
                     if key in ['beta_p', 'beta_s', 'beta_a'] and not 0.0 <= float_value <= 1.0:
                         logger.warning(f"{key} should typically be in [0,1], got {float_value}")
-                    elif key in ['beta_track', 'beta_artist_pop', 'beta_artist_personal'] and float_value < 0.0:
+                    elif key in ['beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_pop'] and float_value < 0.0:
                         logger.warning(f"{key} should be non-negative, got {float_value}")
                     setattr(self, key, float_value)
                 else:
@@ -682,55 +689,56 @@ class RankingEngine:
         # Multi-dimensional similarity: combine track, artist popularity, and artist personal similarities
         # Handle NaN values by replacing with zero
         S_track = 0.0 if np.isnan(semantic_similarity) else semantic_similarity
+        S_genre = 0.0 if np.isnan(genre_similarity) else genre_similarity
         S_artist_pop = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
         S_artist_personal = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
-        
-        # Genre similarity handling
-        S_genre = None
-        if genre_similarity is not None:
-            S_genre = 0.0 if np.isnan(genre_similarity) else genre_similarity
+        S_pop = self.track_priors[song_key]['P_t'] if song_key in self.track_priors else 0.0
         
         # Compute weighted combined semantic similarity (track + artist similarities)
-        total_weight = self.config.beta_track + self.config.beta_artist_pop + self.config.beta_artist_personal
+        total_weight = self.config.beta_track + self.config.beta_genre + self.config.beta_artist_pop + self.config.beta_artist_personal + self.config.beta_pop
+
         if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
             # Normalize weights to ensure they sum to 1
             norm_beta_track = self.config.beta_track / total_weight
+            norm_beta_genre = self.config.beta_genre / total_weight
             norm_beta_artist_pop = self.config.beta_artist_pop / total_weight
             norm_beta_artist_personal = self.config.beta_artist_personal / total_weight
-            
+            norm_beta_pop = self.config.beta_pop / total_weight
+
             S_semantic = (norm_beta_track * S_track + 
+                         norm_beta_genre * S_genre +
                          norm_beta_artist_pop * S_artist_pop + 
-                         norm_beta_artist_personal * S_artist_personal)
+                         norm_beta_artist_personal * S_artist_personal +
+                         norm_beta_pop * S_pop)
         else:
             # Fallback to track similarity only if all weights are zero
             logger.warning("All similarity weights are zero, falling back to track similarity only")
             S_semantic = S_track
         
-        # Combine semantic and genre similarities using alpha_genre
-        if S_genre is not None:
-            S_t = self.config.alpha_genre * S_genre + (1 - self.config.alpha_genre) * S_semantic
-        else:
-            S_t = S_semantic
-        
+        S_semantic = np.clip(S_semantic, 0, 1)
+
         # No-history case: return pure combined similarity (like V1)
         if not self.has_history:
             components = {
-                'semantic_similarity': S_t,
+                'semantic_similarity': S_semantic,
                 'S_track': S_track,
+                'S_genre': S_genre,
                 'S_artist_pop': S_artist_pop, 
                 'S_artist_personal': S_artist_personal,
-                'S_semantic': S_semantic,
-                'S_genre': S_genre,
-                'final_score': S_t,
+                'S_pop': S_pop,
+                'final_score': S_semantic,
                 'lambda': 1.0,
-                'alpha_genre': self.config.alpha_genre,
+                'beta_genre': self.config.beta_genre,
                 'beta_track': self.config.beta_track,
                 'beta_artist_pop': self.config.beta_artist_pop,
                 'beta_artist_personal': self.config.beta_artist_personal,
+                'beta_pop': self.config.beta_pop,
                 # No score breakdown components for no-history case
             }
-            return float(np.clip(S_t, 0, 1)), components
+            return S_semantic, components
         
+        S_t = S_semantic
+
         # Get track statistics if available
         if song_key in self.track_stats:
             stats = self.track_stats[song_key]
@@ -772,7 +780,7 @@ class RankingEngine:
             'S_genre': S_genre,
             'final_score': final_score,
             'lambda': lambda_val,
-            'alpha_genre': self.config.alpha_genre,
+            'beta_genre': self.config.beta_genre,
             'kappa_E': self.config.kappa_E,
             'beta_track': self.config.beta_track,
             'beta_artist_pop': self.config.beta_artist_pop,

@@ -1150,27 +1150,26 @@ class SemanticSearchApp {
             
             // Build scoring components for the middle section (only if we have meaningful breakdown)
             let scoringComponentsHTML = '';
-            if (song.scoring_components && song.scoring_components.weighted_semantic !== undefined) {
+            if (song.scoring_components) {
                 const components = song.scoring_components;
                 
-                // V2.6: Show the 4 key components: 3 similarity dimensions + familiarity
                 scoringComponentsHTML = `
                     <div class="scoring-components">
                         <span class="scoring-component" title="Track-level similarity">
                             <span class="component-label">Sim:</span>
                             <span class="component-value">${(components.S_track || 0).toFixed(2)}</span>
                         </span>
+                        <span class="scoring-component" title="Genre similarity">
+                            <span class="component-label">Gen:</span>
+                            <span class="component-value">${(components.S_genre || 0).toFixed(2)}</span>
+                        </span>
                         <span class="scoring-component" title="Artist popularity vibe similarity">
-                            <span class="component-label">Pop:</span>
+                            <span class="component-label">Art:</span>
                             <span class="component-value">${(components.S_artist_pop || 0).toFixed(2)}</span>
                         </span>
-                        <span class="scoring-component" title="Artist personal vibe similarity">
-                            <span class="component-label">Per:</span>
-                            <span class="component-value">${(components.S_artist_personal || 0).toFixed(2)}</span>
-                        </span>
-                        <span class="scoring-component" title="Familiarity score">
-                            <span class="component-label">Fam:</span>
-                            <span class="component-value">${(components.Fam_t || 0).toFixed(2)}</span>
+                        <span class="scoring-component" title="Popularity score">
+                            <span class="component-label">Pop:</span>
+                            <span class="component-value">${(components.S_pop || 0).toFixed(2)}</span>
                         </span>
                     </div>
                 `;
@@ -1190,7 +1189,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)} ${song.scoring_components?.P_t ? `(${song.scoring_components.P_t.toFixed(2)})` : ''}</div>
+                    <div class="card-title">${escapeHtml(song.song)}</div>
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
@@ -2409,7 +2408,7 @@ class SemanticSearchApp {
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'alpha_genre'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_pop'
         ];
         
         // Initialize current advanced parameters object
@@ -2539,8 +2538,8 @@ class SemanticSearchApp {
             'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
             'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
             'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4,
-            'beta_track': 0.6, 'beta_artist_pop': 0.2, 'beta_artist_personal': 0.2,
-            'alpha_genre': 0.5
+            'beta_track': 0.5, 'beta_artist_pop': 0.15, 'beta_artist_personal': 0.0,
+            'beta_genre': 0.2, 'beta_pop': 0.15
         };
         
         this.populateAdvancedSettingsForm(defaults);
