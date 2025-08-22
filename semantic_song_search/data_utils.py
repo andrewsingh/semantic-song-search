@@ -94,6 +94,53 @@ def load_embeddings_data(embeddings_path: str) -> Dict[str, Dict]:
     return embedding_indices
 
 
+def load_artist_embeddings_data(artist_embeddings_path: str) -> Dict[str, Dict]:
+    """
+    Load artist embeddings data from npz files.
+    
+    Args:
+        artist_embeddings_path: Path to artist embeddings directory
+        
+    Returns:
+        Dictionary mapping embedding types to their artist data
+    """
+    artist_embeddings_path = Path(artist_embeddings_path)
+    artist_embedding_indices = {}
+    
+    if not artist_embeddings_path.is_dir():
+        raise FileNotFoundError(f"Artist embeddings path not found: {artist_embeddings_path}")
+    
+    logger.info(f"Loading artist embeddings from directory: {artist_embeddings_path}")
+    
+    try:
+        from . import constants
+    except ImportError:
+        import constants
+    
+    for embed_type in constants.EMBEDDING_TYPES:
+        embed_file = artist_embeddings_path / f"{embed_type}_artist_embeddings.npz"
+        if embed_file.exists():
+            data = np.load(embed_file, allow_pickle=True)
+            artist_embedding_indices[embed_type] = {
+                'artists': data['artists'],
+                'embeddings': data['embeddings']
+            }
+            
+            # Include additional fields if available (for consistency with song embeddings)
+            if 'artist_indices' in data:
+                artist_embedding_indices[embed_type]['artist_indices'] = data['artist_indices']
+            if 'field_values' in data:
+                artist_embedding_indices[embed_type]['field_values'] = data['field_values']
+                logger.info(f"Loaded artist {embed_type}: {len(data['artists'])} artist embeddings with indices")
+            else:
+                logger.info(f"Loaded artist {embed_type}: {len(data['artists'])} artist embeddings")
+    
+    if not artist_embedding_indices:
+        logger.warning(f"No artist embedding files found in {artist_embeddings_path}")
+    
+    return artist_embedding_indices
+
+
 def build_embedding_lookup(embedding_indices: Dict, songs_metadata: List[Dict], 
                          embed_type: str = 'full_profile') -> Dict[Tuple[str, str], np.ndarray]:
     """

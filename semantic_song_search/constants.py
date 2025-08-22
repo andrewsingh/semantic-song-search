@@ -13,10 +13,12 @@ TEXT_SEARCH_MIN_SCORE = 0.01
 # Default File Paths  
 DEFAULT_SONGS_FILE = "data/eval_set_v2/eval_set_v2_metadata_ready.json"
 DEFAULT_EMBEDDINGS_PATH = "data/eval_set_v2/eval_set_v2_embeddings"
+DEFAULT_ARTIST_EMBEDDINGS_PATH = "data/eval_set_v2/eval_set_v2_artist_embeddings"
 
 # Embedding Types
 EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
 DEFAULT_ARTIST_MATRIX_EMBED_TYPE = 'tags'
+DEFAULT_ARTIST_EMBED_TYPE = 'full_profile'
 
 # Flask Configuration
 DEFAULT_HOST = "127.0.0.1"

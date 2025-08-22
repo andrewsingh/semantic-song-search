@@ -44,7 +44,8 @@ class SemanticSearchApp {
             beta_track: 0.5,
             beta_genre: 0.2,
             beta_artist_pop: 0.15,
-            beta_pop: 0.15
+            beta_pop: 0.15,
+            beta_artist: 0.0
         };
         this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
         
@@ -80,7 +81,8 @@ class SemanticSearchApp {
             nhBetaTrack: document.getElementById('nh_beta_track'),
             nhBetaGenre: document.getElementById('nh_beta_genre'),
             nhBetaArtistPop: document.getElementById('nh_beta_artist_pop'),
-            nhBetaPop: document.getElementById('nh_beta_pop')
+            nhBetaPop: document.getElementById('nh_beta_pop'),
+            nhBetaArtist: document.getElementById('nh_beta_artist')
         };
         
         // Initialize Spotify Player
@@ -316,7 +318,8 @@ class SemanticSearchApp {
             this.domElements.nhBetaTrack,
             this.domElements.nhBetaGenre,
             this.domElements.nhBetaArtistPop,
-            this.domElements.nhBetaPop
+            this.domElements.nhBetaPop,
+            this.domElements.nhBetaArtist
         ];
 
         weightInputs.forEach(input => {
@@ -1212,12 +1215,12 @@ class SemanticSearchApp {
                             <span class="component-value">${(components.S_genre * 100 || 0).toFixed(1)}</span>
                         </span>
                         <span class="scoring-component" title="Artist popularity vibe similarity">
-                            <span class="component-label">Art:</span>
+                            <span class="component-label">ArtV:</span>
                             <span class="component-value">${(components.S_artist_pop * 100 || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Popularity score">
-                            <span class="component-label">Pop:</span>
-                            <span class="component-value">${(components.S_pop * 100 || 0).toFixed(1)}</span>
+                        <span class="scoring-component" title="Artist similarity">
+                            <span class="component-label">Art:</span>
+                            <span class="component-value">${(components.S_artist * 100 || 0).toFixed(1)}</span>
                         </span>
                     </div>
                 `;
@@ -1237,7 +1240,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)}</div>
+                    <div class="card-title">${escapeHtml(song.song)} (${escapeHtml((song.scoring_components?.S_pop * 100 || 0).toFixed(1))})</div>
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
@@ -2456,7 +2459,7 @@ class SemanticSearchApp {
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_pop'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_pop', 'beta_artist'
         ];
         
         // Initialize current advanced parameters object
@@ -2661,7 +2664,7 @@ class SemanticSearchApp {
             'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
             'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4,
             'beta_track': 0.5, 'beta_artist_pop': 0.15, 'beta_artist_personal': 0.0,
-            'beta_genre': 0.2, 'beta_pop': 0.15
+            'beta_genre': 0.2, 'beta_pop': 0.15, 'beta_artist': 0.0
         };
         
         this.populateAdvancedSettingsForm(defaults);

@@ -61,10 +61,11 @@ if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
 class MusicSearchEngine:
     """Music search engine with personalized ranking."""
     
-    def __init__(self, songs_file: str, embeddings_file: str, history_path: str = None):
+    def __init__(self, songs_file: str, embeddings_file: str, history_path: str = None, artist_embeddings_file: str = None):
         self.songs_file = songs_file
         self.embeddings_file = embeddings_file
         self.history_path = history_path
+        self.artist_embeddings_file = artist_embeddings_file
         
         # Data structures
         self.songs = []
@@ -73,6 +74,10 @@ class MusicSearchEngine:
         self.embedding_lookup = {}  # (song, artist) -> embedding
         self.tfidf_vectorizer = None
         self.tfidf_matrix = None
+        
+        # Artist embeddings
+        self.artist_embeddings_data = None
+        self.artist_embedding_lookup = {}  # artist -> embedding
         
         # V2 Ranking engine
         self.ranking_engine = None
@@ -105,6 +110,10 @@ class MusicSearchEngine:
             raw_embedding_indices, self.songs
         )
         
+        # Load artist embeddings if provided
+        if self.artist_embeddings_file:
+            self._load_artist_embeddings()
+        
         # Build embedding lookups for all available embedding types
         self.embedding_lookups = {}
         try:
@@ -136,6 +145,42 @@ class MusicSearchEngine:
         self._initialize_ranking_engine()
         
         logger.info(f"Loaded {len(self.songs)} songs with embeddings")
+    
+    def _load_artist_embeddings(self):
+        """Load artist embeddings data."""
+        logger.info(f"Loading artist embeddings from: {self.artist_embeddings_file}")
+        try:
+            self.artist_embeddings_data = data_utils.load_artist_embeddings_data(self.artist_embeddings_file)
+            
+            # Build artist embedding lookup for the default embed type
+            embed_type = constants.DEFAULT_ARTIST_EMBED_TYPE
+            if embed_type in self.artist_embeddings_data:
+                artists = self.artist_embeddings_data[embed_type]['artists']
+                embeddings = self.artist_embeddings_data[embed_type]['embeddings']
+                
+                # Validate artist_indices if present
+                if 'artist_indices' in self.artist_embeddings_data[embed_type]:
+                    artist_indices = self.artist_embeddings_data[embed_type]['artist_indices']
+                    if len(artist_indices) != len(embeddings):
+                        logger.warning(f"Artist indices length ({len(artist_indices)}) doesn't match embeddings length ({len(embeddings)})")
+                    if len(artist_indices) != len(artists):
+                        logger.warning(f"Artist indices length ({len(artist_indices)}) doesn't match artists length ({len(artists)})")
+                
+                # Normalize embeddings
+                from sklearn.preprocessing import normalize
+                normalized_embeddings = normalize(embeddings, axis=1)
+                
+                self.artist_embedding_lookup = {
+                    artist: normalized_embeddings[i] 
+                    for i, artist in enumerate(artists)
+                }
+                logger.info(f"Built artist embedding lookup for {len(self.artist_embedding_lookup)} artists using {embed_type}")
+            else:
+                logger.warning(f"Artist embedding type {embed_type} not found in loaded data")
+        except Exception as e:
+            logger.error(f"Failed to load artist embeddings: {e}")
+            self.artist_embeddings_data = None
+            self.artist_embedding_lookup = {}
     
     def _build_performance_mappings(self):
         """Build optimization mappings for fast lookups."""
@@ -492,11 +537,59 @@ class MusicSearchEngine:
         
         return embedding_lookup[song_key]
     
+    def compute_artist_similarity(self, query_artist_or_text: str, candidate_artist: str, is_text_query: bool = False) -> float:
+        """
+        Compute artist-artist similarity.
+        
+        Args:
+            query_artist_or_text: Artist name (song-to-song) or text query (text-to-song search)
+            candidate_artist: Candidate song's artist
+            is_text_query: True for text-to-song search, False for song-to-song search
+            
+        Returns:
+            Cosine similarity score [0, 1] or 0.0 if embeddings not available
+        """
+        if not self.artist_embedding_lookup:
+            return 0.0
+        
+        # Get candidate artist embedding
+        if candidate_artist not in self.artist_embedding_lookup:
+            return 0.0
+        
+        candidate_embedding = self.artist_embedding_lookup[candidate_artist]
+        
+        if is_text_query:
+            # Text-to-song: embed the text query and compare with artist
+            if not openai_client:
+                return 0.0
+            try:
+                response = openai_client.embeddings.create(
+                    model=constants.OPENAI_EMBEDDING_MODEL,
+                    input=query_artist_or_text
+                )
+                query_embedding = np.array(response.data[0].embedding)
+                # Normalize query embedding
+                from sklearn.preprocessing import normalize
+                query_embedding = normalize(query_embedding.reshape(1, -1), axis=1)[0]
+            except Exception as e:
+                logger.warning(f"Failed to create embedding for text query: {e}")
+                return 0.0
+        else:
+            # Song-to-song: get query artist embedding
+            if query_artist_or_text not in self.artist_embedding_lookup:
+                return 0.0
+            query_embedding = self.artist_embedding_lookup[query_artist_or_text]
+        
+        # Compute cosine similarity
+        similarity = np.dot(query_embedding, candidate_embedding)
+        return float(np.clip(similarity, 0, 1))
+    
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
                          familiarity_min: float = 0.0, familiarity_max: float = 1.0,
                          query_song_key: Tuple[str, str] = None, 
                          genre_query_embedding: np.ndarray = None,
+                         query_text: str = None,
                          **advanced_params) -> Tuple[List[Dict], int]:
         """
         Perform V2.6 similarity search with personalized ranking and multi-dimensional similarity.
@@ -511,6 +604,7 @@ class MusicSearchEngine:
             familiarity_max: Maximum familiarity score to include (0.0-1.0)
             query_song_key: If provided, enables song-to-song search with artist similarities (song_name, artist_name)
             genre_query_embedding: Optional genre query embedding for dual similarity scoring
+            query_text: Original text query for text-to-song artist similarity (optional)
         
         Returns:
             Tuple of (results, total_count)
@@ -645,12 +739,25 @@ class MusicSearchEngine:
                     logger.warning(f"Error computing genre similarity for {candidate['song_key']}: {e}")
                     genre_similarity = 0.0
             
+            # Compute artist-artist similarity
+            artist_similarity = 0.0
+            if query_song_key is not None:
+                # Song-to-song search: compare query artist with candidate artist
+                query_artist = query_song_key[1]
+                candidate_artist = candidate['song_key'][1]
+                artist_similarity = self.compute_artist_similarity(query_artist, candidate_artist, is_text_query=False)
+            elif query_text is not None:
+                # Text-to-song search: compare text query with candidate artist
+                candidate_artist = candidate['song_key'][1]
+                artist_similarity = self.compute_artist_similarity(query_text, candidate_artist, is_text_query=True)
+            
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 
                 candidate['song_key'],
                 artist_pop_similarity,
                 artist_personal_similarity,
-                genre_similarity
+                genre_similarity,
+                artist_similarity
             )
             
             # Get familiarity score for filtering
@@ -765,7 +872,7 @@ class MusicSearchEngine:
 # Initialize search engine
 search_engine = None
 
-def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None):
+def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None):
     """Initialize the search engine with data files."""
     global search_engine
     if search_engine is None:
@@ -774,17 +881,21 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             songs_path = songs_file
             embeddings_path = embeddings_file
             history_path_arg = history_path
+            artist_embeddings_path = artist_embeddings_file
         elif 'args' in globals() and args:
             songs_path = songs_file or args.songs
             embeddings_path = embeddings_file or args.embeddings
             history_path_arg = history_path or args.history
+            artist_embeddings_path = artist_embeddings_file or getattr(args, 'artist_embeddings', constants.DEFAULT_ARTIST_EMBEDDINGS_PATH)
         else:
             # Fallback defaults
             default_songs = Path(__file__).parent.parent / constants.DEFAULT_SONGS_FILE
             default_embeddings = Path(__file__).parent.parent / constants.DEFAULT_EMBEDDINGS_PATH
+            default_artist_embeddings = Path(__file__).parent.parent / constants.DEFAULT_ARTIST_EMBEDDINGS_PATH
             songs_path = songs_file or str(default_songs)
             embeddings_path = embeddings_file or str(default_embeddings)
             history_path_arg = history_path
+            artist_embeddings_path = artist_embeddings_file or str(default_artist_embeddings)
         
         # Validate that files exist
         if not Path(songs_path).exists():
@@ -827,9 +938,14 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             logger.info(f"  History path: {history_path_arg} (personalized ranking enabled)")
         else:
             logger.info(f"  History path: None (using semantic similarity only)")
+        if artist_embeddings_path and Path(artist_embeddings_path).exists():
+            logger.info(f"  Artist embeddings: {artist_embeddings_path}")
+        else:
+            logger.info(f"  Artist embeddings: None (artist similarity disabled)")
+            artist_embeddings_path = None  # Don't pass invalid path to search engine
         
         # Create search engine
-        search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg)
+        search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg, artist_embeddings_path)
 
 
 # Flask routes (keep most of the existing routes, update search endpoint)
@@ -923,6 +1039,7 @@ def search():
                 query_embedding, k=limit, offset=offset, embed_type=embed_type,
                 lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
                 genre_query_embedding=genre_query_embedding,
+                query_text=query_text,
                 **advanced_params
             )
         
@@ -1539,6 +1656,7 @@ Examples:
     parser.add_argument('-e', '--embeddings', type=str, default=constants.DEFAULT_EMBEDDINGS_PATH,
                        help=f'Path to embeddings file/directory (supports combined .npz file or directory with separate embedding files) (default: {constants.DEFAULT_EMBEDDINGS_PATH})')  
     parser.add_argument('--history', type=str, default=None, help='Path to Spotify Extended Streaming History directory (optional - enables personalized ranking)')
+    parser.add_argument('--artist-embeddings', type=str, default=constants.DEFAULT_ARTIST_EMBEDDINGS_PATH, help=f'Path to artist embeddings directory (default: {constants.DEFAULT_ARTIST_EMBEDDINGS_PATH})')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--host', type=str, default=constants.DEFAULT_HOST, help='Host to run the server on (default: 127.0.0.1)')
     parser.add_argument('--port', type=int, default=constants.DEFAULT_PORT, help='Port to run the server on (default: 5000)')
@@ -1555,7 +1673,7 @@ if __name__ == '__main__':
     
     # Initialize search engine early to catch any data file issues
     try:
-        init_search_engine(args.songs, args.embeddings, args.history)
+        init_search_engine(args.songs, args.embeddings, args.history, getattr(args, 'artist_embeddings', None))
         logger.info("Search engine initialized successfully!")
     except Exception as e:
         logger.error(f"Failed to initialize search engine: {e}")
