@@ -74,8 +74,6 @@ class SemanticSearchApp {
             lambdaSlider: document.getElementById('lambda-slider'),
             lambdaValue: document.getElementById('lambda-value'),
             loadMoreBtn: document.getElementById('load-more-btn'),
-            genreSearchContainer: document.getElementById('genre-search-container'),
-            genreSearchInput: document.getElementById('genre-search-input'),
             noHistoryWeightsSection: document.getElementById('no-history-weights-section'),
             noHistoryRerunBtn: document.getElementById('no-history-rerun-btn'),
             nhBetaTrack: document.getElementById('nh_beta_track'),
@@ -98,12 +96,6 @@ class SemanticSearchApp {
         // Ensure currentSearchType is synced with the initial HTML state
         this.currentSearchType = this.getSearchType();
         
-        // Initialize genre search bar visibility based on initial search type
-        if (this.currentSearchType === 'text') {
-            this.domElements.genreSearchContainer.style.display = 'block';
-        } else {
-            this.domElements.genreSearchContainer.style.display = 'none';
-        }
         
         // Track initial page load
         this.analytics.trackPageLoad();
@@ -164,15 +156,6 @@ class SemanticSearchApp {
         searchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 this.handleSearch();
-            }
-        });
-        
-        // Genre search input (for dual similarity)
-        const genreSearchInput = this.domElements.genreSearchInput;
-        genreSearchInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                // Focus on main search input when Enter is pressed in genre search
-                this.domElements.searchInput.focus();
             }
         });
         
@@ -368,15 +351,11 @@ class SemanticSearchApp {
         
         if (searchType === 'song') {
             searchInput.placeholder = "🔍 Search for a song or artist... (e.g., \"Espresso\", \"Sabrina Carpenter\")";
-            // Hide genre search for song-to-song search
-            this.domElements.genreSearchContainer.style.display = 'none';
             this.clearResults();
         } else {
             searchInput.placeholder = "🔍 Describe the vibe you're looking for... (e.g., \"upbeat summery pop\", \"motivational workout hip hop\")";
             suggestionsContainer.style.display = 'none';
             querySection.style.display = 'none';
-            // Show genre search for text-to-song search
-            this.domElements.genreSearchContainer.style.display = 'block';
             this.clearResults();
         }
     }
@@ -502,11 +481,10 @@ class SemanticSearchApp {
         const searchType = this.getSearchType();
         const embedType = this.domElements.embedType.value;
         const query = this.domElements.searchInput.value.trim();
-        const genreQuery = this.domElements.genreSearchInput.value.trim();
         const topArtistsFilter = this.domElements.topArtistsFilter;
         const filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
-        return { searchType, embedType, query, genreQuery, filterTopArtists };
+        return { searchType, embedType, query, filterTopArtists };
     }
     
     trackSearchInitiation(searchParams) {
@@ -584,7 +562,7 @@ class SemanticSearchApp {
     }
     
     buildSearchRequest(searchParams) {
-        const { searchType, embedType, query, genreQuery } = searchParams;
+        const { searchType, embedType, query } = searchParams;
         
         // Get advanced parameters
         const advancedParams = this.getActiveAdvancedParams();
@@ -594,7 +572,7 @@ class SemanticSearchApp {
             search_type: searchType,
             embed_type: embedType,
             query: query,
-            k: 20,
+            k: 40,
             offset: 0,
             // Personalization parameters  
             lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
@@ -609,10 +587,6 @@ class SemanticSearchApp {
             Object.assign(requestData, noHistoryWeights);
         }
         
-        // Add genre query if provided
-        if (genreQuery) {
-            requestData.genre_query = genreQuery;
-        }
         
         if (searchType === 'song' && this.currentQuerySong) {
             requestData.song_idx = this.currentQuerySong.song_idx;

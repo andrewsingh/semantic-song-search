@@ -1011,7 +1011,6 @@ def search():
     try:
         data = request.get_json()
         query_text = data.get('query', '').strip()
-        genre_query = data.get('genre_query', '').strip()  # Optional genre query for dual similarity
         search_type = data.get('search_type', data.get('type', 'text'))  # Accept both for compatibility
         embed_type = data.get('embed_type', 'full_profile')  # Add embedding type parameter
         limit = int(data.get('k', data.get('limit', 20)))  # Accept both 'k' and 'limit'
@@ -1062,10 +1061,8 @@ def search():
             # Text-to-song search
             query_embedding = search_engine.get_text_embedding(query_text)
             
-            # Get genre query embedding if genre query is provided
-            genre_query_embedding = None
-            if genre_query:
-                genre_query_embedding = search_engine.get_text_embedding(genre_query)
+            # Use the same query embedding for genre similarity scoring (no need for separate API call)
+            genre_query_embedding = query_embedding
                 
             results, total_count = search_engine.similarity_search(
                 query_embedding, k=limit, offset=offset, embed_type=embed_type,
