@@ -10,7 +10,7 @@ Usage:
                                 -n 100          # optional slice for testing
                                 -p prompts/artist_profile_v0.txt
 """
-import argparse, asyncio, json, math, time
+import argparse, asyncio, json, math, time, sys
 from pathlib import Path
 from typing import List
 from pydantic import BaseModel
@@ -18,8 +18,12 @@ from pydantic import BaseModel
 from openai import AsyncOpenAI, RateLimitError, APIError   # pip install --upgrade openai
 from tqdm import tqdm                                      # progress visualization
 
+sys.path.append(str(Path(__file__).parent.parent))
+from profiles import ArtistProfile
+
+
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
-RATE_LIMIT_RPM   = 500                  # <-- edit this if your quota changes
+RATE_LIMIT_RPM   = 3000                  # <-- edit this if your quota changes
 SAFETY_FACTOR    = 0.80                 # 20 % head-room
 RPS              = RATE_LIMIT_RPM / 60  # requests per second
 MAX_CONCURRENCY  = max(1, int(RPS * SAFETY_FACTOR))
@@ -43,21 +47,28 @@ parser.add_argument("-p", "--prompt", required=True,
 
 cli_args = parser.parse_args()
 
-# ─────────────────────────────── PROMPT TEMPLATE ──────────────────────────────
+# ──────────────────────────────── PROMPT TEMPLATE ──────────────────────────────
 PROMPT_TEMPLATE = Path(cli_args.prompt).read_text(encoding="utf-8").strip()
 
-# ─────────────────────────────── OUTPUT SCHEMA ──────────────────────────────
-class ArtistProfile(BaseModel):
-    artist: str
-    familiar: bool
-    musical_style: str | None
-    lyrical_themes: str | None
-    mood: str | None
-
-# ────────────────────────────── HELPER FUNCTIONS ──────────────────────────────
 def build_prompt(artist: str) -> str:
     return (PROMPT_TEMPLATE
             .replace("{{artist}}", artist))
+
+# ──────────────────────────────── HELPER FUNCTIONS ────────────────────────────
+def get_completed_artists(output_path: Path) -> set:
+    """Read completed artists from existing output file."""
+    completed_artists = set()
+    if output_path.exists():
+        try:
+            with output_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        profile = json.loads(line)
+                        if "artist" in profile:
+                            completed_artists.add(profile["artist"])
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            print(f"Warning: Could not read existing output file {output_path}: {e}")
+    return completed_artists
 
 # ──────────────────────────────── ASYNC WORKER ────────────────────────────────
 client = AsyncOpenAI()                      # requires OPENAI_API_KEY env-var
@@ -71,9 +82,12 @@ async def generate_profile(artist: str) -> dict:
         async with sem:                    # limits concurrent requests
             try:
                 resp = await client.responses.parse(
-                    model  = "gpt-4.1",           # or any model that supports tools
+                    model  = "gpt-5",           # or any model that supports tools
                     input  = prompt,
                     text_format=ArtistProfile,
+                    reasoning={
+                        "effort": "minimal"
+                    }
                 )
                 artist_profile = resp.output_parsed
                 # Return both the parsed profile and the raw response for logging
@@ -91,15 +105,35 @@ async def main(args) -> None:
     with open(args.input, "r") as f:
         artists = json.load(f)
 
+    # Check for existing output and deduplicate
+    output_path = Path(args.output)
+    completed_artists = get_completed_artists(output_path)
+    
+    if completed_artists:
+        original_count = len(artists)
+        artists = [artist for artist in artists if artist not in completed_artists]
+        print(f"Found {len(completed_artists)} completed artists. Processing {len(artists)} remaining artists (skipped {original_count - len(artists)})")
+    else:
+        print(f"No existing output found. Processing all {len(artists)} artists")
+
     if args.num_entries:                   # optional slice for quick tests
         artists = artists[: args.num_entries]
 
     # Determine log file path (defaults to <output>.raw.jsonl if not provided)
     log_path = Path(args.log) if args.log else Path(f"{args.output}.raw.jsonl")
 
+    # Check if we have any artists left to process
+    if not artists:
+        print("All artists have already been processed!")
+        return
+
     # Regular file handles are synchronous; use standard 'with' instead of 'async with'.
-    with Path(args.output).open("w", encoding="utf-8") as sink, \
-         log_path.open("w", encoding="utf-8") as raw_sink:
+    # Open in append mode if file exists, write mode if it doesn't
+    file_mode = "a" if output_path.exists() and completed_artists else "w"
+    log_mode = "a" if log_path.exists() and completed_artists else "w"
+    
+    with output_path.open(file_mode, encoding="utf-8") as sink, \
+         log_path.open(log_mode, encoding="utf-8") as raw_sink:
         tasks = [asyncio.create_task(generate_profile(artist)) for artist in artists]
 
         # Real-time progress bar

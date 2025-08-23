@@ -244,6 +244,7 @@ body {
     color: #eaeaea !important;
 }
 
+
 /* Suggestions */
 .suggestions-container {
     max-width: 800px;
@@ -751,6 +752,131 @@ body {
     
     .advanced-settings-actions {
         flex-direction: column;
+    }
+}
+
+/* No-History Weights Section */
+.no-history-weights-section {
+    max-width: 1200px;
+    margin: 0 auto 1.5rem auto;
+}
+
+.weights-container {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
+}
+
+.weights-inputs {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    flex: 1;
+}
+
+.weight-input-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.weight-label {
+    font-size: 0.9rem;
+    color: #ccc;
+    font-weight: 500;
+    min-width: 70px;
+}
+
+.weight-input {
+    width: 70px;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #eaeaea;
+    font-size: 0.9rem;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.weight-input:focus {
+    outline: none;
+    border-color: rgba(29, 185, 84, 0.6);
+    background: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.2);
+}
+
+.weight-input:hover {
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.weights-buttons {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.reset-defaults-btn {
+    background: rgba(106, 90, 205, 0.2);
+    border: 1px solid rgba(106, 90, 205, 0.4);
+    border-radius: 8px;
+    color: #B19CD9;
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.reset-defaults-btn:hover {
+    background: rgba(106, 90, 205, 0.3);
+    border-color: rgba(106, 90, 205, 0.6);
+    color: #C8B5E8;
+    transform: translateY(-1px);
+}
+
+.reset-defaults-btn:active {
+    transform: translateY(0);
+}
+
+/* Responsive adjustments for weights section */
+@media (max-width: 768px) {
+    .weights-container {
+        flex-direction: column;
+        gap: 1rem;
+    }
+    
+    .weights-inputs {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 1rem;
+    }
+    
+    .weight-input-group {
+        flex-direction: column;
+        gap: 0.25rem;
+        text-align: center;
+    }
+    
+    .weights-buttons {
+        flex-direction: column;
+        gap: 0.5rem;
+        width: 100%;
+    }
+    
+    .reset-defaults-btn {
+        width: 100%;
+    }
+    
+    .weight-label {
+        min-width: auto;
+        font-size: 0.8rem;
     }
 }
 

@@ -39,6 +39,17 @@ class SemanticSearchApp {
         this.currentFamiliarityMax = 1.0;
         this.hasPersonalizationHistory = false;
         
+        // No-history weights tracking
+        this.currentNoHistoryWeights = {
+            beta_track: 0.5,
+            beta_genre: 0.2,
+            beta_artist_pop: 0.15,
+            beta_pop: 0.15,
+            beta_artist: 0.0
+        };
+        
+        this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
+        
         // Cache frequently accessed DOM elements
         this.domElements = {
             topArtistsFilter: document.getElementById('top-artists-filter'),
@@ -63,8 +74,19 @@ class SemanticSearchApp {
             nextBtn: document.getElementById('next-btn'),
             lambdaSlider: document.getElementById('lambda-slider'),
             lambdaValue: document.getElementById('lambda-value'),
-            loadMoreBtn: document.getElementById('load-more-btn')
+            loadMoreBtn: document.getElementById('load-more-btn'),
+            noHistoryWeightsSection: document.getElementById('no-history-weights-section'),
+            noHistoryRerunBtn: document.getElementById('no-history-rerun-btn'),
+            noHistoryResetBtn: document.getElementById('no-history-reset-btn'),
+            nhBetaTrack: document.getElementById('nh_beta_track'),
+            nhBetaGenre: document.getElementById('nh_beta_genre'),
+            nhBetaArtistPop: document.getElementById('nh_beta_artist_pop'),
+            nhBetaPop: document.getElementById('nh_beta_pop'),
+            nhBetaArtist: document.getElementById('nh_beta_artist')
         };
+        
+        // Initialize default weights from server-rendered DOM values
+        this.defaultNoHistoryWeights = this.getDefaultWeightsFromDOM();
         
         // Initialize Spotify Player
         this.player = new SpotifyPlayer(this);
@@ -79,8 +101,20 @@ class SemanticSearchApp {
         // Ensure currentSearchType is synced with the initial HTML state
         this.currentSearchType = this.getSearchType();
         
+        
         // Track initial page load
         this.analytics.trackPageLoad();
+    }
+    
+    getDefaultWeightsFromDOM() {
+        // Extract default values from the server-rendered DOM inputs
+        return {
+            beta_track: parseFloat(this.domElements.nhBetaTrack?.value || 0.6),
+            beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || 0.2),
+            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || 0.15),
+            beta_pop: parseFloat(this.domElements.nhBetaPop?.value || 0.05),
+            beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || 0.0)
+        };
     }
     
     
@@ -105,6 +139,7 @@ class SemanticSearchApp {
         this.bindFilterEventListeners();
         this.bindPersonalizationEventListeners();
         this.bindAdvancedSettingsEventListeners();
+        this.bindNoHistoryWeightsEventListeners();
         this.bindSessionEventListeners();
     }
     
@@ -272,6 +307,41 @@ class SemanticSearchApp {
         if (resetDefaultsBtn) {
             resetDefaultsBtn.addEventListener('click', async () => {
                 await this.resetAdvancedParametersToDefaults();
+            });
+        }
+    }
+    
+    bindNoHistoryWeightsEventListeners() {
+        // No-history weights input changes
+        const weightInputs = [
+            this.domElements.nhBetaTrack,
+            this.domElements.nhBetaGenre,
+            this.domElements.nhBetaArtistPop,
+            this.domElements.nhBetaPop,
+            this.domElements.nhBetaArtist
+        ];
+
+        weightInputs.forEach(input => {
+            if (input) {
+                input.addEventListener('input', (e) => {
+                    this.handleNoHistoryWeightChange(e.target.id, e.target.value);
+                });
+            }
+        });
+
+        // No-history rerun button
+        const noHistoryRerunBtn = this.domElements.noHistoryRerunBtn;
+        if (noHistoryRerunBtn) {
+            noHistoryRerunBtn.addEventListener('click', () => {
+                this.rerunSearchWithNoHistoryWeights();
+            });
+        }
+
+        // No-history reset button
+        const noHistoryResetBtn = this.domElements.noHistoryResetBtn;
+        if (noHistoryResetBtn) {
+            noHistoryResetBtn.addEventListener('click', () => {
+                this.resetNoHistoryWeightsToDefaults();
             });
         }
     }
@@ -520,12 +590,13 @@ class SemanticSearchApp {
         
         // Get advanced parameters
         const advancedParams = this.getActiveAdvancedParams();
+        const noHistoryWeights = this.getActiveNoHistoryWeights();
         
         const requestData = {
             search_type: searchType,
             embed_type: embedType,
             query: query,
-            k: 20,
+            k: 40,
             offset: 0,
             // Personalization parameters  
             lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
@@ -534,6 +605,12 @@ class SemanticSearchApp {
             // Advanced ranking parameters
             ...advancedParams
         };
+        
+        // Add no-history weights if we don't have personalization history
+        if (!this.hasPersonalizationHistory && Object.keys(noHistoryWeights).length > 0) {
+            Object.assign(requestData, noHistoryWeights);
+        }
+        
         
         if (searchType === 'song' && this.currentQuerySong) {
             requestData.song_idx = this.currentQuerySong.song_idx;
@@ -1122,27 +1199,26 @@ class SemanticSearchApp {
             
             // Build scoring components for the middle section (only if we have meaningful breakdown)
             let scoringComponentsHTML = '';
-            if (song.scoring_components && song.scoring_components.weighted_semantic !== undefined) {
+            if (song.scoring_components) {
                 const components = song.scoring_components;
                 
-                // V2.6: Show the 4 key components: 3 similarity dimensions + familiarity
                 scoringComponentsHTML = `
                     <div class="scoring-components">
                         <span class="scoring-component" title="Track-level similarity">
                             <span class="component-label">Sim:</span>
-                            <span class="component-value">${(components.S_track || 0).toFixed(2)}</span>
+                            <span class="component-value">${((components.S_track * 100) || 0).toFixed(1)}</span>
+                        </span>
+                        <span class="scoring-component" title="Genre similarity">
+                            <span class="component-label">Gen:</span>
+                            <span class="component-value">${(components.S_genre * 100 || 0).toFixed(1)}</span>
                         </span>
                         <span class="scoring-component" title="Artist popularity vibe similarity">
-                            <span class="component-label">Pop:</span>
-                            <span class="component-value">${(components.S_artist_pop || 0).toFixed(2)}</span>
+                            <span class="component-label">ArtV:</span>
+                            <span class="component-value">${(components.S_artist_pop * 100 || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Artist personal vibe similarity">
-                            <span class="component-label">Per:</span>
-                            <span class="component-value">${(components.S_artist_personal || 0).toFixed(2)}</span>
-                        </span>
-                        <span class="scoring-component" title="Familiarity score">
-                            <span class="component-label">Fam:</span>
-                            <span class="component-value">${(components.Fam_t || 0).toFixed(2)}</span>
+                        <span class="scoring-component" title="Artist similarity">
+                            <span class="component-label">Art:</span>
+                            <span class="component-value">${(components.S_artist * 100 || 0).toFixed(1)}</span>
                         </span>
                     </div>
                 `;
@@ -1162,7 +1238,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)} ${song.scoring_components?.P_t ? `(${song.scoring_components.P_t.toFixed(2)})` : ''}</div>
+                    <div class="card-title">${escapeHtml(song.song)} (${escapeHtml((song.scoring_components?.S_pop * 100 || 0).toFixed(1))})</div>
                     <div class="card-artist">${escapeHtml(song.artist)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
@@ -2381,7 +2457,7 @@ class SemanticSearchApp {
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_pop', 'beta_artist'
         ];
         
         // Initialize current advanced parameters object
@@ -2475,6 +2551,117 @@ class SemanticSearchApp {
         }
     }
     
+    handleNoHistoryWeightChange(inputId, value) {
+        // Convert input ID to weight key
+        const weightKey = inputId.replace('nh_', '');
+        const convertedValue = parseFloat(value);
+        
+        // Validate the converted value
+        if (isNaN(convertedValue)) {
+            return; // Don't update if the value is invalid
+        }
+        
+        // Store the current value
+        this.currentNoHistoryWeights[weightKey] = convertedValue;
+        
+        // Check if any weights have changed from their active values
+        this.updateNoHistoryRerunButtonState();
+    }
+    
+    updateNoHistoryRerunButtonState() {
+        const rerunBtn = this.domElements.noHistoryRerunBtn;
+        if (!rerunBtn) return;
+        
+        // Check if any weight has changed from its active value
+        let hasChanges = false;
+        for (const [weightKey, currentValue] of Object.entries(this.currentNoHistoryWeights)) {
+            const activeValue = this.activeNoHistoryWeights[weightKey];
+            if (currentValue !== activeValue) {
+                hasChanges = true;
+                break;
+            }
+        }
+        
+        rerunBtn.disabled = !hasChanges;
+    }
+    
+    async rerunSearchWithNoHistoryWeights() {
+        // Save current values as the "active" values
+        this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
+        
+        // Disable the rerun button
+        const rerunBtn = this.domElements.noHistoryRerunBtn;
+        if (rerunBtn) {
+            rerunBtn.disabled = true;
+        }
+        
+        // Track weight update
+        this.analytics.trackEvent('No-History Weights Updated', {
+            'weights': this.activeNoHistoryWeights,
+            'has_active_search': this.searchResults.length > 0
+        });
+        
+        // Show confirmation that search was rerun
+        this.showNoHistoryWeightsConfirmation();
+        
+        // Rerun the current search if we have one
+        if (this.lastSearchRequestData) {
+            await this.handleSearch();
+        }
+    }
+    
+    resetNoHistoryWeightsToDefaults() {
+        // Reset all no-history weight inputs to their default values
+        if (this.domElements.nhBetaTrack && this.defaultNoHistoryWeights.beta_track !== undefined) {
+            this.domElements.nhBetaTrack.value = this.defaultNoHistoryWeights.beta_track;
+        }
+        if (this.domElements.nhBetaGenre && this.defaultNoHistoryWeights.beta_genre !== undefined) {
+            this.domElements.nhBetaGenre.value = this.defaultNoHistoryWeights.beta_genre;
+        }
+        if (this.domElements.nhBetaArtistPop && this.defaultNoHistoryWeights.beta_artist_pop !== undefined) {
+            this.domElements.nhBetaArtistPop.value = this.defaultNoHistoryWeights.beta_artist_pop;
+        }
+        if (this.domElements.nhBetaPop && this.defaultNoHistoryWeights.beta_pop !== undefined) {
+            this.domElements.nhBetaPop.value = this.defaultNoHistoryWeights.beta_pop;
+        }
+        if (this.domElements.nhBetaArtist && this.defaultNoHistoryWeights.beta_artist !== undefined) {
+            this.domElements.nhBetaArtist.value = this.defaultNoHistoryWeights.beta_artist;
+        }
+        
+        // Sync currentNoHistoryWeights with the new DOM values
+        this.currentNoHistoryWeights = {
+            beta_track: parseFloat(this.domElements.nhBetaTrack?.value || this.defaultNoHistoryWeights.beta_track),
+            beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || this.defaultNoHistoryWeights.beta_genre),
+            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || this.defaultNoHistoryWeights.beta_artist_pop),
+            beta_pop: parseFloat(this.domElements.nhBetaPop?.value || this.defaultNoHistoryWeights.beta_pop),
+            beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || this.defaultNoHistoryWeights.beta_artist)
+        };
+        
+        // Update the rerun button state since values may have changed
+        this.updateNoHistoryRerunButtonState();
+        
+        // Track the reset action
+        this.analytics.trackEvent('No-History Weights Reset', {
+            'reset_to_defaults': this.defaultNoHistoryWeights,
+            'has_active_search': this.searchResults.length > 0
+        });
+    }
+    
+    showNoHistoryWeightsConfirmation() {
+        // Create a temporary confirmation message
+        const rerunBtn = this.domElements.noHistoryRerunBtn;
+        if (rerunBtn) {
+            const originalText = rerunBtn.textContent;
+            rerunBtn.textContent = 'Search Updated!';
+            rerunBtn.style.background = 'rgba(29, 185, 84, 0.8)';
+            
+            setTimeout(() => {
+                rerunBtn.textContent = originalText;
+                rerunBtn.style.background = '';
+            }, 2000);
+        }
+    }
+    
     async initializeAdvancedSettingsValues() {
         // Fetch default parameters from backend
         try {
@@ -2510,7 +2697,9 @@ class SemanticSearchApp {
             'psi': 1.4, 'k_neighbors': 50, 'sigma': 10.0, 'knn_embed_type': 'full_profile',
             'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
             'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
-            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4
+            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4,
+            'beta_track': 0.5, 'beta_artist_pop': 0.15, 'beta_artist_personal': 0.0,
+            'beta_genre': 0.2, 'beta_pop': 0.15, 'beta_artist': 0.0
         };
         
         this.populateAdvancedSettingsForm(defaults);
@@ -2544,6 +2733,16 @@ class SemanticSearchApp {
         });
     }
     
+    getActiveNoHistoryWeights() {
+        // If we don't have active weights but have current weights, use current weights
+        let weightsToUse = this.activeNoHistoryWeights;
+        if (!weightsToUse || Object.keys(weightsToUse).length === 0) {
+            weightsToUse = this.currentNoHistoryWeights;
+        }
+        
+        return weightsToUse || {};
+    }
+    
     getActiveAdvancedParams() {
         
         // If we don't have active params but have current params, use current params
@@ -2572,6 +2771,7 @@ class SemanticSearchApp {
         const resultsRight = document.querySelector('.results-right');
         const topArtistsFilterOption = document.getElementById('top-artists-filter-option');
         const advancedSettingsSection = document.getElementById('advanced-settings-section');
+        const noHistoryWeightsSection = this.domElements.noHistoryWeightsSection;
         
         if (controls && resultsRight) {
             this.hasPersonalizationHistory = hasHistory;
@@ -2587,6 +2787,11 @@ class SemanticSearchApp {
                 // Show advanced settings section in history mode
                 if (advancedSettingsSection) {
                     advancedSettingsSection.style.display = 'block';
+                }
+                
+                // Hide no-history weights section in history mode
+                if (noHistoryWeightsSection) {
+                    noHistoryWeightsSection.style.display = 'none';
                 }
                 
                 // Initialize advanced parameters with defaults if not already done
@@ -2605,6 +2810,11 @@ class SemanticSearchApp {
                 // Hide advanced settings section in no-history mode
                 if (advancedSettingsSection) {
                     advancedSettingsSection.style.display = 'none';
+                }
+                
+                // Show no-history weights section in no-history mode
+                if (noHistoryWeightsSection) {
+                    noHistoryWeightsSection.style.display = 'block';
                 }
                 
                 // Show top artists filter in no-history mode

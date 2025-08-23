@@ -2,14 +2,22 @@
 """
 Generate text embeddings for artist profiles using OpenAI's text-embedding-3-large model.
 Creates 4 embeddings per artist: musical_style, lyrical_themes, mood, and full_profile.
+Saves embeddings in separate files by type following the new embedding structure.
 
 Usage:
+  # Save to directory (recommended)
   python embed_artist_profiles.py -i selected_artists_v0_profiles.jsonl \
-                                  -o artist_embeddings.npz \
+                                  -o artist_embeddings/ \
                                   -n 10  # optional, for testing
   
-  # Or save as JSON (less efficient but human-readable)
-  python embed_artist_profiles.py -i input.jsonl -o output.json --format json
+  # Or save with base name (creates subdirectory)
+  python embed_artist_profiles.py -i input.jsonl -o artist_embeddings
+  
+  # This creates:
+  # - musical_style_embeddings.npz
+  # - lyrical_themes_embeddings.npz  
+  # - mood_embeddings.npz
+  # - full_profile_embeddings.npz
 """
 import argparse, asyncio, json, time
 from pathlib import Path
@@ -19,7 +27,7 @@ from openai import AsyncOpenAI, RateLimitError, APIError
 from tqdm import tqdm
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
-RATE_LIMIT_RPM = 500
+RATE_LIMIT_RPM = 3000
 SAFETY_FACTOR = 0.80
 RPS = RATE_LIMIT_RPM / 60
 MAX_CONCURRENCY = max(1, int(RPS * SAFETY_FACTOR))
@@ -129,44 +137,65 @@ async def process_artist_profile(profile_data: Dict[str, Any]) -> Dict[str, Any]
             "lyrical_themes": lyrical_themes_embedding,
             "mood": mood_embedding,
             "full_profile": full_profile_embedding
+        },
+        "original_texts": {
+            "musical_style": musical_style_text,
+            "lyrical_themes": lyrical_themes_text,
+            "mood": mood_text,
+            "full_profile": full_profile_text
         }
     }
 
-def save_embeddings_numpy(results: List[Dict], output_file: str):
-    """Save embeddings in NumPy format for better precision and efficiency."""
-    artists = []
-    musical_style_embeddings = []
-    lyrical_themes_embeddings = []
-    mood_embeddings = []
-    full_profile_embeddings = []
+def save_embeddings_numpy(results: List[Dict], output_path: str):
+    """Save embeddings in separate files by type for the new structure."""
+    # Determine if output_path is a directory or a base filename
+    output_path_obj = Path(output_path)
     
-    for result in results:
-        artists.append(result['artist'])
-        embeddings = result['embeddings']
-        musical_style_embeddings.append(embeddings['musical_style'])
-        lyrical_themes_embeddings.append(embeddings['lyrical_themes'])
-        mood_embeddings.append(embeddings['mood'])
-        full_profile_embeddings.append(embeddings['full_profile'])
+    if output_path.endswith('/') or output_path_obj.is_dir():
+        # Directory mode - save separate files in directory
+        output_dir = output_path_obj
+        output_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        # Base filename mode - use directory of the file and create subdirectory
+        output_dir = output_path_obj.parent / f"{output_path_obj.stem}_artist_embeddings"
+        output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Convert to numpy arrays
-    musical_style_array = np.array(musical_style_embeddings)
-    lyrical_themes_array = np.array(lyrical_themes_embeddings)
-    mood_array = np.array(mood_embeddings)
-    full_profile_array = np.array(full_profile_embeddings)
+    # Prepare data for each embedding type
+    embedding_types = ['musical_style', 'lyrical_themes', 'mood', 'full_profile']
     
-    # Save as compressed numpy file
-    np.savez_compressed(
-        output_file,
-        artists=artists,
-        musical_style=musical_style_array,
-        lyrical_themes=lyrical_themes_array,
-        mood=mood_array,
-        full_profile=full_profile_array
-    )
+    for embedding_type in embedding_types:
+        artists = []
+        embeddings = []
+        artist_indices = []
+        field_values = []
+        
+        for i, result in enumerate(results):
+            artists.append(result['artist'])
+            embeddings.append(result['embeddings'][embedding_type])
+            artist_indices.append(i)
+            
+            # Get the original text that was embedded for this type
+            field_values.append(result['original_texts'][embedding_type])
+        
+        # Convert to numpy arrays
+        embeddings_array = np.array(embeddings)
+        artist_indices_array = np.array(artist_indices)
+        
+        # Save individual embedding type file
+        output_file = output_dir / f"{embedding_type}_embeddings.npz"
+        np.savez_compressed(
+            output_file,
+            artists=np.array(artists),
+            embeddings=embeddings_array,
+            artist_indices=artist_indices_array,
+            field_values=np.array(field_values)
+        )
+        
+        print(f"Saved {embedding_type} embeddings: {output_file}")
+        print(f"  Shape: {embeddings_array.shape}")
     
-    print(f"Embeddings saved to {output_file}")
-    print(f"Shape: {musical_style_array.shape} per embedding type")
-    print(f"To load: data = np.load('{output_file}'); artists = data['artists']; musical_style = data['musical_style']")
+    print(f"\nAll embedding files saved to: {output_dir}")
+    print(f"Generated {len(embedding_types)} embedding files for {len(results)} artists")
 
 def save_embeddings_json(results: List[Dict], output_file: str):
     """Save embeddings in JSON format (human-readable but less efficient)."""
@@ -176,7 +205,7 @@ def save_embeddings_json(results: List[Dict], output_file: str):
     print(f"Embeddings saved to {output_file} (JSON format)")
 
 # ──────────────────────────────── MAIN DRIVER ────────────────────────────────
-async def main(input_file: str, output_file: str, output_format: str = "numpy", num_entries: int = None):
+async def main(input_file: str, output_path: str, output_format: str = "numpy", num_entries: int = None):
     """Main function to process all artist profiles."""
     # Load profiles from JSONL file
     profiles = []
@@ -215,16 +244,16 @@ async def main(input_file: str, output_file: str, output_format: str = "numpy", 
     
     # Save embeddings in requested format
     if output_format.lower() == "numpy":
-        save_embeddings_numpy(results, output_file)
+        save_embeddings_numpy(results, output_path)
     else:
-        save_embeddings_json(results, output_file)
+        save_embeddings_json(results, output_path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate embeddings for artist profiles")
     parser.add_argument("-i", "--input", required=True, 
                         help="Input JSONL file with artist profiles")
     parser.add_argument("-o", "--output", required=True, 
-                        help="Output file for embeddings (.npz for numpy, .jsonl for JSON)")
+                        help="Output directory or base name for embeddings (creates separate files by type)")
     parser.add_argument("-n", "--num_entries", type=int, default=None, 
                         help="Process only first N entries (for testing)")
     parser.add_argument("--format", choices=["numpy", "json"], default="numpy",

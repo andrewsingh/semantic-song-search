@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 from typing import List
 from pydantic import BaseModel, ValidationError
-from song_profile import SongProfile
+from profiles import SongProfile
 
 
 
