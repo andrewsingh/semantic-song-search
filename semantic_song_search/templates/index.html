@@ -404,28 +404,33 @@
                     <div class="weights-inputs">
                         <div class="weight-input-group">
                             <label for="nh_beta_track" class="weight-label">Semantic:</label>
-                            <input type="number" id="nh_beta_track" class="weight-input" value="0.5" step="0.05" min="0" max="1">
+                            <input type="number" id="nh_beta_track" class="weight-input" value="{{ default_config.beta_track }}" step="0.05" min="0" max="1">
                         </div>
                         <div class="weight-input-group">
                             <label for="nh_beta_genre" class="weight-label">Genre:</label>
-                            <input type="number" id="nh_beta_genre" class="weight-input" value="0.2" step="0.05" min="0" max="1">
+                            <input type="number" id="nh_beta_genre" class="weight-input" value="{{ default_config.beta_genre }}" step="0.05" min="0" max="1">
                         </div>
                         <div class="weight-input-group">
                             <label for="nh_beta_artist_pop" class="weight-label">Artist Pop:</label>
-                            <input type="number" id="nh_beta_artist_pop" class="weight-input" value="0.15" step="0.05" min="0" max="1">
+                            <input type="number" id="nh_beta_artist_pop" class="weight-input" value="{{ default_config.beta_artist_pop }}" step="0.05" min="0" max="1">
                         </div>
                         <div class="weight-input-group">
                             <label for="nh_beta_pop" class="weight-label">Track Pop:</label>
-                            <input type="number" id="nh_beta_pop" class="weight-input" value="0.15" step="0.05" min="0" max="1">
+                            <input type="number" id="nh_beta_pop" class="weight-input" value="{{ default_config.beta_pop }}" step="0.05" min="0" max="1">
                         </div>
                         <div class="weight-input-group">
                             <label for="nh_beta_artist" class="weight-label">Artist Sim:</label>
-                            <input type="number" id="nh_beta_artist" class="weight-input" value="0.0" step="0.05" min="0" max="1">
+                            <input type="number" id="nh_beta_artist" class="weight-input" value="{{ default_config.beta_artist }}" step="0.05" min="0" max="1">
                         </div>
                     </div>
-                    <button id="no-history-rerun-btn" class="rerun-search-btn" disabled>
-                        <span>🔄 Rerun Search</span>
-                    </button>
+                    <div class="weights-buttons">
+                        <button id="no-history-reset-btn" class="reset-defaults-btn">
+                            <span>↺ Reset to Defaults</span>
+                        </button>
+                        <button id="no-history-rerun-btn" class="rerun-search-btn" disabled>
+                            <span>🔄 Rerun Search</span>
+                        </button>
+                    </div>
                 </div>
             </section>
             

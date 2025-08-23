@@ -996,9 +996,10 @@ def index():
             'is_new_session': True
         })
     
-    # Pass debug flag to template  
+    # Pass debug flag and default config values to template  
     debug_mode = getattr(args, 'debug', False) if 'args' in globals() and args else False
-    return render_template('index.html', debug_mode=debug_mode)
+    default_config = ranking.RankingConfig()
+    return render_template('index.html', debug_mode=debug_mode, default_config=default_config)
 
 @app.route('/api/search', methods=['POST'])
 def search():
@@ -1422,6 +1423,7 @@ def create_playlist():
     except Exception as e:
         logger.error(f"Playlist creation error: {e}")
         return jsonify({'error': 'Failed to create playlist'}), 500
+
 
 @app.route('/login')
 def login():

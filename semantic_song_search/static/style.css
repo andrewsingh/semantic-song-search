@@ -815,6 +815,36 @@ body {
     border-color: rgba(255, 255, 255, 0.3);
 }
 
+.weights-buttons {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.reset-defaults-btn {
+    background: rgba(106, 90, 205, 0.2);
+    border: 1px solid rgba(106, 90, 205, 0.4);
+    border-radius: 8px;
+    color: #B19CD9;
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.reset-defaults-btn:hover {
+    background: rgba(106, 90, 205, 0.3);
+    border-color: rgba(106, 90, 205, 0.6);
+    color: #C8B5E8;
+    transform: translateY(-1px);
+}
+
+.reset-defaults-btn:active {
+    transform: translateY(0);
+}
+
 /* Responsive adjustments for weights section */
 @media (max-width: 768px) {
     .weights-container {
@@ -832,6 +862,16 @@ body {
         flex-direction: column;
         gap: 0.25rem;
         text-align: center;
+    }
+    
+    .weights-buttons {
+        flex-direction: column;
+        gap: 0.5rem;
+        width: 100%;
+    }
+    
+    .reset-defaults-btn {
+        width: 100%;
     }
     
     .weight-label {

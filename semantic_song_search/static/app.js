@@ -47,6 +47,7 @@ class SemanticSearchApp {
             beta_pop: 0.15,
             beta_artist: 0.0
         };
+        
         this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
         
         // Cache frequently accessed DOM elements
@@ -76,12 +77,16 @@ class SemanticSearchApp {
             loadMoreBtn: document.getElementById('load-more-btn'),
             noHistoryWeightsSection: document.getElementById('no-history-weights-section'),
             noHistoryRerunBtn: document.getElementById('no-history-rerun-btn'),
+            noHistoryResetBtn: document.getElementById('no-history-reset-btn'),
             nhBetaTrack: document.getElementById('nh_beta_track'),
             nhBetaGenre: document.getElementById('nh_beta_genre'),
             nhBetaArtistPop: document.getElementById('nh_beta_artist_pop'),
             nhBetaPop: document.getElementById('nh_beta_pop'),
             nhBetaArtist: document.getElementById('nh_beta_artist')
         };
+        
+        // Initialize default weights from server-rendered DOM values
+        this.defaultNoHistoryWeights = this.getDefaultWeightsFromDOM();
         
         // Initialize Spotify Player
         this.player = new SpotifyPlayer(this);
@@ -99,6 +104,17 @@ class SemanticSearchApp {
         
         // Track initial page load
         this.analytics.trackPageLoad();
+    }
+    
+    getDefaultWeightsFromDOM() {
+        // Extract default values from the server-rendered DOM inputs
+        return {
+            beta_track: parseFloat(this.domElements.nhBetaTrack?.value || 0.6),
+            beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || 0.2),
+            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || 0.15),
+            beta_pop: parseFloat(this.domElements.nhBetaPop?.value || 0.05),
+            beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || 0.0)
+        };
     }
     
     
@@ -318,6 +334,14 @@ class SemanticSearchApp {
         if (noHistoryRerunBtn) {
             noHistoryRerunBtn.addEventListener('click', () => {
                 this.rerunSearchWithNoHistoryWeights();
+            });
+        }
+
+        // No-history reset button
+        const noHistoryResetBtn = this.domElements.noHistoryResetBtn;
+        if (noHistoryResetBtn) {
+            noHistoryResetBtn.addEventListener('click', () => {
+                this.resetNoHistoryWeightsToDefaults();
             });
         }
     }
@@ -2584,6 +2608,43 @@ class SemanticSearchApp {
         if (this.lastSearchRequestData) {
             await this.handleSearch();
         }
+    }
+    
+    resetNoHistoryWeightsToDefaults() {
+        // Reset all no-history weight inputs to their default values
+        if (this.domElements.nhBetaTrack && this.defaultNoHistoryWeights.beta_track !== undefined) {
+            this.domElements.nhBetaTrack.value = this.defaultNoHistoryWeights.beta_track;
+        }
+        if (this.domElements.nhBetaGenre && this.defaultNoHistoryWeights.beta_genre !== undefined) {
+            this.domElements.nhBetaGenre.value = this.defaultNoHistoryWeights.beta_genre;
+        }
+        if (this.domElements.nhBetaArtistPop && this.defaultNoHistoryWeights.beta_artist_pop !== undefined) {
+            this.domElements.nhBetaArtistPop.value = this.defaultNoHistoryWeights.beta_artist_pop;
+        }
+        if (this.domElements.nhBetaPop && this.defaultNoHistoryWeights.beta_pop !== undefined) {
+            this.domElements.nhBetaPop.value = this.defaultNoHistoryWeights.beta_pop;
+        }
+        if (this.domElements.nhBetaArtist && this.defaultNoHistoryWeights.beta_artist !== undefined) {
+            this.domElements.nhBetaArtist.value = this.defaultNoHistoryWeights.beta_artist;
+        }
+        
+        // Sync currentNoHistoryWeights with the new DOM values
+        this.currentNoHistoryWeights = {
+            beta_track: parseFloat(this.domElements.nhBetaTrack?.value || this.defaultNoHistoryWeights.beta_track),
+            beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || this.defaultNoHistoryWeights.beta_genre),
+            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || this.defaultNoHistoryWeights.beta_artist_pop),
+            beta_pop: parseFloat(this.domElements.nhBetaPop?.value || this.defaultNoHistoryWeights.beta_pop),
+            beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || this.defaultNoHistoryWeights.beta_artist)
+        };
+        
+        // Update the rerun button state since values may have changed
+        this.updateNoHistoryRerunButtonState();
+        
+        // Track the reset action
+        this.analytics.trackEvent('No-History Weights Reset', {
+            'reset_to_defaults': this.defaultNoHistoryWeights,
+            'has_active_search': this.searchResults.length > 0
+        });
     }
     
     showNoHistoryWeightsConfirmation() {
