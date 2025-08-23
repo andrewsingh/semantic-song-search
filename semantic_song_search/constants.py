@@ -17,8 +17,9 @@ DEFAULT_ARTIST_EMBEDDINGS_PATH = "data/eval_set_v2/eval_set_v2_artist_embeddings
 
 # Embedding Types
 EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
+ARTIST_EMBEDDING_TYPES = ['musical_style', 'lyrical_themes', 'mood', 'full_profile']
 DEFAULT_ARTIST_MATRIX_EMBED_TYPE = 'tags'
-DEFAULT_ARTIST_EMBED_TYPE = 'full_profile'
+DEFAULT_ARTIST_EMBED_TYPE = 'musical_style'
 
 # Flask Configuration
 DEFAULT_HOST = "127.0.0.1"

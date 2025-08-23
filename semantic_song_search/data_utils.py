@@ -117,7 +117,7 @@ def load_artist_embeddings_data(artist_embeddings_path: str) -> Dict[str, Dict]:
     except ImportError:
         import constants
     
-    for embed_type in constants.EMBEDDING_TYPES:
+    for embed_type in constants.ARTIST_EMBEDDING_TYPES:
         embed_file = artist_embeddings_path / f"{embed_type}_artist_embeddings.npz"
         if embed_file.exists():
             data = np.load(embed_file, allow_pickle=True)

@@ -584,6 +584,30 @@ class MusicSearchEngine:
         similarity = np.dot(query_embedding, candidate_embedding)
         return float(np.clip(similarity, 0, 1))
     
+    def compute_artist_similarity_with_embedding(self, query_embedding: np.ndarray, candidate_artist: str) -> float:
+        """
+        Compute artist-artist similarity using pre-computed query embedding.
+        
+        Args:
+            query_embedding: Pre-computed normalized query embedding
+            candidate_artist: Candidate song's artist
+            
+        Returns:
+            Cosine similarity score [0, 1] or 0.0 if artist embedding not available
+        """
+        if not self.artist_embedding_lookup:
+            return 0.0
+        
+        # Get candidate artist embedding
+        if candidate_artist not in self.artist_embedding_lookup:
+            return 0.0
+        
+        candidate_embedding = self.artist_embedding_lookup[candidate_artist]
+        
+        # Compute cosine similarity
+        similarity = np.dot(query_embedding, candidate_embedding)
+        return float(np.clip(similarity, 0, 1))
+    
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
                          familiarity_min: float = 0.0, familiarity_max: float = 1.0,
@@ -702,6 +726,14 @@ class MusicSearchEngine:
             return [], 0
         
         
+        # Pre-compute query embedding for text-to-song artist similarity (to avoid repeated API calls)
+        query_artist_embedding = None
+        if query_text is not None and self.artist_embedding_lookup:
+            try:
+                query_artist_embedding = self.get_text_embedding(query_text)
+            except Exception as e:
+                logger.warning(f"Failed to compute query embedding for artist similarity: {e}")
+        
         # Compute V2.6 final scores with familiarity filtering
         candidate_scores = []
         
@@ -746,10 +778,10 @@ class MusicSearchEngine:
                 query_artist = query_song_key[1]
                 candidate_artist = candidate['song_key'][1]
                 artist_similarity = self.compute_artist_similarity(query_artist, candidate_artist, is_text_query=False)
-            elif query_text is not None:
-                # Text-to-song search: compare text query with candidate artist
+            elif query_text is not None and query_artist_embedding is not None:
+                # Text-to-song search: use pre-computed query embedding to avoid repeated API calls
                 candidate_artist = candidate['song_key'][1]
-                artist_similarity = self.compute_artist_similarity(query_text, candidate_artist, is_text_query=True)
+                artist_similarity = self.compute_artist_similarity_with_embedding(query_artist_embedding, candidate_artist)
             
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 

@@ -74,12 +74,12 @@ class RankingConfig:
         min_plays: int = 4,
         
         # V2.6: Similarity search weights (track, artist, genre, popularity) - these weights should sum to 1
-        beta_track: float = 0.0,         # Weight for track-level similarity
-        beta_genre: float = 0.0,        # Weight for genre vs semantic similarity
-        beta_artist_pop: float = 0.0,    # Weight for artist popularity vibe similarity  
+        beta_track: float = 0.6,         # Weight for track-level similarity
+        beta_genre: float = 0.2,        # Weight for genre vs semantic similarity
+        beta_artist_pop: float = 0.15,    # Weight for artist popularity vibe similarity  
         beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity
-        beta_pop: float = 0.0,        # Weight for track popularity vs semantic similarity
-        beta_artist: float = 1.0,      # Weight for artist-artist similarity
+        beta_pop: float = 0.05,        # Weight for track popularity vs semantic similarity
+        beta_artist: float = 0.0,      # Weight for artist-artist similarity
 
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
