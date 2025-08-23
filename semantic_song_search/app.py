@@ -72,8 +72,7 @@ class MusicSearchEngine:
         self.embeddings_data = None
         self.embedding_indices = {}
         self.embedding_lookup = {}  # (song, artist) -> embedding
-        self.tfidf_vectorizer = None
-        self.tfidf_matrix = None
+        self.fuzzy_search_index = None  # RapidFuzz search index
         
         # Artist embeddings
         self.artist_embeddings_data = None
@@ -205,8 +204,8 @@ class MusicSearchEngine:
         logger.info(f"Built mappings for {len(self.songs)} songs and {len(self.artist_to_songs)} artists")
     
     def _build_text_search_index(self):
-        """Build text search index for song/artist/album matching."""
-        self.tfidf_vectorizer, self.tfidf_matrix = data_utils.build_text_search_index(self.songs)
+        """Build RapidFuzz search index for song/artist/album matching."""
+        self.fuzzy_search_index = data_utils.build_text_search_index(self.songs)
     
     def _initialize_ranking_engine(self):
         """Initialize ranking engine with history if available."""
@@ -877,12 +876,12 @@ class MusicSearchEngine:
             return 'N/A'
     
     def search_songs_by_text(self, query: str, limit: int = 10) -> List[Tuple[int, float, str]]:
-        """Search for songs using text similarity (for song-to-song search suggestions)."""
-        if not query or not self.tfidf_vectorizer:
+        """Search for songs using RapidFuzz fuzzy matching (for song-to-song search suggestions)."""
+        if not query or not self.fuzzy_search_index:
             return []
         
         return data_utils.search_songs_by_text(
-            query, self.tfidf_vectorizer, self.tfidf_matrix, self.songs, limit
+            query, self.fuzzy_search_index, self.songs, limit
         )
     
     def get_ranking_weights(self) -> Dict:

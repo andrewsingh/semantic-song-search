@@ -5,10 +5,25 @@ Constants and configuration values shared across the semantic song search applic
 # OpenAI Configuration
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 
-# Text Search Configuration
+# Text Search Configuration (Legacy TF-IDF - being replaced)
 TFIDF_NGRAM_RANGE = (1, 2)
 TFIDF_MAX_FEATURES = 5000
 TEXT_SEARCH_MIN_SCORE = 0.01
+
+# RapidFuzz Search Configuration
+FUZZY_SEARCH_CONSTANTS = {
+    'TRACK_WEIGHT': 1.0,
+    'ARTIST_WEIGHT': 0.8, 
+    'ALBUM_WEIGHT': 0.6,
+    'COMBINED_WEIGHT': 0.7,
+    'DEFAULT_MIN_SCORE': 75,
+    'SEARCH_MIN_SCORE': 70,
+    'DEFAULT_SEARCH_LIMIT': 20,
+    'TOP_SONGS_LIMIT': 50,
+    'MAX_PLAY_BONUS': 5,
+    'PLAY_BONUS_DIVISOR': 1000,
+    'FLOAT_EPSILON': 0.001
+}
 
 # Default File Paths  
 DEFAULT_SONGS_FILE = "data/eval_set_v2/eval_set_v2_metadata_ready.json"

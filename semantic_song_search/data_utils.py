@@ -13,7 +13,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
 
@@ -337,53 +337,48 @@ def filter_history_to_known_songs(history_df: pd.DataFrame, songs_metadata: List
     return filtered_df
 
 
-def build_text_search_index(songs: List[Dict], ngram_range: Tuple[int, int] = None, 
-                          max_features: int = None) -> Tuple[TfidfVectorizer, Any]:
+def build_text_search_index(songs: List[Dict]) -> Dict:
     """
-    Build a TF-IDF text search index for song/artist/album matching.
+    Build a RapidFuzz search index for song/artist/album matching.
     
     Args:
         songs: List of song metadata dictionaries
-        ngram_range: N-gram range for TF-IDF
-        max_features: Maximum number of features for TF-IDF
         
     Returns:
-        Tuple of (TfidfVectorizer, fitted_matrix)
+        Dictionary mapping song keys to searchable fields
     """
     if not isinstance(songs, list):
         raise ValueError("songs must be a list")
     
-    try:
-        try:
-            from . import constants
-        except ImportError:
-            import constants
-    except ImportError:
-        import constants
+    logger.info(f"Building RapidFuzz search index for {len(songs)} songs...")
     
-    # Use defaults from constants if not provided
-    if ngram_range is None:
-        ngram_range = constants.TFIDF_NGRAM_RANGE
-    if max_features is None:
-        max_features = constants.TFIDF_MAX_FEATURES
-    
-    logger.info(f"Building text search index for {len(songs)} songs...")
-    
-    search_texts = []
-    for song in songs:
+    search_index = {}
+    for i, song in enumerate(songs):
         if not isinstance(song, dict):
             logger.warning(f"Invalid song metadata: {song}")
             continue
             
-        metadata = song.get('metadata', {})
-        searchable_text = f"{song.get('original_song', '')} {song.get('original_artist', '')} {metadata.get('album_name', '')}"
-        search_texts.append(searchable_text.lower())
+        song_name = song.get('original_song', '') or ''
+        artist_name = song.get('original_artist', '') or ''
+        # metadata = song.get('metadata') or {}  # Handle None metadata
+        # album_name = metadata.get('album_name', '') or ''
+
+        # Use index as unique key to avoid collisions with duplicate (song, artist) pairs
+        # This ensures all songs remain searchable even if they have identical names/artists
+        unique_key = i
+        
+        # Store individual fields for weighted fuzzy search
+        search_index[unique_key] = {
+            'track_name': song_name,
+            'artist_name': artist_name,
+            # 'album_name': album_name,
+            'combined': f"TRACK:{song_name} ARTIST:{artist_name}",
+            'song_index': i,  # Store the original index for compatibility
+            'song_key': (song_name, artist_name)  # Store original song key for reference
+        }
     
-    vectorizer = TfidfVectorizer(ngram_range=ngram_range, max_features=max_features)
-    tfidf_matrix = vectorizer.fit_transform(search_texts)
-    
-    logger.info(f"Built text search index with {len(vectorizer.vocabulary_)} features")
-    return vectorizer, tfidf_matrix
+    logger.info(f"Built RapidFuzz search index for {len(search_index)} songs")
+    return search_index
 
 
 def get_openai_embedding(text: str, model: str = None, normalize: bool = True) -> np.ndarray:
@@ -441,16 +436,15 @@ def get_openai_embedding(text: str, model: str = None, normalize: bool = True) -
         raise
 
 
-def search_songs_by_text(query: str, vectorizer: TfidfVectorizer, tfidf_matrix: Any, 
-                        songs: List[Dict], limit: int = None, min_score: float = None) -> List[Tuple[int, float, str]]:
+def search_songs_by_text(query: str, search_index: Dict, songs: List[Dict], 
+                        limit: int = None, min_score: float = None) -> List[Tuple[int, float, str]]:
     """
-    Search for songs using text similarity.
+    Search for songs using RapidFuzz fuzzy string matching.
     
     Args:
         query: Search query text
-        vectorizer: Fitted TfidfVectorizer
-        tfidf_matrix: Fitted TF-IDF matrix
-        songs: List of song metadata
+        search_index: Pre-built search index with individual fields
+        songs: List of song metadata (for compatibility)
         limit: Maximum number of results
         min_score: Minimum similarity threshold
         
@@ -469,28 +463,52 @@ def search_songs_by_text(query: str, vectorizer: TfidfVectorizer, tfidf_matrix: 
     if limit is None:
         limit = constants.DEFAULT_SUGGESTION_LIMIT
     if min_score is None:
-        min_score = constants.TEXT_SEARCH_MIN_SCORE
+        min_score = constants.FUZZY_SEARCH_CONSTANTS['SEARCH_MIN_SCORE']
     
-    if not query or not query.strip():
+    if not query or not query.strip() or not search_index:
         return []
     
-    from sklearn.metrics.pairwise import cosine_similarity
-    
-    query_lower = query.lower().strip()
-    query_vec = vectorizer.transform([query_lower])
-    similarities = cosine_similarity(query_vec, tfidf_matrix).flatten()
-    
-    top_indices = similarities.argsort()[::-1][:limit]
-    
     results = []
-    for idx in top_indices:
-        if similarities[idx] > min_score:
-            if idx < len(songs):
-                song = songs[idx]
-                label = f"{song.get('original_song', 'Unknown')} - {song.get('original_artist', 'Unknown')}"
-                results.append((int(idx), float(similarities[idx]), label))
+    query_lower = query.lower().strip()
     
-    return results
+    for unique_key, fields in search_index.items():
+        if not fields:
+            continue
+            
+        try:
+            # Safely get field values with robust None/empty string handling
+            track_name = (fields.get('track_name') or '').strip()
+            artist_name = (fields.get('artist_name') or '').strip() 
+            # album_name = (fields.get('album_name') or '').strip()
+            combined = (fields.get('combined') or '').strip()
+            
+            # Calculate weighted scores for each field using constants
+            track_score = fuzz.WRatio(query_lower, track_name.lower()) * constants.FUZZY_SEARCH_CONSTANTS['TRACK_WEIGHT']
+            artist_score = fuzz.WRatio(query_lower, artist_name.lower()) * constants.FUZZY_SEARCH_CONSTANTS['ARTIST_WEIGHT'] 
+            # album_score = fuzz.WRatio(query_lower, album_name.lower()) * constants.FUZZY_SEARCH_CONSTANTS['ALBUM_WEIGHT']
+            
+            # Also try combined search for cross-field matches
+            combined_score = fuzz.WRatio(query_lower, combined.lower()) * constants.FUZZY_SEARCH_CONSTANTS['COMBINED_WEIGHT']
+            
+            # Take the best score across all fields
+            best_score = max(track_score, artist_score, combined_score)
+            
+            # Only include results above threshold
+            if best_score >= min_score:
+                song_index = fields.get('song_index', unique_key)  # Get original song index
+                song_key = fields.get('song_key', (track_name, artist_name))  # Get original song key
+                song_name, artist_name = song_key
+                label = f"{song_name} - {artist_name}"
+                results.append((song_index, best_score, label))
+                
+        except Exception as e:
+            # Skip problematic entries but don't crash the search
+            logger.warning(f"Error processing song {unique_key}: {e}")
+            continue
+    
+    # Sort by score (descending) and limit results
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:limit]
 
 
 # Spotify History Processing Functions

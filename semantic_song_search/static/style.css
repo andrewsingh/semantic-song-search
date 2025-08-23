@@ -247,18 +247,18 @@ body {
 
 /* Suggestions */
 .suggestions-container {
-    max-width: 800px;
+    max-width: 880px;
     margin: 0 auto;
     background: rgba(26, 26, 31, 0.98);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 12px;
     backdrop-filter: blur(10px);
-    max-height: 300px;
+    max-height: 384px;
     overflow-y: auto;
 }
 
 .suggestion-item {
-    padding: 1rem 1.5rem;
+    padding: 0.7rem 1.2rem;
     cursor: pointer;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     transition: background 0.2s ease;
