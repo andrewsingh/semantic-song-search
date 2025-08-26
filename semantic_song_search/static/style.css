@@ -1183,6 +1183,7 @@ body {
 .card-footer .scoring-components {
     flex: 1 1 auto;
     justify-content: flex-end;
+    gap: 0.1rem;
 }
 
 .card-footer .similarity-score {
@@ -1865,12 +1866,11 @@ body {
 
 .component-label {
     color: #888;
-    min-width: 24px;
 }
 
 .component-value {
     color: #1DB954;
-    font-weight: 500;
+    font-weight: 400;
     min-width: 35px;
 }
 

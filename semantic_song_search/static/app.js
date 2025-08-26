@@ -44,7 +44,8 @@ class SemanticSearchApp {
             beta_track: 0.5,
             beta_genre: 0.2,
             beta_artist_pop: 0.15,
-            beta_pop: 0.15,
+            beta_streams_total: 0.05,
+            beta_streams_daily: 0.05,
             beta_artist: 0.0
         };
         
@@ -81,7 +82,8 @@ class SemanticSearchApp {
             nhBetaTrack: document.getElementById('nh_beta_track'),
             nhBetaGenre: document.getElementById('nh_beta_genre'),
             nhBetaArtistPop: document.getElementById('nh_beta_artist_pop'),
-            nhBetaPop: document.getElementById('nh_beta_pop'),
+            nhBetaStreamsTotal: document.getElementById('nh_beta_streams_total'),
+            nhBetaStreamsDaily: document.getElementById('nh_beta_streams_daily'),
             nhBetaArtist: document.getElementById('nh_beta_artist')
         };
         
@@ -112,7 +114,8 @@ class SemanticSearchApp {
             beta_track: parseFloat(this.domElements.nhBetaTrack?.value || 0.6),
             beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || 0.2),
             beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || 0.15),
-            beta_pop: parseFloat(this.domElements.nhBetaPop?.value || 0.05),
+            beta_streams_total: parseFloat(this.domElements.nhBetaStreamsTotal?.value || 0.05),
+            beta_streams_daily: parseFloat(this.domElements.nhBetaStreamsDaily?.value || 0.05),
             beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || 0.0)
         };
     }
@@ -317,7 +320,8 @@ class SemanticSearchApp {
             this.domElements.nhBetaTrack,
             this.domElements.nhBetaGenre,
             this.domElements.nhBetaArtistPop,
-            this.domElements.nhBetaPop,
+            this.domElements.nhBetaStreamsTotal,
+            this.domElements.nhBetaStreamsDaily,
             this.domElements.nhBetaArtist
         ];
 
@@ -1205,20 +1209,24 @@ class SemanticSearchApp {
                 scoringComponentsHTML = `
                     <div class="scoring-components">
                         <span class="scoring-component" title="Track-level similarity">
-                            <span class="component-label">Sim:</span>
+                            <span class="component-label">S:</span>
                             <span class="component-value">${((components.S_track * 100) || 0).toFixed(1)}</span>
                         </span>
                         <span class="scoring-component" title="Genre similarity">
-                            <span class="component-label">Gen:</span>
+                            <span class="component-label">G:</span>
                             <span class="component-value">${(components.S_genre * 100 || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Artist popularity vibe similarity">
-                            <span class="component-label">ArtV:</span>
+                        <span class="scoring-component" title="Artist vibe similarity">
+                            <span class="component-label">A:</span>
                             <span class="component-value">${(components.S_artist_pop * 100 || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Artist similarity">
-                            <span class="component-label">Art:</span>
-                            <span class="component-value">${(components.S_artist * 100 || 0).toFixed(1)}</span>
+                        <span class="scoring-component" title="Stream Total">
+                            <span class="component-label">T:</span>
+                            <span class="component-value">${(components.S_streams_total * 100 || 0).toFixed(1)}</span>
+                        </span>
+                        <span class="scoring-component" title="Stream Daily">
+                            <span class="component-label">D:</span>
+                            <span class="component-value">${(components.S_streams_daily * 100 || 0).toFixed(1)}</span>
                         </span>
                     </div>
                 `;
@@ -1243,7 +1251,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)} (${escapeHtml((song.scoring_components?.S_pop * 100 || 0).toFixed(1))})</div>
+                    <div class="card-title">${escapeHtml(song.song)} (${escapeHtml((song.scoring_components?.S_streams_total * 100 || 0).toFixed(1))})</div>
                     <div class="card-artist">${escapeHtml(artistText)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>
@@ -2462,7 +2470,7 @@ class SemanticSearchApp {
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_pop', 'beta_artist'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_streams_total', 'beta_streams_daily', 'beta_artist'
         ];
         
         // Initialize current advanced parameters object
@@ -2626,8 +2634,11 @@ class SemanticSearchApp {
         if (this.domElements.nhBetaArtistPop && this.defaultNoHistoryWeights.beta_artist_pop !== undefined) {
             this.domElements.nhBetaArtistPop.value = this.defaultNoHistoryWeights.beta_artist_pop;
         }
-        if (this.domElements.nhBetaPop && this.defaultNoHistoryWeights.beta_pop !== undefined) {
-            this.domElements.nhBetaPop.value = this.defaultNoHistoryWeights.beta_pop;
+        if (this.domElements.nhBetaStreamsTotal && this.defaultNoHistoryWeights.beta_streams_total !== undefined) {
+            this.domElements.nhBetaStreamsTotal.value = this.defaultNoHistoryWeights.beta_streams_total;
+        }
+        if (this.domElements.nhBetaStreamsDaily && this.defaultNoHistoryWeights.beta_streams_daily !== undefined) {
+            this.domElements.nhBetaStreamsDaily.value = this.defaultNoHistoryWeights.beta_streams_daily;
         }
         if (this.domElements.nhBetaArtist && this.defaultNoHistoryWeights.beta_artist !== undefined) {
             this.domElements.nhBetaArtist.value = this.defaultNoHistoryWeights.beta_artist;
@@ -2638,7 +2649,8 @@ class SemanticSearchApp {
             beta_track: parseFloat(this.domElements.nhBetaTrack?.value || this.defaultNoHistoryWeights.beta_track),
             beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || this.defaultNoHistoryWeights.beta_genre),
             beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || this.defaultNoHistoryWeights.beta_artist_pop),
-            beta_pop: parseFloat(this.domElements.nhBetaPop?.value || this.defaultNoHistoryWeights.beta_pop),
+            beta_streams_total: parseFloat(this.domElements.nhBetaStreamsTotal?.value || this.defaultNoHistoryWeights.beta_streams_total),
+            beta_streams_daily: parseFloat(this.domElements.nhBetaStreamsDaily?.value || this.defaultNoHistoryWeights.beta_streams_daily),
             beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || this.defaultNoHistoryWeights.beta_artist)
         };
         
@@ -2704,7 +2716,7 @@ class SemanticSearchApp {
             'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
             'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4,
             'beta_track': 0.5, 'beta_artist_pop': 0.15, 'beta_artist_personal': 0.0,
-            'beta_genre': 0.2, 'beta_pop': 0.15, 'beta_artist': 0.0
+            'beta_genre': 0.2, 'beta_streams_total': 0.05, 'beta_streams_daily': 0.05, 'beta_artist': 0.0
         };
         
         this.populateAdvancedSettingsForm(defaults);

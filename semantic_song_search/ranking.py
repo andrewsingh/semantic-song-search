@@ -211,17 +211,22 @@ class RankingConfig:
                         self.beta_genre = float_value
                     else:
                         logger.warning(f"beta_genre must be in [0,1], got {float_value}")
-                elif key == 'beta_pop':  # Handle beta_pop validation
-                    if 0.0 <= float_value <= 1.0:
-                        self.beta_pop = float_value
+                elif key == 'beta_streams_total':  # Handle beta_streams_total validation
+                    if float_value >= 0.0:
+                        self.beta_streams_total = float_value
                     else:
-                        logger.warning(f"beta_pop must be in [0,1], got {float_value}")
+                        logger.warning(f"beta_streams_total must be >= 0, got {float_value}")
+                elif key == 'beta_streams_daily':  # Handle beta_streams_daily validation
+                    if float_value >= 0.0:
+                        self.beta_streams_daily = float_value
+                    else:
+                        logger.warning(f"beta_streams_daily must be >= 0, got {float_value}")
                 # Note: Discovery slider 'd' and 'kappa_d' parameters removed in favor of familiarity filtering
                 elif hasattr(self, key):
                     # Additional validation for other parameters
                     if key in ['beta_p', 'beta_s', 'beta_a'] and not 0.0 <= float_value <= 1.0:
                         logger.warning(f"{key} should typically be in [0,1], got {float_value}")
-                    elif key in ['beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_pop', 'beta_artist'] and float_value < 0.0:
+                    elif key in ['beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_streams_total', 'beta_streams_daily', 'beta_artist'] and float_value < 0.0:
                         logger.warning(f"{key} should be non-negative, got {float_value}")
                     setattr(self, key, float_value)
                 else:
@@ -485,10 +490,15 @@ class RankingEngine:
             artists_list = song.get('artists', [])
             primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
             
-            # Compute three priors (V2.5 §4)
-            # P_t: Popularity prior from new metadata structure
-            popularity = song.get('popularity', 50)
-            P_t = np.clip(popularity / 100.0, 0.0, 1.0)
+            # Compute stream-based priors instead of Spotify popularity (V2.6 §4)
+            # S_total: Total streams prior using saturating formula
+            streams_data = song.get('streams', {})
+            streams_total = streams_data.get('streams_total', 0)
+            S_total = streams_total / (streams_total + self.config.K_total)
+            
+            # S_daily: Daily streams prior using saturating formula  
+            streams_daily = streams_data.get('streams_daily', 0)
+            S_daily = streams_daily / (streams_daily + self.config.K_daily)
             
             # C_t: kNN similarity prior
             C_t = self.knn_similarities.get(track_id)
@@ -503,9 +513,9 @@ class RankingEngine:
             B_t = self.artist_affinities.get(primary_artist, 0.0)
             B_A_fam = self.artist_familiarities.get(primary_artist, 0.0)
 
-            # Combined prior utility E_t
+            # Combined prior utility E_t using stream scores
             E_t = (
-                self.config.beta_p * P_t + 
+                self.config.beta_p * (S_total + S_daily) / 2 +  # Average of stream scores
                 self.config.beta_s * C_t_hat + 
                 self.config.beta_a * B_t)
             
@@ -525,7 +535,8 @@ class RankingEngine:
             Fam_t = np.clip(Fam_t, 0, 1)
 
             track_priors[track_id] = {
-                'P_t': P_t,
+                'S_total': S_total,
+                'S_daily': S_daily,
                 'C_t': C_t,
                 'B_t': B_t,
                 'C_t_hat': C_t_hat,
@@ -750,10 +761,11 @@ class RankingEngine:
         S_artist_pop = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
         S_artist_personal = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
         S_artist = 0.0 if np.isnan(artist_similarity) else artist_similarity
-        S_pop = self.track_priors[track_id]['P_t'] if track_id in self.track_priors else 0.0
+        S_streams_total = self.track_priors[track_id]['S_total'] if track_id in self.track_priors else 0.0
+        S_streams_daily = self.track_priors[track_id]['S_daily'] if track_id in self.track_priors else 0.0
         
-        # Compute weighted combined semantic similarity (track + artist similarities)
-        total_weight = self.config.beta_track + self.config.beta_genre + self.config.beta_artist_pop + self.config.beta_artist_personal + self.config.beta_pop + self.config.beta_artist
+        # Compute weighted combined semantic similarity (track + artist + stream similarities)
+        total_weight = self.config.beta_track + self.config.beta_genre + self.config.beta_artist_pop + self.config.beta_artist_personal + self.config.beta_streams_total + self.config.beta_streams_daily + self.config.beta_artist
 
         if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
             # Normalize weights to ensure they sum to 1
@@ -761,14 +773,16 @@ class RankingEngine:
             norm_beta_genre = self.config.beta_genre / total_weight
             norm_beta_artist_pop = self.config.beta_artist_pop / total_weight
             norm_beta_artist_personal = self.config.beta_artist_personal / total_weight
-            norm_beta_pop = self.config.beta_pop / total_weight
+            norm_beta_streams_total = self.config.beta_streams_total / total_weight
+            norm_beta_streams_daily = self.config.beta_streams_daily / total_weight
             norm_beta_artist = self.config.beta_artist / total_weight
 
             S_semantic = (norm_beta_track * S_track + 
                          norm_beta_genre * S_genre +
                          norm_beta_artist_pop * S_artist_pop + 
                          norm_beta_artist_personal * S_artist_personal +
-                         norm_beta_pop * S_pop +
+                         norm_beta_streams_total * S_streams_total +
+                         norm_beta_streams_daily * S_streams_daily +
                          norm_beta_artist * S_artist)
         else:
             # Fallback to track similarity only if all weights are zero
@@ -786,14 +800,16 @@ class RankingEngine:
                 'S_artist_pop': S_artist_pop, 
                 'S_artist_personal': S_artist_personal,
                 'S_artist': S_artist,
-                'S_pop': S_pop,
+                'S_streams_total': S_streams_total,
+                'S_streams_daily': S_streams_daily,
                 'final_score': S_semantic,
                 'lambda': 1.0,
                 'beta_genre': self.config.beta_genre,
                 'beta_track': self.config.beta_track,
                 'beta_artist_pop': self.config.beta_artist_pop,
                 'beta_artist_personal': self.config.beta_artist_personal,
-                'beta_pop': self.config.beta_pop,
+                'beta_streams_total': self.config.beta_streams_total,
+                'beta_streams_daily': self.config.beta_streams_daily,
                 'beta_artist': self.config.beta_artist,
                 # No score breakdown components for no-history case
             }
@@ -839,6 +855,8 @@ class RankingEngine:
             'S_artist_pop': S_artist_pop, 
             'S_artist_personal': S_artist_personal,
             'S_artist': S_artist,
+            'S_streams_total': S_streams_total,
+            'S_streams_daily': S_streams_daily,
             'S_semantic': S_semantic,
             'S_genre': S_genre,
             'final_score': final_score,
@@ -848,6 +866,8 @@ class RankingEngine:
             'beta_track': self.config.beta_track,
             'beta_artist_pop': self.config.beta_artist_pop,
             'beta_artist_personal': self.config.beta_artist_personal,
+            'beta_streams_total': self.config.beta_streams_total,
+            'beta_streams_daily': self.config.beta_streams_daily,
             'beta_artist': self.config.beta_artist,
             # Interpretable score breakdown (these sum to final_score)
             'raw_semantic': S_t,

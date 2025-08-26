@@ -725,7 +725,7 @@ class MusicSearchEngine:
             critical_params = ['H_c', 'H_E', 'knn_embed_type', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 
                              'K_s', 'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 
                              'psi', 'k_neighbors', 'sigma', 'theta_c', 'tau_c', 
-                             'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays', 'beta_genre', 'beta_pop']
+                             'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays', 'beta_genre', 'beta_streams_total', 'beta_streams_daily']
             needs_reinit = any(param in advanced_params for param in critical_params)
             
             if needs_reinit:
@@ -1123,7 +1123,7 @@ def search():
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_pop'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_streams_total', 'beta_streams_daily'
         }
         
         for param_name in valid_advanced_params:
