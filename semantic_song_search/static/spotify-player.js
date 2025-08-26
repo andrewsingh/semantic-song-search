@@ -61,7 +61,7 @@ class SpotifyPlayer {
         // Create a promise for player initialization
         this.playerInitPromise = new Promise((resolve, reject) => {
             const player = new window.Spotify.Player({
-                name: 'Semantic Song Search',
+                name: 'SongMatch',
                 getOAuthToken: cb => { 
                     console.log('🔑 Token requested by Spotify SDK');
                     cb(this.accessToken); 

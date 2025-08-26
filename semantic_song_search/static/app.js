@@ -1512,7 +1512,7 @@ class SemanticSearchApp {
         
         // Show a user-friendly prompt
         const shouldLogin = confirm(
-            "Welcome to Semantic Song Search! 🎵\n\n" +
+            "Welcome to SongMatch! 🎵\n\n" +
             "To play songs and create playlists, you'll need to connect your Spotify account.\n\n" +
             "Would you like to login to Spotify now?"
         );
@@ -1879,7 +1879,7 @@ class SemanticSearchApp {
     
     generatePlaylistName() {
         if (!this.currentSearchType || !this.currentQuery) {
-            return 'Semantic Song Search';
+            return 'SongMatch';
         }
         
         if (this.currentSearchType === 'text') {
@@ -1907,7 +1907,7 @@ class SemanticSearchApp {
         }
         
         // Fallback
-        return 'Semantic Song Search';
+        return 'SongMatch';
     }
     
     toggleExportAccordion() {

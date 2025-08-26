@@ -1077,7 +1077,7 @@ def index():
         
         # Track page load
         track_event('Page Loaded', {
-            'page_title': 'Semantic Song Search',
+            'page_title': 'SongMatch',
             'is_new_session': True
         })
     
@@ -1443,7 +1443,7 @@ def create_playlist():
     try:
         # Get request data
         data = request.json
-        playlist_name = data.get('playlist_name', 'Semantic Song Search Playlist')
+        playlist_name = data.get('playlist_name', 'SongMatch Playlist')
         song_count = data.get('song_count', 20)
         song_spotify_ids = data.get('song_spotify_ids', [])
         search_context = data.get('search_context', {})
@@ -1479,7 +1479,7 @@ def create_playlist():
             user_id, 
             playlist_name, 
             public=False, 
-            description=f"Created by Semantic Song Search - {len(valid_songs)} songs"
+            description=f"Created by SongMatch - {len(valid_songs)} songs"
         )
         
         # Convert Spotify IDs to URIs

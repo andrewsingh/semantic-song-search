@@ -32,7 +32,7 @@ body {
 }
 
 .header-content {
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto;
 }
 
@@ -347,7 +347,7 @@ body {
 /* Main Content */
 .main-content {
     flex: 1;
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto;
     padding: 2rem;
     width: 100%;
@@ -538,7 +538,7 @@ body {
 
 /* Advanced Settings Section */
 .advanced-settings-section {
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto 2rem auto;
 }
 
@@ -757,7 +757,7 @@ body {
 
 /* No-History Weights Section */
 .no-history-weights-section {
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto 1.5rem auto;
 }
 
@@ -1173,7 +1173,8 @@ body {
     padding-top: 0.5rem;
     font-size: 0.85rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
-    margin-left: -0.6rem !important;
+    margin-left: -0.3rem !important;
+    gap: 0.25rem;
 }
 
 .card-footer .card-rank {
@@ -1194,15 +1195,14 @@ body {
 .card-rank {
     color: #eaeaea;
     font-weight: 500;
-    font-size: 1rem;
-    margin-right: 0.5rem;
+    font-size: 1.05rem;
 }
 
 .similarity-score {
     color: #ffc107;
     padding: 0.25rem 0.5rem;
     font-weight: 500;
-    font-size: 1rem;
+    font-size: 1.05rem;
 }
 
 /* Scoring components in the middle of footer */
@@ -1445,7 +1445,7 @@ body {
 }
 
 .spotify-player {
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto;
 }
 
@@ -1731,7 +1731,7 @@ body {
     border-radius: 12px;
     padding: 1rem;
     margin: 1rem 0;
-    max-width: 1200px;
+    max-width: 1280px;
     margin-left: auto;
     margin-right: auto;
 }
@@ -1856,7 +1856,7 @@ body {
 .scoring-component {
     display: flex;
     align-items: center;
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     position: relative;
 }
 
