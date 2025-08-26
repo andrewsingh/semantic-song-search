@@ -516,6 +516,13 @@ class SemanticSearchApp {
         
         const isNewSearch = this.prepareForNewSearch(searchParams);
         
+        // Clear existing results immediately to show loading state
+        if (this.searchResults.length > 0 || this.domElements.resultsGrid.children.length > 0) {
+            this.domElements.resultsGrid.innerHTML = '';
+            this.domElements.resultsHeader.style.display = 'none';
+            this.domElements.loadMoreContainer.style.display = 'none';
+        }
+        
         this.showLoading(true);
         this.hideWelcomeMessage();
         
