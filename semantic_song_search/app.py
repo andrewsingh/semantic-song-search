@@ -956,6 +956,9 @@ class MusicSearchEngine:
             album_images = song.get('album', {}).get('images', [])
             cover_url = album_images[-1]['url'] if album_images else ''
             
+            # Convert all numpy values to native Python types for JSON serialization
+            scoring_components = self._convert_numpy_to_python(result)
+            
             # Build result dict with V2.6 structure
             result_dict = {
                 'song_idx': song_idx,
@@ -969,8 +972,8 @@ class MusicSearchEngine:
                 'field_value': self._get_field_value(track_id, embed_type),
                 'genres': self.genres_lookup.get(track_id, []),
                 'tags': self.tags_lookup.get(track_id, []),
-                'final_score': result['final_score'],
-                'scoring_components': result  # Include all V2.6 components
+                'final_score': float(result['final_score']),  # Ensure native Python float
+                'scoring_components': scoring_components  # Include all V2.6 components with converted values
             }
             
             # Add has_history flag for compatibility
@@ -981,6 +984,31 @@ class MusicSearchEngine:
             results.append(result_dict)
         
         return results, total_count
+    
+    def _convert_numpy_to_python(self, obj):
+        """
+        Recursively convert numpy types to native Python types for JSON serialization.
+        
+        Args:
+            obj: Object that may contain numpy values
+            
+        Returns:
+            Object with numpy values converted to native Python types
+        """
+        if isinstance(obj, dict):
+            return {key: self._convert_numpy_to_python(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_to_python(item) for item in obj]
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.floating, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.integer, np.int32, np.int64)):
+            return int(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        else:
+            return obj
     
     def _get_field_value(self, track_id: str, embed_type: str) -> str:
         """Get field value for a track_id and embedding type."""
