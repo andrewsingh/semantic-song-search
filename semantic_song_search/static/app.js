@@ -383,7 +383,7 @@ class SemanticSearchApp {
             searchInput.placeholder = "🔍 Search for a song or artist... (e.g., \"Espresso\", \"Sabrina Carpenter\")";
             this.clearResults();
         } else {
-            searchInput.placeholder = "🔍 Describe the vibe you're looking for... (e.g., \"fun playful summery pop\", \"motivational workout hip hop\")";
+            searchInput.placeholder = "🔍 Describe the vibe and genre you're looking for... (e.g., \"playful summery pop\", \"motivational workout hip hop\")";
             suggestionsContainer.style.display = 'none';
             querySection.style.display = 'none';
             this.clearResults();
