@@ -189,26 +189,47 @@ class MusicSearchEngine:
             self.artist_embedding_lookup = {}
     
     def _build_tags_genres_lookups(self):
-        """Build tags and genres lookups from embedding field_values."""
+        """Build tags and genres lookups from embedding field_values, supporting linked_from IDs."""
         logger.info("Building tags and genres lookups...")
         
         # Initialize lookups
-        self.tags_lookup = {}  # track_id -> list of tags
-        self.genres_lookup = {}  # track_id -> list of genres
+        self.tags_lookup = {}  # canonical_track_id -> list of tags
+        self.genres_lookup = {}  # canonical_track_id -> list of genres
+        
+        # Create mapping from embedding track_ids to song metadata for linked_from support
+        embedding_to_song = {}
+        for song in self.songs:
+            canonical_id = song.get('track_id') or song.get('id')
+            if canonical_id:
+                # Map canonical ID
+                embedding_to_song[canonical_id] = song
+                
+                # Map linked_from ID if it exists
+                linked_from = song.get('linked_from')
+                if linked_from and 'id' in linked_from:
+                    linked_from_id = linked_from['id']
+                    embedding_to_song[linked_from_id] = song
         
         # Build tags lookup from tags embedding field_values
         if 'tags' in self.embedding_indices:
             tags_data = self.embedding_indices['tags']
-            track_ids = tags_data.get('track_ids', [])
+            embedding_track_ids = tags_data.get('track_ids', [])
             field_values = tags_data.get('field_values', [])
             
-            for i, track_id in enumerate(track_ids):
-                if i < len(field_values):
+            processed_canonical_ids = set()
+            
+            for i, embedding_track_id in enumerate(embedding_track_ids):
+                if i < len(field_values) and embedding_track_id in embedding_to_song:
                     tags_string = field_values[i]
                     if tags_string:
-                        # Split by comma and clean up
-                        tags_list = [tag.strip() for tag in tags_string.split(',') if tag.strip()]
-                        self.tags_lookup[track_id] = tags_list
+                        song = embedding_to_song[embedding_track_id]
+                        canonical_id = song.get('track_id') or song.get('id')
+                        
+                        # Only add each unique song once using canonical ID as key
+                        if canonical_id not in processed_canonical_ids:
+                            tags_list = [tag.strip() for tag in tags_string.split(',') if tag.strip()]
+                            self.tags_lookup[canonical_id] = tags_list
+                            processed_canonical_ids.add(canonical_id)
             
             logger.info(f"Built tags lookup for {len(self.tags_lookup)} songs")
         else:
@@ -217,16 +238,23 @@ class MusicSearchEngine:
         # Build genres lookup from genres embedding field_values
         if 'genres' in self.embedding_indices:
             genres_data = self.embedding_indices['genres']
-            track_ids = genres_data.get('track_ids', [])
+            embedding_track_ids = genres_data.get('track_ids', [])
             field_values = genres_data.get('field_values', [])
             
-            for i, track_id in enumerate(track_ids):
-                if i < len(field_values):
+            processed_canonical_ids = set()
+            
+            for i, embedding_track_id in enumerate(embedding_track_ids):
+                if i < len(field_values) and embedding_track_id in embedding_to_song:
                     genres_string = field_values[i]
                     if genres_string:
-                        # Split by comma and clean up
-                        genres_list = [genre.strip() for genre in genres_string.split(',') if genre.strip()]
-                        self.genres_lookup[track_id] = genres_list
+                        song = embedding_to_song[embedding_track_id]
+                        canonical_id = song.get('track_id') or song.get('id')
+                        
+                        # Only add each unique song once using canonical ID as key
+                        if canonical_id not in processed_canonical_ids:
+                            genres_list = [genre.strip() for genre in genres_string.split(',') if genre.strip()]
+                            self.genres_lookup[canonical_id] = genres_list
+                            processed_canonical_ids.add(canonical_id)
             
             logger.info(f"Built genres lookup for {len(self.genres_lookup)} songs")
         else:
