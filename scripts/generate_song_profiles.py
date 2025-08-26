@@ -8,6 +8,9 @@ import argparse, asyncio, math, time
 from pathlib import Path
 from tqdm import tqdm
 import os
+import sys
+
+sys.path.append(str(Path(__file__).parent.parent))
 from profiles import SongProfile
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────

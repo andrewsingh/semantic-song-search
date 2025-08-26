@@ -151,14 +151,8 @@ def save_embeddings_numpy(results: List[Dict], output_path: str):
     # Determine if output_path is a directory or a base filename
     output_path_obj = Path(output_path)
     
-    if output_path.endswith('/') or output_path_obj.is_dir():
-        # Directory mode - save separate files in directory
-        output_dir = output_path_obj
-        output_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        # Base filename mode - use directory of the file and create subdirectory
-        output_dir = output_path_obj.parent / f"{output_path_obj.stem}_artist_embeddings"
-        output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = output_path_obj
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     # Prepare data for each embedding type
     embedding_types = ['musical_style', 'lyrical_themes', 'mood', 'full_profile']
@@ -182,7 +176,7 @@ def save_embeddings_numpy(results: List[Dict], output_path: str):
         artist_indices_array = np.array(artist_indices)
         
         # Save individual embedding type file
-        output_file = output_dir / f"{embedding_type}_embeddings.npz"
+        output_file = output_dir / f"{embedding_type}_artist_embeddings.npz"
         np.savez_compressed(
             output_file,
             artists=np.array(artists),

@@ -47,6 +47,7 @@ from typing import List, Dict, Any, Tuple
 import numpy as np
 from openai import AsyncOpenAI, RateLimitError, APIError
 from tqdm import tqdm
+import pdb
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
 RATE_LIMIT_RPM = 5000
@@ -58,6 +59,7 @@ RETRY_BACKOFF_SEC = max(1, int(60 / RATE_LIMIT_RPM * 10))
 
 # ──────────────────────────────── OPENAI SETTINGS ─────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-large"
+EMBED_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
 
 print(f"Rate limit settings: {RATE_LIMIT_RPM} RPM, {MAX_CONCURRENCY} concurrent requests")
 
@@ -162,7 +164,8 @@ def extract_embedding_tasks(profiles: List[Dict], embed_types: List[str]) -> Tup
         # Store song metadata
         songs_metadata.append({
             'song': profile['original_song'],
-            'artist': profile['original_artist']
+            'artist': profile['original_artist'],
+            'track_id': profile['track_id']
         })
         
         # Generate embeddings for requested types
@@ -343,10 +346,18 @@ def load_existing_embeddings(output_base: str, embed_types: List[str]) -> Tuple[
             
             # Load songs metadata from first file (should be consistent across all files)
             if songs_metadata is None:
-                songs_metadata = [
-                    {'song': data['songs'][i], 'artist': data['artists'][i]} 
-                    for i in range(len(data['songs']))
-                ]
+                # Check if track_ids exist in the file (backwards compatibility)
+                if 'track_ids' in data:
+                    songs_metadata = [
+                        {'song': data['songs'][i], 'artist': data['artists'][i], 'track_id': data['track_ids'][i]} 
+                        for i in range(len(data['songs']))
+                    ]
+                else:
+                    # Fallback for older files without track_ids
+                    songs_metadata = [
+                        {'song': data['songs'][i], 'artist': data['artists'][i]} 
+                        for i in range(len(data['songs']))
+                    ]
                 print(f"  Loaded metadata for {len(songs_metadata)} songs")
             
             # Load embeddings for this type
@@ -407,10 +418,18 @@ def load_existing_embeddings_combined(output_file: str) -> Tuple[List[Dict], np.
         print(f"Found {len(data['songs'])} songs with {len(data['embeddings'])} embeddings")
         
         # Reconstruct songs_metadata
-        songs_metadata = [
-            {'song': data['songs'][i], 'artist': data['artists'][i]} 
-            for i in range(len(data['songs']))
-        ]
+        # Check if track_ids exist in the file (backwards compatibility)
+        if 'track_ids' in data:
+            songs_metadata = [
+                {'song': data['songs'][i], 'artist': data['artists'][i], 'track_id': data['track_ids'][i]} 
+                for i in range(len(data['songs']))
+            ]
+        else:
+            # Fallback for older files without track_ids
+            songs_metadata = [
+                {'song': data['songs'][i], 'artist': data['artists'][i]} 
+                for i in range(len(data['songs']))
+            ]
         
         # Keep data as numpy arrays - much more efficient!
         embeddings = data['embeddings'].astype(np.float32)  # Ensure consistent dtype
@@ -442,6 +461,7 @@ def save_song_embeddings(songs_metadata: List[Dict],
     # Create songs metadata arrays
     song_names = np.array([meta['song'] for meta in songs_metadata])
     artist_names = np.array([meta['artist'] for meta in songs_metadata])
+    track_ids = np.array([meta['track_id'] for meta in songs_metadata])
     
     # Determine output directory and base name
     output_path = Path(output_base)
@@ -449,14 +469,9 @@ def save_song_embeddings(songs_metadata: List[Dict],
         # If given a .npz file path, use the directory and stem as base
         base_dir = output_path.parent
         base_name = output_path.stem + "_"
-    elif output_path.is_dir() or not output_path.suffix:
-        # If given a directory or base name without extension
-        base_dir = output_path if output_path.is_dir() else output_path.parent
-        base_name = "" if output_path.is_dir() else output_path.name + "_"
     else:
-        # Fallback: treat as directory
-        base_dir = output_path.parent
-        base_name = output_path.stem + "_"
+        base_dir = output_path
+        base_name = ""
     
     # Ensure output directory exists
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -485,6 +500,7 @@ def save_song_embeddings(songs_metadata: List[Dict],
             # Song metadata (same for all files)
             songs=song_names,
             artists=artist_names,
+            track_ids=track_ids,
             # Embedding data (filtered for this type)
             embeddings=type_embeddings,
             song_indices=type_song_indices,
@@ -551,7 +567,11 @@ async def main(input_file: str, output_file: str, embed_types: List[str], num_en
     processed_songs = set()
     if existing_songs_metadata:
         for meta in existing_songs_metadata:
-            processed_songs.add((meta['song'], meta['artist']))
+            # Use track_id as primary key if available, fallback to (song, artist) for backwards compatibility
+            if 'track_id' in meta:
+                processed_songs.add(meta['track_id'])
+            else:
+                processed_songs.add((meta['song'], meta['artist']))
         print(f"Found {len(processed_songs)} already-processed songs")
     
     # Load profiles from JSONL file
@@ -563,8 +583,8 @@ async def main(input_file: str, output_file: str, embed_types: List[str], num_en
             if line:
                 profile = json.loads(line)
                 if profile['familiar']:
-                    song_key = (profile['original_song'], profile['original_artist'])
-                    if song_key not in processed_songs:
+                    # Use track_id as primary key for deduplication
+                    if profile['track_id'] not in processed_songs:
                         profiles_to_process.append(profile)
                 else:
                     unfamiliar_count += 1
@@ -672,7 +692,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output", required=True, 
                         help="Output directory or base path for separate embedding files")
     parser.add_argument("--embed_types", nargs='+', required=True,
-                        choices=['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres'],
+                        choices=(EMBED_TYPES + ['all']),
                         help="Embedding types to generate (space-separated)")
     parser.add_argument("-n", "--num_entries", type=int, default=None, 
                         help="Process only first N entries (for testing)")
@@ -682,6 +702,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     t0 = time.perf_counter()
-    asyncio.run(main(args.input, args.output, args.embed_types, args.num_entries, args.batch_size))
+
+    if 'all' in args.embed_types:
+        embed_types = EMBED_TYPES
+    else:
+        embed_types = args.embed_types
+    print("Embed types: ", embed_types)
+    asyncio.run(main(args.input, args.output, embed_types, args.num_entries, args.batch_size))
     elapsed = time.perf_counter() - t0
     print(f"\nAll done in {elapsed:.1f}s with {MAX_CONCURRENCY}-way concurrency") 
