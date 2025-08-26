@@ -600,7 +600,7 @@ class SemanticSearchApp {
             search_type: searchType,
             embed_type: embedType,
             query: query,
-            k: 40,
+            k: 48,
             offset: 0,
             // Personalization parameters  
             lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
@@ -776,14 +776,14 @@ class SemanticSearchApp {
         let searchInfoText = `${data.search_type} search • ${data.embed_type.replace('_', ' ')}`;
         
         // Add ranking weights information if available
-        if (data.ranking_weights) {
-            const weights = data.ranking_weights;
-            if (weights.has_history) {
-                searchInfoText += ` • Personalized ranking (${weights.history_songs_count} songs)`;
-            } else {
-                searchInfoText += ` • Semantic similarity only`;
-            }
-        }
+        // if (data.ranking_weights) {
+        //     const weights = data.ranking_weights;
+        //     if (weights.has_history) {
+        //         searchInfoText += ` • Personalized ranking (${weights.history_songs_count} songs)`;
+        //     } else {
+        //         searchInfoText += ` • Semantic similarity only`;
+        //     }
+        // }
         
         searchInfo.textContent = searchInfoText;
         resultsHeader.style.display = 'flex';
@@ -2172,12 +2172,12 @@ class SemanticSearchApp {
     }
     
     handlePlaylistCreationSuccess(data, songCount) {
-        const requestedText = data.track_count < songCount ? 
+        const requestedText = data.songs_added < songCount ? 
             ` (${songCount} requested)` : '';
         const message = `
             ✅ Playlist created successfully!<br>
             <strong>${data.playlist_name}</strong><br>
-            ${data.track_count} tracks added${requestedText}<br>
+            ${data.songs_added} tracks added${requestedText}<br>
             <a href="${data.playlist_url}" target="_blank" style="color: #1ed760; text-decoration: underline; font-weight: bold;">
                 🎵 Open in Spotify ↗
             </a>
@@ -2240,12 +2240,8 @@ class SemanticSearchApp {
         exportStatus.className = `export-status ${type}`;
         exportStatus.style.display = 'block';
         
-        // Auto-hide success messages after 10 seconds
-        if (type === 'success') {
-            setTimeout(() => {
-                this.hideExportStatus();
-            }, 10000);
-        }
+        // Success messages now persist until accordion is closed or refreshed
+        // (auto-hide removed to keep playlist creation success visible)
     }
     
     hideExportStatus() {

@@ -199,7 +199,7 @@ body {
 .search-container {
     display: flex;
     justify-content: center;
-    max-width: 900px;
+    max-width: 960px;
     margin: 0 auto 1rem;
 }
 
