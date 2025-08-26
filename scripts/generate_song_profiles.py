@@ -8,7 +8,10 @@ import argparse, asyncio, math, time
 from pathlib import Path
 from tqdm import tqdm
 import os
-from song_profile import SongProfile
+import sys
+
+sys.path.append(str(Path(__file__).parent.parent))
+from profiles import SongProfile
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
 RATE_LIMIT_RPM   = 50                  # <-- edit this if your quota changes

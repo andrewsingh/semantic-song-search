@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Semantic Song Search App
-Supports both text-to-song and song-to-song search with multiple embedding types.
+Supports text-to-song and song-to-song search with personalized ranking algorithm.
 """
 import os
 import json
@@ -10,114 +10,1325 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_session import Session
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.feature_extraction.text import TfidfVectorizer
-import difflib
 from openai import OpenAI
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 import logging
 import argparse
 from pathlib import Path
+try:
+    from . import ranking, data_utils, constants
+except ImportError:
+    import ranking, data_utils, constants
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import mixpanel
+import pandas as pd
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Parse command line arguments
-def parse_arguments():
-    """Parse command line arguments for data file paths."""
-    parser = argparse.ArgumentParser(
-        description="Semantic Song Search and Playlist Creation",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python app.py
-  python app.py --songs custom_songs.json --embeddings custom_embeddings.npz
-  python app.py -s /path/to/songs.json -e /path/to/embeddings.npz
-        """
-    )
-    
-    # Default paths (relative to the script location)
-    default_songs_file = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_metadata_ready.json'
-    default_embeddings_file = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
-    
-    parser.add_argument(
-        '-s', '--songs',
-        type=str,
-        default=str(default_songs_file),
-        help=f'Path to song profiles JSON file (default: {default_songs_file})'
-    )
-    
-    parser.add_argument(
-        '-e', '--embeddings',
-        type=str,
-        default=str(default_embeddings_file),
-        help=f'Path to embeddings file/directory (supports combined .npz file or directory with separate embedding files) (default: {default_embeddings_file})'
-    )
-    
-    parser.add_argument(
-        '--host',
-        type=str,
-        default='127.0.0.1',
-        help='Host to run the server on (default: 127.0.0.1)'
-    )
-    
-    parser.add_argument(
-        '--port',
-        type=int,
-        default=5000,
-        help='Port to run the server on (default: 5000)'
-    )
-    
-    parser.add_argument(
-        '--debug',
-        action='store_true',
-        help='Run in debug mode'
-    )
-    
-    return parser.parse_args()
+# Initialize OpenAI client
+openai_api_key = os.environ.get("OPENAI_API_KEY")
+if not openai_api_key:
+    logger.warning("OPENAI_API_KEY not set. Text search will be disabled.")
+    openai_client = None
+else:
+    openai_client = OpenAI(api_key=openai_api_key)
 
-# Global variable to store arguments (will be set in main)
-args = None
+# Initialize Mixpanel (optional)
+mp = None
+if os.environ.get("MIXPANEL_TOKEN"):
+    mp = mixpanel.Mixpanel(os.environ["MIXPANEL_TOKEN"])
 
+# Initialize Flask app
 app = Flask(__name__)
-# Use persistent secret key or generate one (sessions reset on app restart with random key)
-app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', os.urandom(24))
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
 app.config['SESSION_FILE_THRESHOLD'] = 500
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', str(uuid.uuid4()))
 Session(app)
 
-# Spotify configuration
-SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
-SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET') 
-SPOTIFY_SCOPES = "streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-modify-public playlist-modify-private user-top-read"
+# Spotify OAuth configuration
+SPOTIFY_CLIENT_ID = os.environ.get('SPOTIFY_CLIENT_ID')
+SPOTIFY_CLIENT_SECRET = os.environ.get('SPOTIFY_CLIENT_SECRET')
 
-# Validate required environment variables
 if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
-    logger.error("Missing required Spotify credentials. Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.")
-    exit(1)
+    logger.warning("Spotify credentials not provided. Spotify features will be disabled.")
 
-# OpenAI configuration
-openai_client = OpenAI()
 
-# Validate OpenAI API key exists
-if not os.getenv('OPENAI_API_KEY'):
-    logger.warning("OPENAI_API_KEY not set. Text-to-song search will not work.")
+class MusicSearchEngine:
+    """Music search engine with personalized ranking."""
+    
+    def __init__(self, songs_file: str, embeddings_file: str, history_path: str = None, artist_embeddings_file: str = None):
+        self.songs_file = songs_file
+        self.embeddings_file = embeddings_file
+        self.history_path = history_path
+        self.artist_embeddings_file = artist_embeddings_file
+        
+        # Data structures
+        self.songs = []
+        self.embeddings_data = None
+        self.embedding_indices = {}
+        self.embedding_lookup = {}  # track_id -> embedding
+        self.fuzzy_search_index = None  # RapidFuzz search index
+        
+        # Artist embeddings
+        self.artist_embeddings_data = None
+        self.artist_embedding_lookup = {}  # artist -> embedding
+        
+        # V2 Ranking engine
+        self.ranking_engine = None
+        self.has_history = False
+        self.history_df = None
+        
+        # Similarity matrices for optimized search
+        self.user_similarity_matrix = None  # For current user-selected embedding type
+        self.artist_similarity_matrix = None  # For artist similarity computations
+        self.user_matrix_embed_type = None  # Track which embedding type user matrix uses
+        self.artist_matrix_embed_type = constants.DEFAULT_ARTIST_MATRIX_EMBED_TYPE  # Default embedding type for artist similarity
+        
+        # Performance optimization mappings
+        self.track_id_to_index = {}  # track_id -> index mapping for O(1) lookups
+        self.artist_to_songs = {}  # artist -> [(track_id, index, song_metadata)] mapping
+        
+        # Tags and genres lookups
+        self.tags_lookup = {}  # track_id -> list of tags
+        self.genres_lookup = {}  # track_id -> list of genres
+        
+        # Load all data
+        self._load_all_data()
+    
+    def _load_all_data(self):
+        """Load songs, embeddings, and initialize ranking engine."""
+        # Load song metadata
+        self.songs = data_utils.load_song_metadata(self.songs_file)
+        
+        # Load embeddings
+        raw_embedding_indices = data_utils.load_embeddings_data(self.embeddings_file)
+        
+        # Reconcile indices
+        self.songs, self.embedding_indices = data_utils.reconcile_song_indices(
+            raw_embedding_indices, self.songs
+        )
+        
+        # Load artist embeddings if provided
+        if self.artist_embeddings_file:
+            self._load_artist_embeddings()
+        
+        # Build embedding lookups for all available embedding types
+        self.embedding_lookups = {}
+        try:
+            from . import constants
+        except ImportError:
+            import constants
+            
+        for embed_type in constants.EMBEDDING_TYPES:
+            try:
+                embedding_lookup = data_utils.build_embedding_lookup(
+                    self.embedding_indices, self.songs, embed_type
+                )
+                if embedding_lookup:  # Only store if non-empty
+                    self.embedding_lookups[embed_type] = embedding_lookup
+                    logger.info(f"Built {embed_type} lookup with {len(embedding_lookup)} songs")
+            except Exception as e:
+                logger.warning(f"Failed to build {embed_type} lookup: {e}")
+        
+        # Fallback to full_profile for compatibility 
+        self.embedding_lookup = self.embedding_lookups.get('full_profile', {})
+        
+        # Build tags and genres lookups from field_values
+        self._build_tags_genres_lookups()
+        
+        # Build performance optimization mappings
+        self._build_performance_mappings()
+        
+        # Build text search index
+        self._build_text_search_index()
+        
+        # Initialize ranking engine
+        self._initialize_ranking_engine()
+        
+        logger.info(f"Loaded {len(self.songs)} songs with embeddings")
+    
+    def _load_artist_embeddings(self):
+        """Load artist embeddings data."""
+        logger.info(f"Loading artist embeddings from: {self.artist_embeddings_file}")
+        try:
+            self.artist_embeddings_data = data_utils.load_artist_embeddings_data(self.artist_embeddings_file)
+            
+            # Build artist embedding lookup for the default embed type
+            embed_type = constants.DEFAULT_ARTIST_EMBED_TYPE
+            if embed_type in self.artist_embeddings_data:
+                artists = self.artist_embeddings_data[embed_type]['artists']
+                embeddings = self.artist_embeddings_data[embed_type]['embeddings']
+                
+                # Validate artist_indices if present
+                if 'artist_indices' in self.artist_embeddings_data[embed_type]:
+                    artist_indices = self.artist_embeddings_data[embed_type]['artist_indices']
+                    if len(artist_indices) != len(embeddings):
+                        logger.warning(f"Artist indices length ({len(artist_indices)}) doesn't match embeddings length ({len(embeddings)})")
+                    if len(artist_indices) != len(artists):
+                        logger.warning(f"Artist indices length ({len(artist_indices)}) doesn't match artists length ({len(artists)})")
+                
+                # Normalize embeddings
+                from sklearn.preprocessing import normalize
+                normalized_embeddings = normalize(embeddings, axis=1)
+                
+                self.artist_embedding_lookup = {
+                    artist: normalized_embeddings[i] 
+                    for i, artist in enumerate(artists)
+                }
+                logger.info(f"Built artist embedding lookup for {len(self.artist_embedding_lookup)} artists using {embed_type}")
+            else:
+                logger.warning(f"Artist embedding type {embed_type} not found in loaded data")
+        except Exception as e:
+            logger.error(f"Failed to load artist embeddings: {e}")
+            self.artist_embeddings_data = None
+            self.artist_embedding_lookup = {}
+    
+    def _build_tags_genres_lookups(self):
+        """Build tags and genres lookups from embedding field_values, supporting linked_from IDs."""
+        logger.info("Building tags and genres lookups...")
+        
+        # Initialize lookups
+        self.tags_lookup = {}  # canonical_track_id -> list of tags
+        self.genres_lookup = {}  # canonical_track_id -> list of genres
+        
+        # Create mapping from embedding track_ids to song metadata for linked_from support
+        embedding_to_song = {}
+        for song in self.songs:
+            canonical_id = song.get('track_id') or song.get('id')
+            if canonical_id:
+                # Map canonical ID
+                embedding_to_song[canonical_id] = song
+                
+                # Map linked_from ID if it exists
+                linked_from = song.get('linked_from')
+                if linked_from and 'id' in linked_from:
+                    linked_from_id = linked_from['id']
+                    embedding_to_song[linked_from_id] = song
+        
+        # Build tags lookup from tags embedding field_values
+        if 'tags' in self.embedding_indices:
+            tags_data = self.embedding_indices['tags']
+            embedding_track_ids = tags_data.get('track_ids', [])
+            field_values = tags_data.get('field_values', [])
+            
+            processed_canonical_ids = set()
+            
+            for i, embedding_track_id in enumerate(embedding_track_ids):
+                if i < len(field_values) and embedding_track_id in embedding_to_song:
+                    tags_string = field_values[i]
+                    if tags_string:
+                        song = embedding_to_song[embedding_track_id]
+                        canonical_id = song.get('track_id') or song.get('id')
+                        
+                        # Only add each unique song once using canonical ID as key
+                        if canonical_id not in processed_canonical_ids:
+                            tags_list = [tag.strip() for tag in tags_string.split(',') if tag.strip()]
+                            self.tags_lookup[canonical_id] = tags_list
+                            processed_canonical_ids.add(canonical_id)
+            
+            logger.info(f"Built tags lookup for {len(self.tags_lookup)} songs")
+        else:
+            logger.warning("No 'tags' embedding data found")
+        
+        # Build genres lookup from genres embedding field_values
+        if 'genres' in self.embedding_indices:
+            genres_data = self.embedding_indices['genres']
+            embedding_track_ids = genres_data.get('track_ids', [])
+            field_values = genres_data.get('field_values', [])
+            
+            processed_canonical_ids = set()
+            
+            for i, embedding_track_id in enumerate(embedding_track_ids):
+                if i < len(field_values) and embedding_track_id in embedding_to_song:
+                    genres_string = field_values[i]
+                    if genres_string:
+                        song = embedding_to_song[embedding_track_id]
+                        canonical_id = song.get('track_id') or song.get('id')
+                        
+                        # Only add each unique song once using canonical ID as key
+                        if canonical_id not in processed_canonical_ids:
+                            genres_list = [genre.strip() for genre in genres_string.split(',') if genre.strip()]
+                            self.genres_lookup[canonical_id] = genres_list
+                            processed_canonical_ids.add(canonical_id)
+            
+            logger.info(f"Built genres lookup for {len(self.genres_lookup)} songs")
+        else:
+            logger.warning("No 'genres' embedding data found")
+    
+    def _build_performance_mappings(self):
+        """Build optimization mappings for fast lookups."""
+        logger.info("Building performance optimization mappings...")
+        
+        # Build track_id to index mapping
+        self.track_id_to_index = {}
+        self.artist_to_songs = {}
+        
+        for i, song in enumerate(self.songs):
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                logger.warning(f"Song at index {i} missing track_id, skipping")
+                continue
+                
+            # Build track_id to index mapping
+            self.track_id_to_index[track_id] = i
+            
+            # Build artist to songs mapping (handle multiple artists)
+            artists = []
+            if song.get('artists'):
+                # New format: multiple artists in array
+                artists = [artist['name'] for artist in song['artists']]
+            elif song.get('original_artist'):
+                # Backwards compatibility: single artist
+                artists = [song['original_artist']]
+            
+            for artist in artists:
+                if artist not in self.artist_to_songs:
+                    self.artist_to_songs[artist] = []
+                self.artist_to_songs[artist].append((track_id, i, song))
+        
+        logger.info(f"Built mappings for {len(self.track_id_to_index)} songs and {len(self.artist_to_songs)} artists")
+    
+    def _build_text_search_index(self):
+        """Build RapidFuzz search index for song/artist/album matching."""
+        self.fuzzy_search_index = data_utils.build_text_search_index(self.songs)
+    
+    def _initialize_ranking_engine(self):
+        """Initialize ranking engine with history if available."""
+        config = ranking.RankingConfig()
+        
+        if self.history_path:
+            # Load and process history
+            self.history_df, success = data_utils.load_and_process_spotify_history(Path(self.history_path))
+            
+            if success and not self.history_df.empty:
+                # Filter to known songs
+                self.history_df = data_utils.filter_history_to_known_songs(self.history_df, self.songs)
+                
+                if len(self.history_df) > 0:
+                    # Initialize ranking engine with history
+                    self.ranking_engine = ranking.initialize_ranking_engine(
+                        self.history_df, self.songs, self.embedding_lookups, config
+                    )
+                    self.has_history = True
+                    logger.info(f"Initialized ranking with {len(self.history_df)} history entries")
+                else:
+                    logger.warning("No history entries match known songs")
+            else:
+                logger.warning("Failed to load history, using prior-only ranking")
+        
+        # Initialize without history if needed
+        if self.ranking_engine is None:
+            self.ranking_engine = ranking.RankingEngine(config)
+            # Even without history, we need track priors for scoring
+            self.ranking_engine.compute_track_priors(self.songs)
+            logger.info("Initialized ranking engine without history, still computed track priors")
+    
+    def get_text_embedding(self, text: str) -> np.ndarray:
+        """Get OpenAI embedding for text query."""
+        return data_utils.get_openai_embedding(text, normalize=True)
+    
+    def get_artist_for_song(self, track_id: str) -> str:
+        """Extract artist name from track_id by looking up song metadata."""
+        song_idx = self.track_id_to_index.get(track_id)
+        if song_idx is not None:
+            song = self.songs[song_idx]
+            if song.get('artists'):
+                # Return primary artist (first in list)
+                return song['artists'][0]['name']
+            elif song.get('original_artist'):
+                return song['original_artist']
+        return ""
+    
+    
+    def _get_embedding_dimension(self) -> int:
+        """Get embedding dimension by checking available embeddings or use default."""        
+        # Try to get dimension from song embeddings
+        if self.embedding_lookups:
+            for _, lookup in self.embedding_lookups.items():
+                if lookup:
+                    first_embedding = next(iter(lookup.values()))
+                    return first_embedding.shape[0]
+        
+        # Default to 3072 for text-embedding-3-large
+        return 3072
+    
+    def _safe_normalize(self, embedding: np.ndarray) -> np.ndarray:
+        """Safely normalize an embedding vector, handling NaN and zero vectors."""
+        # Replace any NaN or inf values with zeros
+        embedding_clean = np.nan_to_num(embedding, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Compute norm
+        norm = np.linalg.norm(embedding_clean)
+        
+        # Handle zero vector case
+        if norm < 1e-12:
+            return embedding_clean  # Return zero vector as-is
+        
+        return embedding_clean / norm
+    
+    def compute_similarity_matrix(self, embed_type: str) -> np.ndarray:
+        """
+        Compute N×N similarity matrix for all songs using specified embedding type.
+        
+        Args:
+            embed_type: Type of embeddings to use ('full_profile', 'tags', etc.)
+            
+        Returns:
+            N×N numpy array where element [i,j] is similarity between song i and song j
+        """
+        if embed_type not in self.embedding_lookups:
+            logger.warning(f"Embedding type '{embed_type}' not available for similarity matrix")
+            return None
+            
+        embedding_lookup = self.embedding_lookups[embed_type]
+        if not embedding_lookup:
+            logger.warning(f"No embeddings found for type '{embed_type}'")
+            return None
+        
+        logger.info(f"Computing {len(self.songs)}×{len(self.songs)} similarity matrix for '{embed_type}' embeddings...")
+        
+        # Create ordered list of embeddings matching song order
+        embeddings_list = []
+        valid_indices = []
+        
+        for i, song in enumerate(self.songs):
+            track_id = song.get('track_id') or song.get('id')
+            if track_id and track_id in embedding_lookup:
+                embeddings_list.append(embedding_lookup[track_id])
+                valid_indices.append(i)
+            else:
+                # Add zero vector for missing embeddings
+                embedding_dim = self._get_embedding_dimension()
+                embeddings_list.append(np.zeros(embedding_dim))
+                valid_indices.append(i)
+        
+        # Convert to matrix: shape (N, embedding_dim)
+        embeddings_matrix = np.array(embeddings_list)
+        
+        # Normalize all embeddings for cosine similarity
+        norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
+        # Avoid division by zero
+        norms = np.where(norms < 1e-12, 1.0, norms)
+        embeddings_matrix_norm = embeddings_matrix / norms
+        
+        # Compute similarity matrix: (N, embedding_dim) @ (embedding_dim, N) = (N, N)
+        similarity_matrix = embeddings_matrix_norm @ embeddings_matrix_norm.T
+        
+        logger.info(f"Completed similarity matrix computation for '{embed_type}' ({similarity_matrix.shape})")
+        return similarity_matrix
+    
+    def get_similarity_matrix(self, embed_type: str, matrix_type: str = 'user') -> np.ndarray:
+        """
+        Get or compute similarity matrix for specified embedding type.
+        
+        Args:
+            embed_type: Embedding type to use
+            matrix_type: 'user' for user matrix, 'artist' for artist matrix
+            
+        Returns:
+            Similarity matrix or None if computation fails
+        """
+        if matrix_type == 'user':
+            # Check if we already have the right user matrix
+            if (self.user_similarity_matrix is not None and 
+                self.user_matrix_embed_type == embed_type):
+                return self.user_similarity_matrix
+            
+            # Compute new user matrix
+            logger.info(f"Computing user similarity matrix for embedding type: {embed_type}")
+            self.user_similarity_matrix = self.compute_similarity_matrix(embed_type)
+            self.user_matrix_embed_type = embed_type
+            return self.user_similarity_matrix
+            
+        elif matrix_type == 'artist':
+            # Check if we already have the right artist matrix
+            if (self.artist_similarity_matrix is not None and 
+                self.artist_matrix_embed_type == embed_type):
+                return self.artist_similarity_matrix
+            
+            # Compute new artist matrix
+            logger.info(f"Computing artist similarity matrix for embedding type: {embed_type}")
+            self.artist_similarity_matrix = self.compute_similarity_matrix(embed_type)
+            self.artist_matrix_embed_type = embed_type
+            return self.artist_similarity_matrix
+        
+        else:
+            raise ValueError(f"Invalid matrix_type: '{matrix_type}'. Must be 'user' or 'artist'")
+    
+    def set_artist_similarity_embed_type(self, embed_type: str) -> bool:
+        """
+        Set the embedding type to use for artist similarity calculations.
+        
+        Args:
+            embed_type: Embedding type to use ('tags', 'tags_genres', 'full_profile', etc.)
+            
+        Returns:
+            True if successfully set, False if embedding type not available
+        """
+        if embed_type not in self.embedding_lookups:
+            logger.warning(f"Embedding type '{embed_type}' not available for artist similarity")
+            return False
+        
+        if embed_type != self.artist_matrix_embed_type:
+            logger.info(f"Changing artist similarity embedding type from '{self.artist_matrix_embed_type}' to '{embed_type}'")
+            self.artist_matrix_embed_type = embed_type
+            # Clear existing artist matrix to force recomputation
+            self.artist_similarity_matrix = None
+        
+        return True
+    
+    def ensure_artist_similarity_matrix(self) -> bool:
+        """
+        Ensure artist similarity matrix is computed for current embed type.
+        
+        Returns:
+            True if matrix is available, False if computation failed
+        """
+        if self.artist_similarity_matrix is None:
+            logger.info(f"Initializing artist similarity matrix with '{self.artist_matrix_embed_type}' embeddings")
+            self.artist_similarity_matrix = self.compute_similarity_matrix(self.artist_matrix_embed_type)
+            return self.artist_similarity_matrix is not None
+        return True
+    
+    def compute_artist_similarity_v2(self, query_track_id: str, candidate_track_id: str, 
+                                   query_embedding: np.ndarray = None) -> Tuple[float, float]:
+        """
+        Compute artist similarity using score-then-average approach (V2) - OPTIMIZED.
+        
+        Args:
+            query_track_id: track_id for query song (for song-to-song search)
+            candidate_track_id: track_id for candidate song
+            query_embedding: Normalized query embedding (for text-to-song search)
+            
+        Returns:
+            Tuple of (popularity_similarity, personal_similarity)
+        """
+        # Ensure artist similarity matrix is available
+        if not self.ensure_artist_similarity_matrix():
+            logger.warning("Artist similarity matrix not available, falling back to zero similarities")
+            return 0.0, 0.0
+        
+        # Get candidate artist from track_id
+        candidate_artist = self.get_artist_for_song(candidate_track_id)
+        if not candidate_artist:
+            return 0.0, 0.0
+        
+        # Use optimized artist-to-songs mapping for O(1) lookup
+        if candidate_artist not in self.artist_to_songs:
+            return 0.0, 0.0
+        
+        artist_songs_data = self.artist_to_songs[candidate_artist]
+        
+        # Get query song index for song-to-song searches (O(1) lookup)
+        query_idx = None
+        if query_track_id is not None:
+            query_idx = self.track_id_to_index.get(query_track_id)
+            if query_idx is None:
+                logger.warning(f"Query track_id {query_track_id} not found in index")
+                return 0.0, 0.0
+        
+        # Compute individual similarities for each song by the candidate artist
+        similarities = []
+        popularity_weights = []
+        personal_weights = []
+        
+        # Pre-fetch embedding lookup for text-to-song searches
+        embedding_lookup = None
+        if query_track_id is None and self.artist_matrix_embed_type in self.embedding_lookups:
+            embedding_lookup = self.embedding_lookups[self.artist_matrix_embed_type]
+        
+        for track_id, song_idx, song_metadata in artist_songs_data:
+            # Get similarity score
+            if query_track_id is not None:
+                # Song-to-song search: use precomputed matrix (O(1) lookup)
+                similarity = self.artist_similarity_matrix[query_idx, song_idx]
+            else:
+                # Text-to-song search: compute against query embedding
+                if embedding_lookup and track_id in embedding_lookup:
+                    candidate_embedding = embedding_lookup[track_id]
+                    candidate_norm = self._safe_normalize(candidate_embedding)
+                    similarity = np.dot(query_embedding, candidate_norm)
+                else:
+                    similarity = 0.0
+            
+            # normalize simlarity to [0, 1]
+            similarity = np.clip((similarity + 1) / 2, 0, 1)
+            similarities.append(similarity)
+            
+            # Get popularity weight from stream-based S_total score
+            popularity_weight = 0.0
+            if (hasattr(self.ranking_engine, 'track_priors') and 
+                self.ranking_engine.track_priors and 
+                track_id in self.ranking_engine.track_priors):
+                track_priors = self.ranking_engine.track_priors[track_id]
+                if 'S_total' in track_priors:
+                    popularity_weight = track_priors['S_total']  # Already normalized to [0,1]
+            
+            popularity_weights.append(popularity_weight)
+            
+            # Get personal weight (R_t_s)
+            personal_weight = 0.0
+            if (hasattr(self.ranking_engine, 'track_stats') and 
+                self.ranking_engine.track_stats and 
+                track_id in self.ranking_engine.track_stats):
+                track_data = self.ranking_engine.track_stats[track_id]
+                if 'R_t' in track_data:
+                    personal_weight = np.clip(track_data['R_t'], 0, 1)
+            
+            personal_weights.append(personal_weight)
+        
+        # Handle empty similarities list
+        if not similarities:
+            return 0.0, 0.0
+        
+        # Compute weighted averages of similarity scores
+        similarities = np.array(similarities)
+        popularity_weights = np.array(popularity_weights)
+        personal_weights = np.array(personal_weights)
+        
+        # Popularity-weighted average
+        pop_total_weight = np.sum(popularity_weights)
+        if pop_total_weight > 1e-12:  # More robust zero check
+            artist_pop_similarity = np.average(similarities, weights=popularity_weights)
+        else:
+            artist_pop_similarity = np.mean(similarities)
+        
+        # Personal-weighted average
+        personal_total_weight = np.sum(personal_weights)
+        if personal_total_weight > 1e-12:  # More robust zero check
+            artist_personal_similarity = np.average(similarities, weights=personal_weights)
+        else:
+            # Fallback to unweighted average if no personal listening data
+            artist_personal_similarity = np.mean(similarities)
+        
+        return float(artist_pop_similarity), float(artist_personal_similarity)
+    
+    def get_song_embedding(self, song_idx: int, embed_type: str = 'full_profile') -> np.ndarray:
+        """
+        Get embedding for a specific song by index.
+        
+        Args:
+            song_idx: Index of the song in self.songs
+            embed_type: Type of embedding to retrieve
+            
+        Returns:
+            Song embedding as numpy array
+            
+        Raises:
+            IndexError: If song_idx is out of range
+            ValueError: If embed_type is not available
+            KeyError: If song has no embedding of the specified type
+        """
+        if song_idx >= len(self.songs) or song_idx < 0:
+            raise IndexError(f"Song index {song_idx} out of range (0-{len(self.songs)-1})")
+        
+        if embed_type not in self.embedding_lookups:
+            available_types = list(self.embedding_lookups.keys())
+            raise ValueError(f"Embedding type '{embed_type}' not available. Available types: {available_types}")
+        
+        song = self.songs[song_idx]
+        track_id = song.get('track_id') or song.get('id')
+        if not track_id:
+            raise KeyError(f"Song at index {song_idx} missing track_id")
+        
+        embedding_lookup = self.embedding_lookups[embed_type]
+        if track_id not in embedding_lookup:
+            raise KeyError(f"No '{embed_type}' embedding for track_id: {track_id}")
+        
+        return embedding_lookup[track_id]
+    
+    def compute_artist_similarity(self, query_artist_or_text: str, candidate_artist: str, is_text_query: bool = False) -> float:
+        """
+        Compute artist-artist similarity.
+        
+        Args:
+            query_artist_or_text: Artist name (song-to-song) or text query (text-to-song search)
+            candidate_artist: Candidate song's artist
+            is_text_query: True for text-to-song search, False for song-to-song search
+            
+        Returns:
+            Cosine similarity score [0, 1] or 0.0 if embeddings not available
+        """
+        if not self.artist_embedding_lookup:
+            return 0.0
+        
+        # Get candidate artist embedding
+        if candidate_artist not in self.artist_embedding_lookup:
+            return 0.0
+        
+        candidate_embedding = self.artist_embedding_lookup[candidate_artist]
+        
+        if is_text_query:
+            # Text-to-song: embed the text query and compare with artist
+            if not openai_client:
+                return 0.0
+            try:
+                response = openai_client.embeddings.create(
+                    model=constants.OPENAI_EMBEDDING_MODEL,
+                    input=query_artist_or_text
+                )
+                query_embedding = np.array(response.data[0].embedding)
+                # Normalize query embedding
+                from sklearn.preprocessing import normalize
+                query_embedding = normalize(query_embedding.reshape(1, -1), axis=1)[0]
+            except Exception as e:
+                logger.warning(f"Failed to create embedding for text query: {e}")
+                return 0.0
+        else:
+            # Song-to-song: get query artist embedding
+            if query_artist_or_text not in self.artist_embedding_lookup:
+                return 0.0
+            query_embedding = self.artist_embedding_lookup[query_artist_or_text]
+        
+        # Compute cosine similarity
+        similarity = np.dot(query_embedding, candidate_embedding)
+        return float(np.clip(similarity, 0, 1))
+    
+    def compute_artist_similarity_with_embedding(self, query_embedding: np.ndarray, candidate_artist: str) -> float:
+        """
+        Compute artist-artist similarity using pre-computed query embedding.
+        
+        Args:
+            query_embedding: Pre-computed normalized query embedding
+            candidate_artist: Candidate song's artist
+            
+        Returns:
+            Cosine similarity score [0, 1] or 0.0 if artist embedding not available
+        """
+        if not self.artist_embedding_lookup:
+            return 0.0
+        
+        # Get candidate artist embedding
+        if candidate_artist not in self.artist_embedding_lookup:
+            return 0.0
+        
+        candidate_embedding = self.artist_embedding_lookup[candidate_artist]
+        
+        # Compute cosine similarity
+        similarity = np.dot(query_embedding, candidate_embedding)
+        return float(np.clip(similarity, 0, 1))
+    
+    def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
+                         embed_type: str = 'full_profile', lambda_val: float = 0.5,
+                         familiarity_min: float = 0.0, familiarity_max: float = 1.0,
+                         query_track_id: str = None, 
+                         genre_query_embedding: np.ndarray = None,
+                         query_text: str = None,
+                         **advanced_params) -> Tuple[List[Dict], int]:
+        """
+        Perform V2.6 similarity search with personalized ranking and multi-dimensional similarity.
+        
+        Args:
+            query_embedding: Normalized query embedding
+            k: Number of results to return
+            offset: Pagination offset
+            embed_type: Type of embeddings to use for similarity ('full_profile', 'sound_aspect', etc.)
+            lambda_val: Weight for semantic vs personal utility (0=personal, 1=semantic)
+            familiarity_min: Minimum familiarity score to include (0.0-1.0)
+            familiarity_max: Maximum familiarity score to include (0.0-1.0)
+            query_track_id: If provided, enables song-to-song search with artist similarities
+            genre_query_embedding: Optional genre query embedding for dual similarity scoring
+            query_text: Original text query for text-to-song artist similarity (optional)
+        
+        Returns:
+            Tuple of (results, total_count)
+        """
+        # Update lambda_val in config for scoring
+        self.ranking_engine.config.lambda_val = lambda_val
+        logger.info(f"🔧 Updated lambda_val in ranking config: {lambda_val}")
+        
+        # Update advanced parameters if provided
+        if advanced_params:
+            logger.info(f"🔧 Updating ranking config with advanced params: {advanced_params}")
+            
+            # Update configuration
+            self.ranking_engine.config.update_weights(advanced_params)
+            logger.info(f"🔧 Updated H_c in config: {self.ranking_engine.config.H_c}")
+            
+            # Check if any critical parameters that require re-initialization have changed
+            critical_params = ['H_c', 'H_E', 'knn_embed_type', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 
+                             'K_s', 'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 
+                             'psi', 'k_neighbors', 'sigma', 'theta_c', 'tau_c', 
+                             'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min', 'C_fam', 'min_plays', 'beta_genre', 'beta_streams_total', 'beta_streams_daily']
+            needs_reinit = any(param in advanced_params for param in critical_params)
+            
+            if needs_reinit:
+                logger.info("🔧 Parameters requiring re-initialization changed, rebuilding ranking engine...")
+                self.ranking_engine.reinitialize_with_new_config(
+                    self.history_df,
+                    self.songs, 
+                    self.embedding_lookups
+                )
+            else:
+                logger.info("🔧 Only minor parameters changed, no re-initialization needed")
+        else:
+            logger.info("🔧 No advanced parameters provided")
+        
+        # Get the appropriate embedding lookup for the specified type
+        if embed_type not in self.embedding_lookups:
+            logger.warning(f"Embedding type {embed_type} not available, falling back to full_profile")
+            embed_type = 'full_profile'
+        
+        embedding_lookup = self.embedding_lookups.get(embed_type, {})
+        if not embedding_lookup:
+            logger.error(f"No embeddings available for type {embed_type}")
+            return [], 0
+        
+        # V2.6: Compute candidates and their priors for quantile normalization
+        candidates_data = []
+        
+        # Try to use precomputed similarity matrix for song-to-song searches
+        use_precomputed_matrix = False
+        query_song_idx = None
+        user_matrix = None
+        
+        if query_track_id is not None:
+            # Song-to-song search: try to use precomputed matrix
+            user_matrix = self.get_similarity_matrix(embed_type, 'user')
+            if user_matrix is not None:
+                # Find query song index using track_id
+                query_song_idx = self.track_id_to_index.get(query_track_id)
+                
+                if query_song_idx is not None:
+                    use_precomputed_matrix = True
+                    logger.debug(f"Using precomputed similarity matrix for song-to-song search")
+        
+        for i, song in enumerate(self.songs):
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                continue  # Skip songs without track_id
+            
+            # Compute semantic similarity
+            if use_precomputed_matrix:
+                # Use precomputed matrix for song-to-song search
+                semantic_similarity = user_matrix[query_song_idx, i]
+            else:
+                # Use direct embedding computation
+                if track_id in embedding_lookup:
+                    song_embedding = embedding_lookup[track_id]
+                    semantic_similarity = np.dot(query_embedding, song_embedding)
+                else:
+                    # No embedding available for this type, skip
+                    continue
+            
+            # normalize semantic similarity to [0, 1]
+            semantic_similarity = np.clip((semantic_similarity + 1) / 2, 0, 1)
+            
+            candidates_data.append({
+                'song_idx': i,
+                'track_id': track_id,
+                'song': song,
+                'semantic_similarity': semantic_similarity,
+            })
+        
+        if not candidates_data:
+            return [], 0
+        
+        
+        # Pre-compute query embedding for text-to-song artist similarity (to avoid repeated API calls)
+        query_artist_embedding = None
+        if query_text is not None and self.artist_embedding_lookup:
+            try:
+                query_artist_embedding = self.get_text_embedding(query_text)
+            except Exception as e:
+                logger.warning(f"Failed to compute query embedding for artist similarity: {e}")
+        
+        # Compute V2.6 final scores with familiarity filtering
+        candidate_scores = []
+        
+        for candidate in candidates_data:
+            # Compute artist similarities for multi-dimensional search
+            artist_pop_similarity = 0.0
+            artist_personal_similarity = 0.0
+            
+            try:
+                # Use V2 score-then-average artist similarity method
+                artist_pop_similarity, artist_personal_similarity = self.compute_artist_similarity_v2(
+                    query_track_id, candidate['track_id'], query_embedding
+                )
+                
+            except Exception as e:
+                logger.warning(f"Error computing V2 artist similarities for {candidate['track_id']}: {e}")
+                # Keep default values of 0.0 for both similarities
+            
+            # Compute genre similarity if genre query embedding is provided
+            genre_similarity = None
+            if genre_query_embedding is not None:
+                try:
+                    # Get genre embedding for the candidate song
+                    if 'genres' in self.embedding_lookups and candidate['track_id'] in self.embedding_lookups['genres']:
+                        candidate_genre_embedding = self.embedding_lookups['genres'][candidate['track_id']]
+                        candidate_genre_norm = self._safe_normalize(candidate_genre_embedding)
+                        genre_query_norm = self._safe_normalize(genre_query_embedding)
+                        genre_similarity = np.dot(genre_query_norm, candidate_genre_norm)
+                        # Normalize to [0, 1] range
+                        genre_similarity = np.clip((genre_similarity + 1) / 2, 0, 1)
+                    else:
+                        # No genre embedding available for this song
+                        genre_similarity = 0.0
+                except Exception as e:
+                    logger.warning(f"Error computing genre similarity for {candidate['track_id']}: {e}")
+                    genre_similarity = 0.0
+            
+            # Compute artist-artist similarity
+            artist_similarity = 0.0
+            if query_track_id is not None:
+                # Song-to-song search: compare query artist with candidate artist
+                query_artist = self.get_artist_for_song(query_track_id)
+                candidate_artist = self.get_artist_for_song(candidate['track_id'])
+                artist_similarity = self.compute_artist_similarity(query_artist, candidate_artist, is_text_query=False)
+            elif query_text is not None and query_artist_embedding is not None:
+                # Text-to-song search: use pre-computed query embedding to avoid repeated API calls
+                candidate_artist = self.get_artist_for_song(candidate['track_id'])
+                artist_similarity = self.compute_artist_similarity_with_embedding(query_artist_embedding, candidate_artist)
+            
+            final_score, components = self.ranking_engine.compute_v25_final_score(
+                candidate['semantic_similarity'], 
+                candidate['track_id'],
+                artist_pop_similarity,
+                artist_personal_similarity,
+                genre_similarity,
+                artist_similarity
+            )
+            
+            # Get familiarity score for filtering
+            if candidate['track_id'] in self.ranking_engine.track_priors:
+                fam_t = self.ranking_engine.track_priors[candidate['track_id']]['Fam_t']
+            else:
+                # If no history, use a default low familiarity
+                fam_t = 0.0
+            
+            # Apply familiarity filtering
+            if familiarity_min <= fam_t <= familiarity_max:
+                candidate_scores.append({
+                    'song_idx': candidate['song_idx'],
+                    'track_id': candidate['track_id'],
+                    'final_score': final_score,
+                    'semantic_similarity': candidate['semantic_similarity'],
+                    'familiarity': fam_t,
+                    **components  # Include all component scores for debugging
+                })
+        
+        # Sort by final score
+        candidate_scores.sort(key=lambda x: x['final_score'], reverse=True)
+        total_count = len(candidate_scores)
+        
+        # Apply pagination
+        start_idx = offset
+        end_idx = offset + k
+        paginated_results = candidate_scores[start_idx:end_idx]
+        
+        # Convert to V2.6 result format
+        results = []
+        for result in paginated_results:
+            song_idx = result['song_idx']
+            song = self.songs[song_idx]
+            track_id = result['track_id']
+            
+            # Extract metadata from new Spotify structure
+            artists_list = song.get('artists', [])
+            primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+            all_artists = [artist['name'] for artist in artists_list] if artists_list else [primary_artist]
+            
+            # Get album cover - use 64x64 image (last in array)
+            album_images = song.get('album', {}).get('images', [])
+            cover_url = album_images[-1]['url'] if album_images else ''
+            
+            # Build result dict with V2.6 structure
+            result_dict = {
+                'song_idx': song_idx,
+                'song': song.get('name', song.get('original_song', '')),
+                'artist': primary_artist,
+                'all_artists': all_artists,  # New: support for multiple artists
+                'cover_url': cover_url,
+                'album': song.get('album', {}).get('name', 'Unknown Album'),
+                'spotify_id': track_id,  # Use track_id directly
+                'duration_ms': song.get('duration_ms', 0),  # New: duration in milliseconds
+                'field_value': self._get_field_value(track_id, embed_type),
+                'genres': self.genres_lookup.get(track_id, []),
+                'tags': self.tags_lookup.get(track_id, []),
+                'final_score': result['final_score'],
+                'scoring_components': result  # Include all V2.6 components
+            }
+            
+            # Add has_history flag for compatibility
+            result_dict['scoring_components']['has_history'] = track_id in (
+                self.ranking_engine.track_stats if self.ranking_engine.track_stats else {}
+            )
+            
+            results.append(result_dict)
+        
+        return results, total_count
+    
+    def _get_field_value(self, track_id: str, embed_type: str) -> str:
+        """Get field value for a track_id and embedding type."""
+        try:
+            if embed_type in self.embedding_indices:
+                indices = self.embedding_indices[embed_type]
+                
+                # Find the track_id in the embedding data
+                track_ids = indices.get('track_ids', [])
+                for i, tid in enumerate(track_ids):
+                    if tid == track_id:
+                        if 'field_values' in indices and i < len(indices['field_values']):
+                            return str(indices['field_values'][i])
+                        break
+            
+            # Fallback based on embedding type
+            if embed_type == 'full_profile':
+                return 'Full profile'
+            elif embed_type in ['sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']:
+                return embed_type.replace('_', ' ').title()
+            else:
+                return 'N/A'
+        except Exception as e:
+            logger.debug(f"Error getting field value for {track_id}, {embed_type}: {e}")
+            return 'N/A'
+    
+    def search_songs_by_text(self, query: str, limit: int = 10) -> List[Tuple[int, float, str]]:
+        """Search for songs using RapidFuzz fuzzy matching (for song-to-song search suggestions)."""
+        if not query or not self.fuzzy_search_index:
+            return []
+        
+        return data_utils.search_songs_by_text(
+            query, self.fuzzy_search_index, self.songs, limit
+        )
+    
+    def get_ranking_weights(self) -> Dict:
+        """Get current V2.6 ranking weights for display."""
+        config = self.ranking_engine.config
+        weights = config.to_dict()
+        weights.update({
+            'version': '2.6',
+            'has_history': self.has_history,
+            'history_songs_count': len(self.ranking_engine.track_stats) if self.ranking_engine.track_stats else 0,
+            'artist_similarity_embed_type': self.artist_matrix_embed_type,
+            'user_matrix_embed_type': self.user_matrix_embed_type,
+            'has_artist_matrix': self.artist_similarity_matrix is not None,
+            'has_user_matrix': self.user_similarity_matrix is not None
+        })
+        return weights
 
-# Mixpanel configuration
-MIXPANEL_TOKEN = os.getenv('MIXPANEL_TOKEN')
-if not MIXPANEL_TOKEN:
-    logger.warning("MIXPANEL_TOKEN not set. Analytics tracking will be disabled.")
-    mp = None
-else:
-    mp = mixpanel.Mixpanel(MIXPANEL_TOKEN)
 
-# Helper functions for tracking
+# Initialize search engine
+search_engine = None
+
+def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None):
+    """Initialize the search engine with data files."""
+    global search_engine
+    if search_engine is None:
+        # Use provided file paths or fall back to parsed arguments or defaults
+        if songs_file and embeddings_file:
+            songs_path = songs_file
+            embeddings_path = embeddings_file
+            history_path_arg = history_path
+            artist_embeddings_path = artist_embeddings_file
+        elif 'args' in globals() and args:
+            songs_path = songs_file or args.songs
+            embeddings_path = embeddings_file or args.embeddings
+            history_path_arg = history_path or args.history
+            artist_embeddings_path = artist_embeddings_file or getattr(args, 'artist_embeddings', constants.DEFAULT_ARTIST_EMBEDDINGS_PATH)
+        else:
+            # Fallback defaults
+            default_songs = Path(__file__).parent.parent / constants.DEFAULT_SONGS_FILE
+            default_embeddings = Path(__file__).parent.parent / constants.DEFAULT_EMBEDDINGS_PATH
+            default_artist_embeddings = (Path(__file__).parent.parent / constants.DEFAULT_ARTIST_EMBEDDINGS_PATH) if constants.DEFAULT_ARTIST_EMBEDDINGS_PATH else None
+            songs_path = songs_file or str(default_songs)
+            embeddings_path = embeddings_file or str(default_embeddings)
+            history_path_arg = history_path
+            artist_embeddings_path = artist_embeddings_file or (str(default_artist_embeddings) if default_artist_embeddings else None)
+        
+        # Validate that files exist
+        if not Path(songs_path).exists():
+            logger.error(f"Songs file not found: {songs_path}")
+            raise FileNotFoundError(f"Songs file not found: {songs_path}")
+        
+        # For embeddings, validate based on format (file vs directory/base path)
+        embeddings_path_obj = Path(embeddings_path)
+        if embeddings_path_obj.is_file():
+            # Old combined format - file must exist
+            if not embeddings_path_obj.exists():
+                logger.error(f"Embeddings file not found: {embeddings_path}")
+                raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
+        else:
+            # New separate format - directory or parent directory should exist
+            if embeddings_path_obj.is_dir():
+                # Path is a directory - it exists, validation will happen in _load_embeddings_data
+                pass
+            elif embeddings_path_obj.parent.exists():
+                # Path is a base name - parent directory exists, validation will happen in _load_embeddings_data
+                pass
+            else:
+                logger.error(f"Embeddings path not found: {embeddings_path}")
+                raise FileNotFoundError(f"Embeddings path not found: {embeddings_path}")
+        
+        # Validate history path if provided
+        if history_path_arg:
+            history_path_obj = Path(history_path_arg)
+            if not history_path_obj.exists():
+                logger.warning(f"History path does not exist: {history_path_arg}")
+                history_path_arg = None
+            elif not history_path_obj.is_dir():
+                logger.warning(f"History path is not a directory: {history_path_arg}")
+                history_path_arg = None
+        
+        logger.info(f"Initializing search engine with:")
+        logger.info(f"  Songs file: {songs_path}")
+        logger.info(f"  Embeddings file: {embeddings_path}")
+        if history_path_arg:
+            logger.info(f"  History path: {history_path_arg} (personalized ranking enabled)")
+        else:
+            logger.info(f"  History path: None (using semantic similarity only)")
+        if artist_embeddings_path and Path(artist_embeddings_path).exists():
+            logger.info(f"  Artist embeddings: {artist_embeddings_path}")
+        else:
+            logger.info(f"  Artist embeddings: None (artist similarity disabled)")
+            artist_embeddings_path = None  # Don't pass invalid path to search engine
+        
+        # Create search engine
+        search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg, artist_embeddings_path)
+
+
+# Flask routes (keep most of the existing routes, update search endpoint)
+@app.route('/')
+def index():
+    """Main page."""
+    init_search_engine()
+    
+    # Set session start time if not already set
+    if 'session_start' not in session:
+        session['session_start'] = datetime.now().isoformat()
+        
+        # Track page load
+        track_event('Page Loaded', {
+            'page_title': 'SongMatch',
+            'is_new_session': True
+        })
+    
+    # Pass debug flag and default config values to template  
+    debug_mode = getattr(args, 'debug', False) if 'args' in globals() and args else False
+    default_config = ranking.RankingConfig()
+    return render_template('index.html', debug_mode=debug_mode, default_config=default_config)
+
+@app.route('/api/search', methods=['POST'])
+def search():
+    """Main search endpoint with personalized ranking."""
+    if search_engine is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+    
+    start_time = datetime.now()
+    
+    try:
+        data = request.get_json()
+        query_text = data.get('query', '').strip()
+        search_type = data.get('search_type', data.get('type', 'text'))  # Accept both for compatibility
+        embed_type = data.get('embed_type', 'full_profile')  # Add embedding type parameter
+        limit = int(data.get('k', data.get('limit', 20)))  # Accept both 'k' and 'limit'
+        offset = int(data.get('offset', 0))
+        song_idx = data.get('song_idx')
+        
+        # Personalization parameters
+        lambda_val = float(data.get('lambda_val', 0.5))  # Semantic vs personal weight
+        lambda_val = np.clip(lambda_val, 0.0, 1.0)  # Ensure valid range
+        familiarity_min = float(data.get('familiarity_min', 0.0))  # Min familiarity
+        familiarity_max = float(data.get('familiarity_max', 1.0))  # Max familiarity
+        familiarity_min = np.clip(familiarity_min, 0.0, 1.0)
+        familiarity_max = np.clip(familiarity_max, 0.0, 1.0)
+        
+        # Ensure min <= max
+        if familiarity_min > familiarity_max:
+            familiarity_min, familiarity_max = familiarity_max, familiarity_min
+        
+        # Extract advanced ranking parameters
+        advanced_params = {}
+        # List of valid advanced parameter names (matching RankingConfig)
+        valid_advanced_params = {
+            'H_c', 'H_E', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 'K_s',
+            'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
+            'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
+            'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_streams_total', 'beta_streams_daily'
+        }
+        
+        for param_name in valid_advanced_params:
+            if param_name in data:
+                advanced_params[param_name] = data[param_name]
+        
+        logger.info(f"🔧 Advanced parameters received: {advanced_params}")
+        logger.info(f"🔧 Lambda value: {lambda_val}")
+        logger.info(f"🔧 Familiarity range: [{familiarity_min}, {familiarity_max}]")
+        
+        # Validate pagination parameters
+        if limit <= 0 or limit > 100:  # Reasonable limits
+            return jsonify({'error': 'limit must be between 1 and 100'}), 400
+        if offset < 0:
+            return jsonify({'error': 'offset must be non-negative'}), 400
+        
+        if not query_text and search_type == 'text':
+            return jsonify({'error': 'Query text is required'}), 400
+        
+        if search_type == 'text':
+            # Text-to-song search
+            query_embedding = search_engine.get_text_embedding(query_text)
+            
+            # Use the same query embedding for genre similarity scoring (no need for separate API call)
+            genre_query_embedding = query_embedding
+                
+            results, total_count = search_engine.similarity_search(
+                query_embedding, k=limit, offset=offset, embed_type=embed_type,
+                lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                genre_query_embedding=genre_query_embedding,
+                query_text=query_text,
+                **advanced_params
+            )
+        
+        elif search_type == 'song':
+            # Song-to-song search
+            if song_idx is None:
+                return jsonify({'error': 'song_idx is required for song search'}), 400
+            
+            if song_idx >= len(search_engine.songs):
+                return jsonify({'error': 'Invalid song_idx'}), 400
+            
+            reference_song = search_engine.songs[song_idx]
+            track_id = reference_song.get('track_id') or reference_song.get('id')
+            
+            if not track_id:
+                return jsonify({'error': 'Reference song missing track_id'}), 400
+            
+            # Get embedding for the specified type
+            embedding_lookup = search_engine.embedding_lookups.get(embed_type, {})
+            if track_id in embedding_lookup:
+                query_embedding = embedding_lookup[track_id]
+                
+                # Get genre embedding for the reference song (for genre similarity)
+                genre_query_embedding = None
+                if 'genres' in search_engine.embedding_lookups and track_id in search_engine.embedding_lookups['genres']:
+                    genre_query_embedding = search_engine.embedding_lookups['genres'][track_id]
+                
+                results, total_count = search_engine.similarity_search(
+                    query_embedding, k=limit, offset=offset, embed_type=embed_type,
+                    lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                    query_track_id=track_id,  # Enable song-to-song artist similarities
+                    genre_query_embedding=genre_query_embedding,
+                    **advanced_params
+                )
+            else:
+                return jsonify({'error': f'No {embed_type} embedding available for reference song'}), 400
+        
+        else:
+            return jsonify({'error': 'Invalid search type'}), 400
+        
+        # Calculate search performance
+        search_duration = (datetime.now() - start_time).total_seconds()
+        
+        # Track successful search with enhanced context
+        search_properties = {
+            'search_type': search_type,
+            'embed_type': embed_type,
+            'results_returned': total_count,
+            'results_requested': limit,
+            'search_offset': offset,
+            'search_duration_seconds': round(search_duration, 3),
+            'is_paginated_search': offset > 0,
+            'returned_count': len(results),
+            'lambda_val': lambda_val,
+            'familiarity_min': familiarity_min,
+            'familiarity_max': familiarity_max
+        }
+        
+        # Add query-specific information
+        if search_type == 'text' and query_text:
+            search_properties.update({
+                'query': query_text[:200],  # Limit query length for storage
+                'query_length': len(query_text)
+            })
+        elif search_type == 'song' and song_idx is not None:
+            # Get song details for better tracking
+            try:
+                song = search_engine.songs[song_idx]
+                search_properties.update({
+                    'query_song_idx': song_idx,
+                    'query_song_name': song['original_song'][:100],  # Limit length
+                    'query_artist_name': song['original_artist'][:100]  # Limit length
+                })
+            except (IndexError, KeyError):
+                search_properties['query_song_idx'] = song_idx
+        
+        track_event('Search Performed', search_properties)
+        
+        return jsonify({
+            'results': results,
+            'search_type': search_type,
+            'embed_type': embed_type,
+            'query': query_text,
+            'ranking_weights': search_engine.get_ranking_weights(),
+            'pagination': {
+                'offset': offset,
+                'limit': limit,
+                'total_count': total_count,
+                'has_more': offset + limit < total_count,
+                'returned_count': len(results)
+            }
+        })
+    
+    except Exception as e:
+        # Track search errors
+        search_duration = (datetime.now() - start_time).total_seconds()
+        track_event('Search Error', {
+            'search_type': search_type if 'search_type' in locals() else 'unknown',
+            'embed_type': embed_type if 'embed_type' in locals() else 'unknown',
+            'query_length': len(query_text) if 'query_text' in locals() and query_text else 0,
+            'error_message': str(e)[:200],
+            'search_duration_seconds': round(search_duration, 3)
+        })
+        logger.error(f"Search error: {e}")
+        return jsonify({'error': 'Search failed'}), 500
+
+@app.route('/api/ranking_weights', methods=['GET'])
+def get_ranking_weights():
+    """Get current ranking weights and configuration."""
+    if search_engine is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+    
+    try:
+        weights = search_engine.get_ranking_weights()
+        return jsonify(weights)
+    except Exception as e:
+        logger.error(f"Failed to get ranking weights: {e}")
+        return jsonify({'error': 'Failed to retrieve ranking weights'}), 500
+
+@app.route('/api/ranking_weights', methods=['PUT'])
+def update_ranking_weights():
+    """Update ranking weights."""
+    if search_engine is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Update the ranking engine config
+        search_engine.ranking_engine.config.update_weights(data)
+        
+        logger.info(f"Updated ranking weights: {data}")
+        
+        # Return the updated weights
+        weights = search_engine.get_ranking_weights()
+        return jsonify(weights)
+    
+    except Exception as e:
+        logger.error(f"Failed to update ranking weights: {e}")
+        return jsonify({'error': 'Failed to update ranking weights'}), 500
+
+# Helper functions for routes
+
 def get_or_create_user_id():
     """Get existing user ID or create a new one."""
     if 'user_id' not in session:
@@ -166,498 +1377,15 @@ def track_event(event_name, properties=None):
     except Exception as e:
         logger.error(f"Error tracking event {event_name}: {e}")
 
-class MusicSearchEngine:
-    """Core search engine for semantic music search."""
-    
-    def __init__(self, songs_file: str, embeddings_file: str):
-        self.songs_file = songs_file
-        self.embeddings_file = embeddings_file
-        self.songs = []
-        self.embeddings_data = None
-        self.song_lookup = {}
-        self.embedding_indices = {}
-        self.tfidf_vectorizer = None
-        self.tfidf_matrix = None
-        
-        self._load_data()
-        self._build_indices()
-        self._build_text_search_index()
-    
-    def _load_data(self):
-        """Load song profiles and embeddings."""
-        logger.info("Loading song profiles...")
-        with open(self.songs_file, 'r') as f:
-            self.songs = json.load(f)
-        
-        # Create lookup for quick access
-        for i, song in enumerate(self.songs):
-            song_key = (song['original_song'], song['original_artist'])
-            self.song_lookup[song_key] = i
-        
-        logger.info(f"Loaded {len(self.songs)} songs")
-        
-        # Load embeddings (support both old combined and new separate formats)
-        self.embeddings_data = self._load_embeddings_data()
-    
-    def _load_embeddings_data(self):
-        """Load embeddings data from either combined file or separate files by type."""
-        embeddings_path = Path(self.embeddings_file)
-        
-        # Check if it's a single combined file (old format)
-        if embeddings_path.is_file() and embeddings_path.suffix == '.npz':
-            logger.info(f"Loading embeddings from combined file: {embeddings_path}")
-            data = np.load(self.embeddings_file, allow_pickle=True)
-            logger.info(f"Loaded {len(data['embeddings'])} embeddings")
-            
-            # Check if field_values exists (for backwards compatibility)
-            if 'field_values' not in data:
-                logger.warning("Embeddings file does not contain field_values - accordion functionality will be disabled")
-                # Create placeholder field_values array
-                data = dict(data)  # Convert to regular dict for modification
-                data['field_values'] = np.array(['N/A'] * len(data['embeddings']), dtype=object)
-            
-            # CRITICAL: Also reconcile indices for old combined format
-            logger.info("Reconciling song indices between combined embeddings and JSON song list...")
-            data = dict(data)  # Ensure we can modify
-            
-            (reconciled_indices, valid_mask) = self._reconcile_song_indices(
-                data['song_indices'], data['songs'], data['artists']
-            )
-            
-            # Filter all arrays to keep only valid embeddings
-            if valid_mask is not None:
-                data['embeddings'] = data['embeddings'][valid_mask]
-                data['field_types'] = data['field_types'][valid_mask]
-                data['field_values'] = data['field_values'][valid_mask]
-            
-            data['song_indices'] = reconciled_indices
-            
-            return data
-        
-        # New separate files format
-        logger.info(f"Loading embeddings from separate files in: {embeddings_path}")
-        
-        # Determine directory and base name
-        if embeddings_path.is_dir():
-            base_dir = embeddings_path
-            base_name = ""
-        else:
-            base_dir = embeddings_path.parent
-            # Try to infer base name from the provided path
-            if embeddings_path.stem.endswith('_embeddings'):
-                # Handle cases like "pop_eval_set_v0_embeddings" -> "pop_eval_set_v0_"
-                base_name = embeddings_path.stem.replace('_embeddings', '') + "_"
-            else:
-                base_name = embeddings_path.stem + "_"
-        
-        embedding_types = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']
-        
-        all_embeddings = []
-        all_song_indices = []
-        all_field_types = []
-        all_field_values = []
-        songs_data = None
-        artists_data = None
-        
-        total_loaded = 0
-        
-        for embed_type in embedding_types:
-            embed_file = base_dir / f"{base_name}{embed_type}_embeddings.npz"
-            
-            if not embed_file.exists():
-                logger.warning(f"Embedding file not found: {embed_file}")
-                continue
-                
-            try:
-                data = np.load(embed_file, allow_pickle=True)
-                
-                # Load songs metadata from first file (should be consistent across all files)
-                if songs_data is None:
-                    songs_data = data['songs']
-                    artists_data = data['artists']
-                    logger.info(f"Loaded metadata for {len(songs_data)} songs")
-                
-                # Load embeddings for this type
-                embeddings = data['embeddings']
-                song_indices = data['song_indices']
-                field_values = data['field_values']
-                
-                # Create field_types array for this embedding type
-                field_types = np.array([embed_type] * len(embeddings), dtype=object)
-                
-                all_embeddings.append(embeddings)
-                all_song_indices.append(song_indices)
-                all_field_types.append(field_types)
-                all_field_values.append(field_values)
-                
-                total_loaded += len(embeddings)
-                logger.info(f"Loaded {len(embeddings)} {embed_type} embeddings")
-                
-            except Exception as e:
-                logger.error(f"Error loading {embed_type} embeddings: {e}")
-                continue
-        
-        if total_loaded == 0:
-            raise FileNotFoundError(f"No embedding files found in {base_dir}")
-        
-        # Combine all loaded embeddings
-        combined_embeddings = np.concatenate(all_embeddings, axis=0)
-        combined_song_indices = np.concatenate(all_song_indices, axis=0)
-        combined_field_types = np.concatenate(all_field_types, axis=0)
-        combined_field_values = np.concatenate(all_field_values, axis=0)
-        
-        # CRITICAL: Reconcile song indices between embeddings and app's song list
-        # The embeddings' song_indices refer to positions in songs_data, but we need them
-        # to refer to positions in self.songs (loaded from JSON)
-        logger.info("Reconciling song indices between embeddings and JSON song list...")
-        
-        (reconciled_song_indices, valid_mask) = self._reconcile_song_indices(
-            combined_song_indices, songs_data, artists_data
-        )
-        
-        # Filter all arrays to keep only valid embeddings
-        if valid_mask is not None:
-            combined_embeddings = combined_embeddings[valid_mask]
-            combined_field_types = combined_field_types[valid_mask]
-            combined_field_values = combined_field_values[valid_mask]
-        
-        combined_data = {
-            'songs': songs_data,
-            'artists': artists_data,
-            'embeddings': combined_embeddings,
-            'song_indices': reconciled_song_indices,  # Use reconciled indices
-            'field_types': combined_field_types,
-            'field_values': combined_field_values
-        }
-        
-        logger.info(f"Successfully loaded {total_loaded} total embeddings from {len(all_embeddings)} embedding files")
-        
-        return combined_data
-    
-    def _reconcile_song_indices(self, embedding_song_indices: np.ndarray, 
-                               embedding_songs: np.ndarray, embedding_artists: np.ndarray) -> tuple:
-        """
-        Reconcile song indices between embeddings data and app's song list.
-        
-        The embeddings contain song_indices that refer to positions in the embeddings' own
-        songs/artists arrays. We need to map these to positions in self.songs (from JSON).
-        
-        Args:
-            embedding_song_indices: Original indices from embeddings (refer to embedding_songs positions)
-            embedding_songs: Song names from embeddings file
-            embedding_artists: Artist names from embeddings file
-            
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (reconciled_indices, valid_mask)
-            - reconciled_indices: New indices that refer to positions in self.songs
-            - valid_mask: Boolean mask indicating which embeddings to keep
-        """
-        logger.info(f"Reconciling {len(embedding_song_indices)} embedding indices...")
-        
-        # Create mapping from embedding song index to app song index
-        embedding_to_app_index = {}
-        missing_songs = []
-        
-        for emb_idx in range(len(embedding_songs)):
-            song_name = embedding_songs[emb_idx]
-            artist_name = embedding_artists[emb_idx]
-            song_key = (song_name, artist_name)
-            
-            if song_key in self.song_lookup:
-                app_idx = self.song_lookup[song_key]
-                embedding_to_app_index[emb_idx] = app_idx
-            else:
-                missing_songs.append(f"'{song_name}' by '{artist_name}'")
-                embedding_to_app_index[emb_idx] = -1  # Mark as missing
-        
-        if missing_songs:
-            logger.warning(f"Found {len(missing_songs)} songs in embeddings that are not in JSON file:")
-            for i, song in enumerate(missing_songs[:5]):  # Show first 5
-                logger.warning(f"  - {song}")
-            if len(missing_songs) > 5:
-                logger.warning(f"  ... and {len(missing_songs) - 5} more")
-        
-        # Create valid mask first to identify which embeddings to keep
-        valid_mask = []
-        skipped_embeddings = 0
-        
-        for i, orig_idx in enumerate(embedding_song_indices):
-            if orig_idx in embedding_to_app_index:
-                app_idx = embedding_to_app_index[orig_idx]
-                if app_idx >= 0:  # Valid mapping
-                    valid_mask.append(True)
-                else:  # Missing song
-                    valid_mask.append(False)
-                    skipped_embeddings += 1
-            else:
-                logger.error(f"Invalid embedding song index: {orig_idx}")
-                valid_mask.append(False)
-                skipped_embeddings += 1
-        
-        if skipped_embeddings > 0:
-            logger.warning(f"Skipped {skipped_embeddings} embeddings due to missing songs in JSON file")
-        
-        valid_mask_array = np.array(valid_mask, dtype=bool)
-        
-        # Now create reconciled indices only for valid embeddings
-        reconciled_indices = []
-        for i, orig_idx in enumerate(embedding_song_indices):
-            if valid_mask_array[i]:  # Only process valid embeddings
-                app_idx = embedding_to_app_index[orig_idx]
-                reconciled_indices.append(app_idx)
-        
-        reconciled_array = np.array(reconciled_indices, dtype=int)
-        
-        logger.info(f"Successfully reconciled {len(reconciled_array)} embedding indices (filtered {skipped_embeddings} invalid)")
-        
-        # Return None for valid_mask if no embeddings were skipped
-        return reconciled_array, valid_mask_array if skipped_embeddings > 0 else None
-    
-    def _build_indices(self):
-        """Build indices for each embedding type."""
-        logger.info("Building embedding indices...")
-        
-        # Group embeddings by type
-        for embed_type in ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres']:
-            mask = self.embeddings_data['field_types'] == embed_type
-            if mask.any():
-                self.embedding_indices[embed_type] = {
-                    'embeddings': self.embeddings_data['embeddings'][mask],
-                    'song_indices': self.embeddings_data['song_indices'][mask],
-                    'field_values': self.embeddings_data['field_values'][mask]
-                }
-                logger.info(f"Built index for {embed_type}: {len(self.embedding_indices[embed_type]['embeddings'])} embeddings")
-    
-    def _build_text_search_index(self):
-        """Build text search index for song/artist/album matching."""
-        logger.info("Building text search index...")
-        
-        # Create searchable text for each song
-        search_texts = []
-        for song in self.songs:
-            metadata = song.get('metadata', {})
-            searchable_text = f"{song['original_song']} {song['original_artist']} {metadata.get('album_name', '')}"
-            search_texts.append(searchable_text.lower())
-        
-        # Build TF-IDF index
-        self.tfidf_vectorizer = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
-        self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(search_texts)
-    
-    def search_songs_by_text(self, query: str, limit: int = 10) -> List[Tuple[int, float, str]]:
-        """Search for songs using text similarity (for song-to-song search suggestions)."""
-        if not query or not self.tfidf_vectorizer:
-            return []
-        
-        query_lower = query.lower().strip()
-        
-        # Transform query for TF-IDF
-        query_vec = self.tfidf_vectorizer.transform([query_lower])
-        
-        # Compute similarities
-        similarities = cosine_similarity(query_vec, self.tfidf_matrix).flatten()
-        
-        # Get top matches with original threshold
-        top_indices = similarities.argsort()[::-1][:limit]
-        
-        results = []
-        tfidf_results_count = 0
-        
-        # First, try TF-IDF results with original threshold
-        for idx in top_indices:
-            if similarities[idx] > 0.01:  # Original threshold
-                song = self.songs[idx]
-                label = f"{song['original_song']} - {song['original_artist']}"
-                results.append((int(idx), float(similarities[idx]), label))
-                tfidf_results_count += 1
-        
-        # If TF-IDF didn't find good matches, fall back to exact string matching
-        if tfidf_results_count < 3:  # If we have fewer than 3 good TF-IDF matches
-            logger.info(f"TF-IDF found only {tfidf_results_count} matches for '{query}', using fallback search")
-            
-            # Build a list of candidates with their match scores
-            fallback_candidates = []
-            
-            for idx, song in enumerate(self.songs):
-                metadata = song.get('metadata', {})
-                song_title = song['original_song'].lower()
-                artist_name = song['original_artist'].lower()
-                album_name = metadata.get('album_name', '').lower()
-                
-                # Calculate simple string similarity scores
-                match_score = 0.0
-                
-                # Exact matches get highest priority
-                if query_lower == song_title:
-                    match_score = 1.0
-                elif query_lower == artist_name:
-                    match_score = 0.9
-                elif query_lower == album_name:
-                    match_score = 0.8
-                # Substring matches
-                elif query_lower in song_title:
-                    match_score = 0.7
-                elif query_lower in artist_name:
-                    match_score = 0.6
-                elif query_lower in album_name:
-                    match_score = 0.5
-                # Word boundary matches (for multi-word titles)
-                elif any(word.startswith(query_lower) for word in song_title.split()):
-                    match_score = 0.4
-                elif any(word.startswith(query_lower) for word in artist_name.split()):
-                    match_score = 0.3
-                
-                if match_score > 0:
-                    fallback_candidates.append((idx, match_score, song))
-            
-            # Sort by match score and add to results (avoid duplicates)
-            existing_indices = {result[0] for result in results}
-            fallback_candidates.sort(key=lambda x: x[1], reverse=True)
-            
-            for idx, score, song in fallback_candidates:
-                if idx not in existing_indices and len(results) < limit:
-                    label = f"{song['original_song']} - {song['original_artist']}"
-                    results.append((int(idx), float(score), label))
-        
-        # Sort results by score (descending) and limit
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:limit]
-    
-    def get_song_embedding(self, song_idx: int, embed_type: str) -> Optional[np.ndarray]:
-        """Get embedding for a specific song and embedding type."""
-        if embed_type not in self.embedding_indices:
-            return None
-        
-        indices = self.embedding_indices[embed_type]
-        mask = indices['song_indices'] == song_idx
-        
-        if mask.any():
-            return indices['embeddings'][mask][0]
-        return None
-    
-    def get_text_embedding(self, text: str) -> np.ndarray:
-        """Get OpenAI embedding for text query."""
-        try:
-            response = openai_client.embeddings.create(
-                model="text-embedding-3-large",
-                input=text,
-                encoding_format="float"
-            )
-            return np.array(response.data[0].embedding)
-        except Exception as e:
-            logger.error(f"Error getting text embedding: {e}")
-            raise
-    
-    def similarity_search(self, query_embedding: np.ndarray, embed_type: str, k: int = 20, offset: int = 0) -> Tuple[List[Tuple[int, float, str]], int]:
-        """Perform similarity search using cosine similarity.
-        
-        Returns:
-            Tuple[List[Tuple[int, float, str]], int]: (paginated_results_with_field_values, total_count)
-            Each result tuple contains: (song_idx, similarity, field_value)
-        """
-        if embed_type not in self.embedding_indices:
-            return [], 0
-        
-        indices = self.embedding_indices[embed_type]
-        embeddings = indices['embeddings']
-        song_indices = indices['song_indices']
-        field_values = indices['field_values']  # Get the field values for accordion display
-        
-        # Normalize embeddings for cosine similarity
-        query_norm_value = np.linalg.norm(query_embedding)
-        if query_norm_value == 0:
-            logger.warning("Query embedding is zero vector, returning empty results")
-            return [], 0
-        
-        query_norm = query_embedding / query_norm_value
-        embedding_norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        # Avoid division by zero for embedding normalization
-        embedding_norms = np.where(embedding_norms == 0, 1, embedding_norms)
-        embeddings_norm = embeddings / embedding_norms
-        
-        # Compute similarities
-        similarities = np.dot(embeddings_norm, query_norm)
-        
-        # Get all results sorted by similarity
-        all_indices = similarities.argsort()[::-1]
-        total_count = len(all_indices)
-        
-        # Apply pagination
-        start_idx = offset
-        end_idx = offset + k
-        paginated_indices = all_indices[start_idx:end_idx]
-        
-        results = []
-        for idx in paginated_indices:
-            song_idx = song_indices[idx]
-            similarity = similarities[idx]
-            field_value = field_values[idx]  # Get the original text that was embedded
-            results.append((int(song_idx), float(similarity), str(field_value)))  # Convert all to native Python types
-        
-        return results, total_count
-
-# Initialize search engine
-search_engine = None
-
-def init_search_engine(songs_file: str = None, embeddings_file: str = None):
-    """Initialize the search engine with data files."""
-    global search_engine
-    if search_engine is None:
-        # Use provided file paths or fall back to parsed arguments or defaults
-        if songs_file and embeddings_file:
-            songs_path = songs_file
-            embeddings_path = embeddings_file
-        elif args:
-            songs_path = songs_file or args.songs
-            embeddings_path = embeddings_file or args.embeddings
-        else:
-            # Fallback defaults when no args available (e.g., when imported)
-            default_songs = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_metadata_ready.json'
-            default_embeddings = Path(__file__).parent.parent / 'data' / 'eval_set_v2' / 'eval_set_v2_embeddings'
-            songs_path = songs_file or str(default_songs)
-            embeddings_path = embeddings_file or str(default_embeddings)
-        
-        # Validate that files exist
-        if not Path(songs_path).exists():
-            logger.error(f"Songs file not found: {songs_path}")
-            raise FileNotFoundError(f"Songs file not found: {songs_path}")
-        
-        # For embeddings, validate based on format (file vs directory/base path)
-        embeddings_path_obj = Path(embeddings_path)
-        if embeddings_path_obj.is_file():
-            # Old combined format - file must exist
-            if not embeddings_path_obj.exists():
-                logger.error(f"Embeddings file not found: {embeddings_path}")
-                raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
-        else:
-            # New separate format - directory or parent directory should exist
-            if embeddings_path_obj.is_dir():
-                # Path is a directory - it exists, validation will happen in _load_embeddings_data
-                pass
-            elif embeddings_path_obj.parent.exists():
-                # Path is a base name - parent directory exists, validation will happen in _load_embeddings_data
-                pass
-            else:
-                logger.error(f"Embeddings path not found: {embeddings_path}")
-                raise FileNotFoundError(f"Embeddings path not found: {embeddings_path}")
-        
-        logger.info(f"Initializing search engine with:")
-        logger.info(f"  Songs file: {songs_path}")
-        logger.info(f"  Embeddings file: {embeddings_path}")
-        
-        search_engine = MusicSearchEngine(songs_path, embeddings_path)
-
-# Spotify OAuth setup
 def get_spotify_oauth():
-    # Construct redirect URI dynamically based on environment
-    # Check if we're in production (Railway/deployed) or local development
+    """Get Spotify OAuth object with dynamic redirect URI."""
+    # Check if we're in production or local development
     if os.getenv('RAILWAY_ENVIRONMENT') or request.host not in ['127.0.0.1:5000', 'localhost:5000']:
         # Production: use the current request host with HTTPS
         redirect_uri = f"https://{request.host}/callback"
     else:
         # Local development: use localhost with HTTP
-        host = args.host if args else '127.0.0.1'
-        port = args.port if args else 5000
-        redirect_uri = f"http://{host}:{port}/callback"
+        redirect_uri = f"http://{constants.DEFAULT_HOST}:{constants.DEFAULT_PORT}/callback"
     
     logger.info(f"Using OAuth redirect URI: {redirect_uri}")
     
@@ -665,77 +1393,11 @@ def get_spotify_oauth():
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=redirect_uri,
-        scope=SPOTIFY_SCOPES,
+        scope=constants.SPOTIFY_SCOPES,
         cache_path=None
     )
 
-@app.route('/')
-def index():
-    """Main page."""
-    init_search_engine()
-    
-    # Set session start time if not already set
-    if 'session_start' not in session:
-        session['session_start'] = datetime.now().isoformat()
-        
-        # Track page load
-        track_event('Page Loaded', {
-            'page_title': 'Semantic Song Search',
-            'is_new_session': True
-        })
-    
-    # Pass debug flag to template
-    debug_mode = getattr(args, 'debug', False) if args else False
-    return render_template('index.html', debug_mode=debug_mode)
-
-@app.route('/login')
-def login():
-    """Spotify login."""
-    # Track login attempt
-    track_event('Login Initiated', {
-        'auth_provider': 'spotify'
-    })
-    
-    sp_oauth = get_spotify_oauth()
-    auth_url = sp_oauth.get_authorize_url()
-    return redirect(auth_url)
-
-@app.route('/callback')
-def callback():
-    """Spotify OAuth callback."""
-    try:
-        sp_oauth = get_spotify_oauth()
-        code = request.args.get('code')
-        token_info = sp_oauth.get_access_token(code)
-        session['token_info'] = token_info
-        
-        # Track successful authentication
-        track_event('Authentication Successful', {
-            'auth_provider': 'spotify'
-        })
-        
-        return redirect(url_for('index'))
-        
-    except Exception as e:
-        # Track authentication failure
-        track_event('Authentication Failed', {
-            'auth_provider': 'spotify',
-            'error_message': str(e)[:200]  # Limit error message length
-        })
-        logger.error(f"Authentication failed: {e}")
-        return redirect(url_for('index'))
-
-@app.route('/logout')
-def logout():
-    """Clear Spotify session."""
-    # Track logout
-    track_event('Logout', {
-        'auth_provider': 'spotify'
-    })
-    
-    session.pop('token_info', None)
-    logger.info("User logged out, session cleared")
-    return redirect(url_for('index'))
+# Additional API routes
 
 @app.route('/api/search_suggestions')
 def search_suggestions():
@@ -761,190 +1423,32 @@ def search_suggestions():
     suggestions = []
     for song_idx, score, label in results:
         song = search_engine.songs[song_idx]
-        metadata = song.get('metadata', {})
+        
+        # Extract data from new Spotify metadata structure
+        track_id = song.get('track_id') or song.get('id', '')
+        song_name = song.get('name', song.get('original_song', ''))
+        
+        # Handle multiple artists
+        artists_list = song.get('artists', [])
+        primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+        
+        # Get album info and cover art
+        album_name = song.get('album', {}).get('name', '')
+        album_images = song.get('album', {}).get('images', [])
+        cover_url = album_images[-1]['url'] if album_images else ''
+        
         suggestions.append({
             'song_idx': int(song_idx),  # Convert numpy.int64 to native Python int
             'label': label,
-            'song': song['original_song'],
-            'artist': song['original_artist'],
-            'album': metadata.get('album_name', ''),
-            'cover_url': metadata.get('cover_url', ''),
-            'spotify_id': metadata.get('song_id', ''),
+            'song': song_name,
+            'artist': primary_artist,
+            'album': album_name,
+            'cover_url': cover_url,
+            'spotify_id': track_id,
             'score': float(score)  # Convert numpy.float64 to native Python float
         })
     
     return jsonify(suggestions)
-
-@app.route('/api/search', methods=['POST'])
-def search():
-    """Main search endpoint."""
-    if search_engine is None:
-        return jsonify({'error': 'Search engine not initialized'}), 500
-        
-    data = request.json
-    search_type = data.get('search_type')  # 'text' or 'song'
-    embed_type = data.get('embed_type')
-    query = data.get('query', '').strip()
-    song_idx = data.get('song_idx')  # For song-to-song search
-    k = data.get('k', 20)
-    offset = data.get('offset', 0)  # For pagination
-    # Note: Top artists filtering is now handled client-side for better performance
-    
-    start_time = datetime.now()
-    
-    # Validate pagination parameters
-    if k <= 0 or k > 100:  # Reasonable limits
-        return jsonify({'error': 'k must be between 1 and 100'}), 400
-    if offset < 0:
-        return jsonify({'error': 'offset must be non-negative'}), 400
-    
-    if not query and song_idx is None:
-        return jsonify({'error': 'Query or song_idx required'}), 400
-    
-    try:
-        if search_type == 'text':
-            # Text-to-song search
-            query_embedding = search_engine.get_text_embedding(query)
-            results, total_count = search_engine.similarity_search(query_embedding, embed_type, k, offset)
-            
-        elif search_type == 'song':
-            # Song-to-song search
-            if song_idx is None:
-                return jsonify({'error': 'song_idx required for song-to-song search'}), 400
-            
-            query_embedding = search_engine.get_song_embedding(song_idx, embed_type)
-            if query_embedding is None:
-                return jsonify({'error': 'Song embedding not found'}), 404
-            
-            results, total_count = search_engine.similarity_search(query_embedding, embed_type, k, offset)
-            
-        else:
-            return jsonify({'error': 'Invalid search_type'}), 400
-        
-        # Format results (filtering now handled client-side)
-        formatted_results = []
-        
-        for result in results:
-            try:
-                # Handle both old format (song_idx, similarity) and new format (song_idx, similarity, field_value)
-                if len(result) == 3:
-                    result_song_idx, similarity, field_value = result
-                elif len(result) == 2:
-                    result_song_idx, similarity = result
-                    field_value = "N/A"  # Fallback for backwards compatibility
-                    logger.warning("Old format results detected - using fallback field_value")
-                else:
-                    logger.error(f"Unexpected result format: {result}")
-                    continue
-                    
-                song = search_engine.songs[result_song_idx]
-                metadata = song.get('metadata', {})
-                
-                formatted_results.append({
-                    'song_idx': int(result_song_idx),  # Convert numpy.int64 to native Python int
-                    'song': song['original_song'],
-                    'artist': song['original_artist'],
-                    'album': metadata.get('album_name', ''),
-                    'cover_url': metadata.get('cover_url', ''),
-                    'spotify_id': metadata.get('song_id', ''),
-                    'similarity': float(similarity),  # Convert numpy.float64 to native Python float
-                    'field_value': field_value, # Include the original field value
-                    'genres': song.get('genres', []),
-                    'tags': song.get('tags', [])
-                })
-            except (ValueError, IndexError, KeyError) as e:
-                logger.error(f"Error processing search result {result}: {e}")
-                continue
-        
-        # Calculate search performance
-        search_duration = (datetime.now() - start_time).total_seconds()
-        
-        # Track successful search with enhanced context
-        search_properties = {
-            'search_type': search_type,
-            'embed_type': embed_type,
-            'results_returned': total_count,
-            'results_requested': k,
-            'search_offset': offset,
-            'search_duration_seconds': round(search_duration, 3),
-            'is_paginated_search': offset > 0,
-            'returned_count': len(formatted_results)
-        }
-        
-        # Add query-specific information
-        if search_type == 'text' and query:
-            search_properties.update({
-                'query': query[:200],  # Limit query length for storage
-                'query_length': len(query)
-            })
-        elif search_type == 'song' and song_idx is not None:
-            # Get song details for better tracking
-            try:
-                song = search_engine.songs[song_idx]
-                search_properties.update({
-                    'query_song_idx': song_idx,
-                    'query_song_name': song['original_song'][:100],  # Limit length
-                    'query_artist_name': song['original_artist'][:100]  # Limit length
-                })
-            except (IndexError, KeyError):
-                search_properties['query_song_idx'] = song_idx
-        
-        track_event('Search Performed', search_properties)
-        
-        # Return results (filtering now handled client-side for better performance)
-        return jsonify({
-            'results': formatted_results,
-            'search_type': search_type,
-            'embed_type': embed_type,
-            'query': query,
-            'pagination': {
-                'offset': offset,
-                'limit': k,
-                'total_count': total_count,
-                'has_more': offset + k < total_count,
-                'returned_count': len(formatted_results)
-            }
-        })
-        
-    except Exception as e:
-        # Track search errors
-        search_duration = (datetime.now() - start_time).total_seconds()
-        track_event('Search Error', {
-            'search_type': search_type,
-            'embed_type': embed_type,
-            'query_length': len(query) if query else 0,
-            'error_message': str(e)[:200],
-            'search_duration_seconds': round(search_duration, 3)
-        })
-        logger.error(f"Search error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/get_song')
-def get_song():
-    """Get detailed information about a specific song."""
-    if search_engine is None:
-        return jsonify({'error': 'Search engine not initialized'}), 500
-        
-    song_idx = request.args.get('song_idx', type=int)
-    if song_idx is None or song_idx < 0 or song_idx >= len(search_engine.songs):
-        return jsonify({'error': 'Invalid song_idx'}), 400
-    
-    song = search_engine.songs[song_idx]
-    metadata = song.get('metadata', {})
-    
-    return jsonify({
-        'song_idx': song_idx,
-        'song': song['original_song'],
-        'artist': song['original_artist'],
-        'album': metadata.get('album_name', ''),
-        'cover_url': metadata.get('cover_url', ''),
-        'spotify_id': metadata.get('song_id', ''),
-        'genres': song.get('genres', []),
-        'tags': song.get('tags', []),
-        'sound': song.get('sound', ''),
-        'meaning': song.get('meaning', ''),
-        'mood': song.get('mood', '')
-    })
 
 @app.route('/api/create_playlist', methods=['POST'])
 def create_playlist():
@@ -968,7 +1472,7 @@ def create_playlist():
     try:
         # Get request data
         data = request.json
-        playlist_name = data.get('playlist_name', 'Semantic Song Search Playlist')
+        playlist_name = data.get('playlist_name', 'SongMatch Playlist')
         song_count = data.get('song_count', 20)
         song_spotify_ids = data.get('song_spotify_ids', [])
         search_context = data.get('search_context', {})
@@ -996,138 +1500,111 @@ def create_playlist():
         sp = spotipy.Spotify(auth=token_info['access_token'])
         
         # Get current user info
-        user_info = sp.current_user()
-        user_id = user_info['id']
+        user = sp.current_user()
+        user_id = user['id']
         
         # Create playlist
         playlist = sp.user_playlist_create(
-            user=user_id,
-            name=playlist_name.strip(),
-            public=False,  # Create as private by default
-            description=f"Created by Semantic Song Search - {len(valid_songs)} tracks"
+            user_id, 
+            playlist_name, 
+            public=False, 
+            description=f"Created by SongMatch - {len(valid_songs)} songs"
         )
         
-        # Add tracks to playlist
-        # Convert track IDs to Spotify URIs
-        track_uris = [f"spotify:track:{track_id}" for track_id in valid_songs]
+        # Convert Spotify IDs to URIs
+        track_uris = [f"spotify:track:{song_id}" for song_id in valid_songs]
         
-        # Add tracks in batches (Spotify API limit is 100 tracks per request)
+        # Add songs to playlist (Spotify API limits to 100 tracks per request)
         batch_size = 100
+        added_tracks = 0
         for i in range(0, len(track_uris), batch_size):
             batch = track_uris[i:i + batch_size]
-            sp.playlist_add_items(playlist['id'], batch)
+            try:
+                sp.playlist_add_items(playlist['id'], batch)
+                added_tracks += len(batch)
+            except Exception as e:
+                logger.error(f"Error adding batch {i//batch_size + 1}: {e}")
+                break
         
-        # Track successful playlist creation with full context
-        creation_duration = (datetime.now() - start_time).total_seconds()
+        duration = (datetime.now() - start_time).total_seconds()
         
-        # Start with playlist-specific properties
-        playlist_properties = {
-            'playlist_name': playlist_name.strip()[:100],  # Limit length for storage
-            'playlist_name_length': len(playlist_name.strip()),
-            'songs_requested': song_count,
-            'songs_added': len(valid_songs),
-            'creation_duration_seconds': round(creation_duration, 3)
-        }
-        
-        # Add search context if provided
-        if search_context:
-            # Add search type and embedding type
-            if 'search_type' in search_context:
-                playlist_properties['search_type'] = search_context['search_type']
-            if 'embed_type' in search_context:
-                playlist_properties['embed_type'] = search_context['embed_type']
-            
-            # Add query information
-            if search_context.get('search_type') == 'text':
-                if 'query' in search_context:
-                    playlist_properties['query'] = search_context['query'][:200]  # Limit length
-                if 'query_length' in search_context:
-                    playlist_properties['query_length'] = search_context['query_length']
-            elif search_context.get('search_type') == 'song':
-                if 'query_song_idx' in search_context:
-                    playlist_properties['query_song_idx'] = search_context['query_song_idx']
-                if 'query_song_name' in search_context:
-                    playlist_properties['query_song_name'] = search_context['query_song_name'][:100]
-                if 'query_artist_name' in search_context:
-                    playlist_properties['query_artist_name'] = search_context['query_artist_name'][:100]
-            
-            # Add filter and selection information
-            if 'is_filtered' in search_context:
-                playlist_properties['is_filtered'] = search_context['is_filtered']
-            if 'is_manual_selection' in search_context:
-                playlist_properties['is_manual_selection'] = search_context['is_manual_selection']
-            if 'selected_songs_count' in search_context:
-                playlist_properties['selected_songs_count'] = search_context['selected_songs_count']
-        
-        track_event('Playlist Created', playlist_properties)
-        
-        logger.info(f"Created playlist '{playlist_name}' with {len(valid_songs)} tracks")
+        # Track playlist creation
+        track_event('Playlist Created', {
+            'playlist_id': playlist['id'],
+            'playlist_name': playlist_name,
+            'song_count_requested': song_count,
+            'songs_added': added_tracks,
+            'creation_duration_seconds': round(duration, 3),
+            'search_context': search_context
+        })
         
         return jsonify({
             'success': True,
-            'playlist_id': playlist['id'],
             'playlist_url': playlist['external_urls']['spotify'],
+            'playlist_id': playlist['id'],
             'playlist_name': playlist['name'],
-            'track_count': len(valid_songs)
+            'songs_added': added_tracks,
+            'total_requested': song_count
         })
         
     except spotipy.exceptions.SpotifyException as e:
-        # Track playlist creation errors
-        creation_duration = (datetime.now() - start_time).total_seconds()
-        # Build error properties with search context
-        error_properties = {
-            'error_type': 'spotify_api_error',
-            'error_code': e.http_status,
-            'error_message': str(e)[:200],
-            'songs_requested': song_count,
-            'creation_duration_seconds': round(creation_duration, 3)
-        }
-        
-        # Add search context to error tracking
-        if search_context:
-            if 'search_type' in search_context:
-                error_properties['search_type'] = search_context['search_type']
-            if 'embed_type' in search_context:
-                error_properties['embed_type'] = search_context['embed_type']
-        
-        track_event('Playlist Creation Failed', error_properties)
-        
         logger.error(f"Spotify API error: {e}")
-        if e.http_status == 401:
-            return jsonify({'error': 'Spotify authentication expired, please login again'}), 401
-        elif e.http_status == 403:
-            # Check if it's a scope/permission issue
-            error_msg = str(e).lower()
-            if 'scope' in error_msg or 'insufficient' in error_msg:
-                logger.info("Clearing session due to insufficient permissions")
-                session.pop('token_info', None)  # Clear the invalid session
-                return jsonify({'error': 'Insufficient permissions to create playlists. Please re-authenticate to grant playlist creation access.'}), 403
-            else:
-                return jsonify({'error': f'Access denied: {e.msg}'}), 403
-        else:
-            return jsonify({'error': f'Spotify API error: {e.msg}'}), 500
+        return jsonify({'error': f'Spotify error: {str(e)}'}), 500
     except Exception as e:
-        # Track general playlist creation errors
-        creation_duration = (datetime.now() - start_time).total_seconds()
-        
-        # Build error properties with search context
-        error_properties = {
-            'error_type': 'general_error',
-            'error_message': str(e)[:200],
-            'songs_requested': song_count,
-            'creation_duration_seconds': round(creation_duration, 3)
-        }
-        
-        # Add search context to error tracking
-        if search_context:
-            if 'search_type' in search_context:
-                error_properties['search_type'] = search_context['search_type']
-            if 'embed_type' in search_context:
-                error_properties['embed_type'] = search_context['embed_type']
-        
-        track_event('Playlist Creation Failed', error_properties)
-        logger.error(f"Failed to create playlist: {e}")
+        logger.error(f"Playlist creation error: {e}")
         return jsonify({'error': 'Failed to create playlist'}), 500
+
+
+@app.route('/login')
+def login():
+    """Spotify login."""
+    # Track login attempt
+    track_event('Login Initiated', {
+        'auth_provider': 'spotify'
+    })
+    
+    sp_oauth = get_spotify_oauth()
+    auth_url = sp_oauth.get_authorize_url()
+    return redirect(auth_url)
+
+@app.route('/callback')
+def callback():
+    """Spotify OAuth callback."""
+    try:
+        sp_oauth = get_spotify_oauth()
+        code = request.args.get('code')
+        token_info = sp_oauth.get_access_token(code)
+        session['token_info'] = token_info
+        session['user_id'] = str(uuid.uuid4())  # Generate session user ID
+        
+        # Track successful authentication
+        track_event('Authentication Successful', {
+            'auth_provider': 'spotify'
+        })
+        
+        return redirect(url_for('index'))
+        
+    except Exception as e:
+        # Track authentication failure
+        track_event('Authentication Failed', {
+            'auth_provider': 'spotify',
+            'error_message': str(e)[:200]  # Limit error message length
+        })
+        logger.error(f"Authentication failed: {e}")
+        return redirect(url_for('index'))
+
+@app.route('/logout')
+def logout():
+    """Clear Spotify session."""
+    # Track logout
+    track_event('Logout', {
+        'auth_provider': 'spotify'
+    })
+    
+    session.pop('token_info', None)
+    session.pop('user_id', None)
+    logger.info("User logged out, session cleared")
+    return redirect(url_for('index'))
 
 @app.route('/api/token')
 def get_token():
@@ -1148,6 +1625,51 @@ def get_token():
     
     return jsonify({'access_token': token_info['access_token']})
 
+@app.route('/api/get_song')
+def get_song():
+    """Get detailed information about a specific song."""
+    if search_engine is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+        
+    song_idx = request.args.get('song_idx', type=int)
+    if song_idx is None or song_idx < 0 or song_idx >= len(search_engine.songs):
+        return jsonify({'error': 'Invalid song_idx'}), 400
+    
+    song = search_engine.songs[song_idx]
+    
+    # Extract data from new Spotify metadata structure
+    track_id = song.get('track_id') or song.get('id', '')
+    song_name = song.get('name', song.get('original_song', ''))
+    
+    # Handle multiple artists
+    artists_list = song.get('artists', [])
+    primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+    all_artists = [artist['name'] for artist in artists_list] if artists_list else [primary_artist]
+    
+    # Get album info and cover art
+    album_name = song.get('album', {}).get('name', '')
+    album_images = song.get('album', {}).get('images', [])
+    cover_url = album_images[-1]['url'] if album_images else ''
+    
+    # Get duration
+    duration_ms = song.get('duration_ms', 0)
+    
+    return jsonify({
+        'song_idx': song_idx,
+        'song': song_name,
+        'artist': primary_artist,
+        'all_artists': all_artists,  # New: support multiple artists
+        'album': album_name,
+        'cover_url': cover_url,
+        'spotify_id': track_id,
+        'duration_ms': duration_ms,  # New: duration in milliseconds
+        'genres': search_engine.genres_lookup.get(track_id, []),
+        'tags': search_engine.tags_lookup.get(track_id, []),
+        'sound': song.get('sound', ''),
+        'meaning': song.get('meaning', ''),
+        'mood': song.get('mood', '')
+    })
+
 @app.route('/api/test_tracking')
 def test_tracking():
     """Test endpoint to verify Mixpanel tracking is working."""
@@ -1157,7 +1679,7 @@ def test_tracking():
             return jsonify({
                 'success': False, 
                 'error': 'Mixpanel not configured - MIXPANEL_TOKEN environment variable not set',
-                'token_set': bool(MIXPANEL_TOKEN)
+                'token_set': bool(os.environ.get('MIXPANEL_TOKEN'))
             }), 500
         
         track_event('Test Event', {
@@ -1167,14 +1689,14 @@ def test_tracking():
         return jsonify({
             'success': True, 
             'message': 'Test event tracked successfully',
-            'token_set': bool(MIXPANEL_TOKEN)
+            'token_set': bool(os.environ.get('MIXPANEL_TOKEN'))
         })
     except Exception as e:
         logger.error(f"Test tracking failed: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/top_artists')
-def get_top_artists():
+def top_artists():
     """Get user's top artists across all time ranges."""
     token_info = session.get('token_info')
     if not token_info:
@@ -1191,64 +1713,133 @@ def get_top_artists():
             return jsonify({'error': 'Token refresh failed, please re-authenticate'}), 401
     
     try:
-        # Create Spotify client
         sp = spotipy.Spotify(auth=token_info['access_token'])
         
-        # Get top artists for all time ranges
+        # Get top artists from different time ranges
+        all_artists = {}
         time_ranges = ['short_term', 'medium_term', 'long_term']
-        all_top_artists = set()  # Use set to automatically deduplicate
         
         for time_range in time_ranges:
             try:
                 results = sp.current_user_top_artists(limit=50, time_range=time_range)
-                if results and 'items' in results:
-                    for artist in results['items']:
-                        # Ensure artist has a name field before processing
-                        if artist and 'name' in artist and artist['name']:
-                            # Store artist name in lowercase for case-insensitive matching
-                            all_top_artists.add(artist['name'].strip().lower())
-                    logger.info(f"Retrieved {len(results['items'])} top artists for {time_range}")
-                else:
-                    logger.warning(f"Unexpected response format for {time_range}: {results}")
+                for i, artist in enumerate(results['items']):
+                    artist_id = artist['id']
+                    if artist_id not in all_artists:
+                        all_artists[artist_id] = {
+                            'id': artist_id,
+                            'name': artist['name'],
+                            'genres': artist.get('genres', []),
+                            'popularity': artist.get('popularity', 0),
+                            'image_url': artist['images'][0]['url'] if artist.get('images') else '',
+                            'external_url': artist['external_urls']['spotify'],
+                            'rankings': {}
+                        }
+                    all_artists[artist_id]['rankings'][time_range] = i + 1
             except Exception as e:
-                logger.warning(f"Failed to get top artists for {time_range}: {e}")
-                continue
+                logger.warning(f"Failed to get {time_range} top artists: {e}")
         
-        # Convert back to list for JSON serialization
-        top_artists_list = list(all_top_artists)
+        # Convert to list and sort by overall popularity/ranking
+        artists_list = list(all_artists.values())
+        artists_list.sort(key=lambda x: (
+            len(x['rankings']),  # Prefer artists who appear in multiple time ranges
+            -x['popularity']      # Then by popularity
+        ), reverse=True)
         
-        logger.info(f"Retrieved {len(top_artists_list)} unique top artists across all time ranges")
-        
-        # Handle case where user has no top artists
-        if len(top_artists_list) == 0:
-            logger.warning("User has no top artists - they may have a new account or insufficient listening history")
-        
-        return jsonify({
-            'top_artists': top_artists_list,
-            'count': len(top_artists_list)
+        # Track request
+        track_event('Top Artists Requested', {
+            'artists_count': len(artists_list),
+            'time_ranges_successful': len([tr for tr in time_ranges if any(artist['rankings'].get(tr) for artist in artists_list)])
         })
         
-    except spotipy.exceptions.SpotifyException as e:
-        logger.error(f"Spotify API error: {e}")
-        if e.http_status == 401:
-            return jsonify({'error': 'Spotify authentication expired, please login again'}), 401
-        elif e.http_status == 403:
-            # Check if it's a scope/permission issue
-            error_msg = str(e).lower()
-            if 'scope' in error_msg or 'insufficient' in error_msg:
-                logger.info("Clearing session due to insufficient permissions for top artists")
-                session.pop('token_info', None)  # Clear the invalid session
-                return jsonify({
-                    'error': 'Insufficient permissions to access top artists. Please logout and login again to grant the required permissions.',
-                    'requires_reauth': True
-                }), 403
-            else:
-                return jsonify({'error': f'Access denied: {e.msg}'}), 403
-        else:
-            return jsonify({'error': f'Spotify API error: {e.msg}'}), 500
+        return jsonify({
+            'artists': artists_list,  # Return all deduplicated artists (no artificial limit)
+            'time_ranges': time_ranges
+        })
+        
     except Exception as e:
-        logger.error(f"Failed to get top artists: {e}")
+        logger.error(f"Error getting top artists: {e}")
         return jsonify({'error': 'Failed to retrieve top artists'}), 500
+
+@app.route('/api/default_ranking_config')
+def get_default_ranking_config():
+    """Get default ranking configuration parameters."""
+    try:
+        # Create a default RankingConfig instance and return its parameters
+        default_config = ranking.RankingConfig()
+        return jsonify(default_config.to_dict())
+    except Exception as e:
+        logger.error(f"Error getting default ranking config: {e}")
+        return jsonify({'error': 'Failed to retrieve default ranking configuration'}), 500
+
+@app.route('/api/artist_similarity_config', methods=['GET'])
+def get_artist_similarity_config():
+    """Get current artist similarity configuration."""
+    try:
+        if search_engine is None:
+            return jsonify({'error': 'Search engine not initialized'}), 500
+        
+        config = {
+            'artist_embed_type': search_engine.artist_matrix_embed_type,
+            'available_types': list(search_engine.embedding_lookups.keys()),
+            'has_matrix': search_engine.artist_similarity_matrix is not None
+        }
+        return jsonify(config)
+    except Exception as e:
+        logger.error(f"Error getting artist similarity config: {e}")
+        return jsonify({'error': 'Failed to retrieve artist similarity configuration'}), 500
+
+@app.route('/api/artist_similarity_config', methods=['PUT'])
+def set_artist_similarity_config():
+    """Set artist similarity embedding type."""
+    try:
+        if search_engine is None:
+            return jsonify({'error': 'Search engine not initialized'}), 500
+        
+        data = request.get_json()
+        if not data or 'artist_embed_type' not in data:
+            return jsonify({'error': 'Missing artist_embed_type parameter'}), 400
+        
+        embed_type = data['artist_embed_type']
+        
+        # Validate and set the embedding type
+        success = search_engine.set_artist_similarity_embed_type(embed_type)
+        if not success:
+            return jsonify({'error': f'Invalid embedding type: {embed_type}'}), 400
+        
+        # Return updated configuration
+        config = {
+            'artist_embed_type': search_engine.artist_matrix_embed_type,
+            'available_types': list(search_engine.embedding_lookups.keys()),
+            'has_matrix': search_engine.artist_similarity_matrix is not None
+        }
+        return jsonify(config)
+        
+    except Exception as e:
+        logger.error(f"Error setting artist similarity config: {e}")
+        return jsonify({'error': 'Failed to set artist similarity configuration'}), 500
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Semantic Song Search and Playlist Creation',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python app.py
+  python app.py --songs custom_songs.json --embeddings custom_embeddings.npz
+  python app.py -s /path/to/songs.json -e /path/to/embeddings.npz
+        """
+    )
+    parser.add_argument('-s', '--songs', type=str, default=constants.DEFAULT_SONGS_FILE, 
+                       help=f'Path to songs JSON file (default: {constants.DEFAULT_SONGS_FILE})')
+    parser.add_argument('-e', '--embeddings', type=str, default=constants.DEFAULT_EMBEDDINGS_PATH,
+                       help=f'Path to embeddings file/directory (supports combined .npz file or directory with separate embedding files) (default: {constants.DEFAULT_EMBEDDINGS_PATH})')  
+    parser.add_argument('--history', type=str, default=None, help='Path to Spotify Extended Streaming History directory (optional - enables personalized ranking)')
+    parser.add_argument('--artist-embeddings', type=str, default=constants.DEFAULT_ARTIST_EMBEDDINGS_PATH, help=f'Path to artist embeddings directory (default: {constants.DEFAULT_ARTIST_EMBEDDINGS_PATH})')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('--host', type=str, default=constants.DEFAULT_HOST, help='Host to run the server on (default: 127.0.0.1)')
+    parser.add_argument('--port', type=int, default=constants.DEFAULT_PORT, help='Port to run the server on (default: 5000)')
+    return parser.parse_args()
 
 if __name__ == '__main__':
     # Parse command line arguments
@@ -1261,7 +1852,7 @@ if __name__ == '__main__':
     
     # Initialize search engine early to catch any data file issues
     try:
-        init_search_engine()
+        init_search_engine(args.songs, args.embeddings, args.history, getattr(args, 'artist_embeddings', None))
         logger.info("Search engine initialized successfully!")
     except Exception as e:
         logger.error(f"Failed to initialize search engine: {e}")
@@ -1269,4 +1860,4 @@ if __name__ == '__main__':
         exit(1)
     
     # Start the Flask application
-    app.run(debug=args.debug, host=args.host, port=args.port) 
+    app.run(debug=args.debug, host=args.host, port=args.port)

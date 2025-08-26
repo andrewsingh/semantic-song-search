@@ -5,7 +5,10 @@ import argparse
 from pathlib import Path
 from typing import List
 from pydantic import BaseModel, ValidationError
-from song_profile import SongProfile
+import sys
+
+sys.path.append(str(Path(__file__).parent.parent))
+from profiles import SongProfile
 
 
 

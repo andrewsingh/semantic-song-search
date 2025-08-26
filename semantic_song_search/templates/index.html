@@ -2,8 +2,8 @@
 <html lang="en" data-debug-mode="{% if debug_mode %}true{% else %}false{% endif %}">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Semantic Song Search</title>
+    <meta name="viewport" content="width=1280, initial-scale=0.3, user-scalable=yes">
+    <title>SongMatch</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
     
@@ -25,8 +25,8 @@
         <!-- Header with Search Bar and Controls -->
         <header class="search-header">
             <div class="header-content">
-                <h1 class="app-title">Semantic Song Search</h1>
-                
+                <h1 class="app-title">SongMatch</h1>
+
                 <!-- Search Configuration Row -->
                 <div class="search-config">
                     <div class="segmented-control" id="search-type-control" role="radiogroup" aria-label="Search mode selection">
@@ -44,6 +44,7 @@
                     
                     <select id="embed-type" class="config-dropdown">
                         <option value="tags_genres">Tags & Genres</option>
+                        <option value="tags">Tags</option>
                         <option value="sound_aspect">Sound</option>
                         <option value="meaning_aspect">Meaning</option>
                         <option value="mood_aspect">Mood</option>
@@ -52,22 +53,55 @@
                     
                 </div>
                 
-                <!-- Search Bar -->
+                <!-- Personalization Controls (shown only when history is available) -->
+                <div id="personalization-controls" class="personalization-controls" style="display: none;">
+                    <div class="control-group">
+                        <div class="slider-container">
+                            <div class="slider-with-value">
+                                <div class="slider-value-above" id="lambda-value">0.50</div>
+                                <input type="range" id="lambda-slider" class="control-slider" 
+                                       min="0" max="1" step="0.05" value="0.5">
+                            </div>
+                            <div class="slider-labels">
+                                <span>Personal</span>
+                                <span>Semantic</span>
+                            </div>
+                        </div>
+                        
+                        <div class="slider-container">
+                            <div class="range-slider-with-values">
+                                <div class="range-values-above">
+                                    <div class="range-value-above" id="familiarity-min-value">0.00</div>
+                                    <div class="range-value-above" id="familiarity-max-value">1.00</div>
+                                </div>
+                                <div class="range-slider-container">
+                                    <input type="range" id="familiarity-min" class="range-slider range-slider-min" 
+                                           min="0" max="1" step="0.01" value="0">
+                                    <input type="range" id="familiarity-max" class="range-slider range-slider-max" 
+                                           min="0" max="1" step="0.01" value="1">
+                                </div>
+                            </div>
+                            <div class="slider-labels">
+                                <span>Unfamiliar</span>
+                                <span>Familiar</span>
+                            </div>
+                        </div>
+                        
+                        <button id="rerun-search-btn" class="rerun-search-btn" disabled>
+                            Rerun Search
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Main Search Bar -->
                 <div class="search-container">
                     <input type="text" id="search-input" class="search-input" 
-                           placeholder="🔍 Describe the vibe you're looking for... (e.g., &quot;upbeat summery pop&quot;, &quot;motivational workout hip hop&quot;)">
+                           placeholder="🔍 Describe the vibe you're looking for... (e.g., &quot;fun playful summery pop&quot;, &quot;motivational workout hip hop&quot;)">
                 </div>
                 
                 <!-- Suggestions Dropdown (for song-to-song search) -->
                 <div id="suggestions" class="suggestions-container" style="display: none;"></div>
                 
-                <!-- Auth Status -->
-                <div class="auth-status">
-                    <span id="auth-indicator" class="auth-indicator">○</span>
-                    <span id="auth-text">Not connected to Spotify</span>
-                    <button id="login-btn" class="login-btn" style="display: none;">Login to Spotify</button>
-                    <button id="logout-btn" class="logout-btn" style="display: none;">Logout</button>
-                </div>
             </div>
         </header>
 
@@ -96,7 +130,7 @@
                             <div id="song-count-field" class="export-field">
                                 <label for="song-count" class="export-label">Number of Songs:</label>
                                 <input type="number" id="song-count" class="export-input" 
-                                       min="1" max="100" value="20">
+                                       min="1" max="100" value="48">
                             </div>
                             <div id="manual-selection-info" class="export-field" style="display: none;">
                                 <span class="export-label">Selected Songs:</span>
@@ -112,12 +146,300 @@
                 </div>
             </section>
             
+            <!-- Advanced Settings Accordion -->
+            <section id="advanced-settings-section" class="advanced-settings-section" style="display: none;">
+                <div class="advanced-settings-accordion">
+                    <button class="advanced-settings-accordion-header" id="advanced-settings-accordion-btn">
+                        <span class="advanced-settings-accordion-title">⚙️ Advanced Settings</span>
+                        <span class="advanced-settings-accordion-icon">▼</span>
+                    </button>
+                    <div class="advanced-settings-accordion-content" id="advanced-settings-accordion-content">
+                        <div class="advanced-settings-form">
+                            <div class="advanced-settings-actions">
+                                <button id="advanced-rerun-search-btn" class="advanced-rerun-search-btn" disabled>
+                                    Rerun Search
+                                </button>
+                                <button id="reset-defaults-btn" class="reset-defaults-btn">
+                                    Reset to Defaults
+                                </button>
+                            </div>
+                            
+                            <div class="advanced-settings-columns">
+                                <!-- Left Column -->
+                                <div class="advanced-settings-column">
+                                    <!-- Core Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Core Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="H_c" class="param-label">History Half-life (days):</label>
+                                            <input type="number" id="H_c" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="H_E" class="param-label">Artist History Half-life (days):</label>
+                                            <input type="number" id="H_E" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- Evidence Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Evidence Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="gamma_s" class="param-label">Success Curvature:</label>
+                                            <input type="number" id="gamma_s" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="gamma_f" class="param-label">Skip Curvature:</label>
+                                            <input type="number" id="gamma_f" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="kappa" class="param-label">Skip Amplification:</label>
+                                            <input type="number" id="kappa" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- Beta Prior Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Beta Prior Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="alpha_0" class="param-label">Prior Alpha:</label>
+                                            <input type="number" id="alpha_0" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_0" class="param-label">Prior Beta:</label>
+                                            <input type="number" id="beta_0" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="K_s" class="param-label">Stability Parameter:</label>
+                                            <input type="number" id="K_s" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- Artist Affinity Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Artist Affinity Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="K_E" class="param-label">Artist Affinity Prior:</label>
+                                            <input type="number" id="K_E" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="gamma_A" class="param-label">Artist Gamma:</label>
+                                            <input type="number" id="gamma_A" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="M_A" class="param-label">Artist Familiarity Parameter:</label>
+                                            <input type="number" id="M_A" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- Artist Familiarity Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Artist Familiarity Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="theta_c" class="param-label">Completion Threshold:</label>
+                                            <input type="number" id="theta_c" class="param-input" step="0.01" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="tau_c" class="param-label">Completion Steepness:</label>
+                                            <input type="number" id="tau_c" class="param-input" step="0.001" min="0.001">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="K_c" class="param-label">Completion Scaling:</label>
+                                            <input type="number" id="K_c" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="tau_K" class="param-label">Familiarity Threshold:</label>
+                                            <input type="number" id="tau_K" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- Similarity Weighting Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Similarity Weighting</h4>
+                                        <div class="param-row">
+                                            <label for="beta_track" class="param-label">Track Similarity Weight:</label>
+                                            <input type="number" id="beta_track" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_artist_pop" class="param-label">Artist Popularity Vibe Weight:</label>
+                                            <input type="number" id="beta_artist_pop" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_artist_personal" class="param-label">Artist Personal Vibe Weight:</label>
+                                            <input type="number" id="beta_artist_personal" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_genre" class="param-label">Genre Weight:</label>
+                                            <input type="number" id="beta_genre" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_streams_total" class="param-label">Total Streams Weight:</label>
+                                            <input type="number" id="beta_streams_total" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_streams_daily" class="param-label">Daily Streams Weight:</label>
+                                            <input type="number" id="beta_streams_daily" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_artist" class="param-label">Artist Similarity Weight:</label>
+                                            <input type="number" id="beta_artist" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Right Column -->
+                                <div class="advanced-settings-column">
+                                    <!-- Freshness Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Freshness Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="eta" class="param-label">Freshness Sharpness:</label>
+                                            <input type="number" id="eta" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="tau" class="param-label">Freshness Threshold:</label>
+                                            <input type="number" id="tau" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_f" class="param-label">Freshness Exponent:</label>
+                                            <input type="number" id="beta_f" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- Familiarity Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Familiarity Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="K_life" class="param-label">Lifetime Half-life:</label>
+                                            <input type="number" id="K_life" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="K_recent" class="param-label">Recent Half-life:</label>
+                                            <input type="number" id="K_recent" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="psi" class="param-label">Familiarity Exponent:</label>
+                                            <input type="number" id="psi" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                    </div>
+
+                                    <!-- kNN Similarity Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">kNN Similarity Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="k_neighbors" class="param-label">Number of Neighbors:</label>
+                                            <input type="number" id="k_neighbors" class="param-input" step="1" min="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="sigma" class="param-label">Softmax Temperature:</label>
+                                            <input type="number" id="sigma" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="knn_embed_type" class="param-label">Embedding Type:</label>
+                                            <select id="knn_embed_type" class="param-select">
+                                                <option value="full_profile">Full Profile</option>
+                                                <option value="sound_aspect">Sound</option>
+                                                <option value="meaning_aspect">Meaning</option>
+                                                <option value="mood_aspect">Mood</option>
+                                                <option value="tags_genres">Tags & Genres</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <!-- Prior Combination Weights -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Prior Combination Weights</h4>
+                                        <div class="param-row">
+                                            <label for="beta_p" class="param-label">Popularity Weight:</label>
+                                            <input type="number" id="beta_p" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_s" class="param-label">Similarity Weight:</label>
+                                            <input type="number" id="beta_s" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="beta_a" class="param-label">Artist Affinity Weight:</label>
+                                            <input type="number" id="beta_a" class="param-input" step="0.1" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="kappa_E" class="param-label">Exploration Scaling:</label>
+                                            <input type="number" id="kappa_E" class="param-input" step="0.01" min="0">
+                                        </div>
+                                    </div>
+
+                                    <!-- Track Familiarity Parameters -->
+                                    <div class="param-group">
+                                        <h4 class="param-group-title">Track Familiarity Parameters</h4>
+                                        <div class="param-row">
+                                            <label for="K_fam" class="param-label">Familiarity Scaling:</label>
+                                            <input type="number" id="K_fam" class="param-input" step="0.1" min="0.1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="R_min" class="param-label">Minimum Repetitions:</label>
+                                            <input type="number" id="R_min" class="param-input" step="0.1" min="0">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="C_fam" class="param-label">Base Familiarity:</label>
+                                            <input type="number" id="C_fam" class="param-input" step="0.01" min="0" max="1">
+                                        </div>
+                                        <div class="param-row">
+                                            <label for="min_plays" class="param-label">Minimum Plays:</label>
+                                            <input type="number" id="min_plays" class="param-input" step="1" min="1">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- No-History Weights Section -->
+            <section id="no-history-weights-section" class="no-history-weights-section" style="display: none;">
+                <div class="weights-container">
+                    <div class="weights-title">
+                        <h4 class="param-group-title">Score<br>Weights</h4>
+                    </div>
+                    <div class="weights-inputs">
+                        <div class="weight-input-group">
+                            <label for="nh_beta_track" class="weight-label">Vibe (V):</label>
+                            <input type="number" id="nh_beta_track" class="weight-input" value="{{ default_config.beta_track }}" step="0.05" min="0" max="1">
+                        </div>
+                        <div class="weight-input-group">
+                            <label for="nh_beta_genre" class="weight-label">Genre (G):</label>
+                            <input type="number" id="nh_beta_genre" class="weight-input" value="{{ default_config.beta_genre }}" step="0.05" min="0" max="1">
+                        </div>
+                        <div class="weight-input-group">
+                            <label for="nh_beta_artist_pop" class="weight-label">Artist (A):</label>
+                            <input type="number" id="nh_beta_artist_pop" class="weight-input" value="{{ default_config.beta_artist_pop }}" step="0.05" min="0" max="1">
+                        </div>
+                        <div class="weight-input-group">
+                            <label for="nh_beta_streams_total" class="weight-label">Total Streams (T):</label>
+                            <input type="number" id="nh_beta_streams_total" class="weight-input" value="{{ default_config.beta_streams_total }}" step="0.05" min="0" max="1">
+                        </div>
+                        <div class="weight-input-group">
+                            <label for="nh_beta_streams_daily" class="weight-label">Daily Streams (D):</label>
+                            <input type="number" id="nh_beta_streams_daily" class="weight-input" value="{{ default_config.beta_streams_daily }}" step="0.05" min="0" max="1">
+                        </div>
+                    </div>
+                    <div class="weights-buttons"> 
+                        <button id="no-history-rerun-btn" class="rerun-search-btn" disabled>
+                            <span>🔄 Rerun Search</span>
+                        </button>
+                        <button id="no-history-reset-btn" class="reset-defaults-btn">
+                            <span>↺ Reset to Defaults</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+            
             <!-- Search Results -->
             <section id="results-section" class="results-section">
                 <div id="results-header" class="results-header" style="display: none;">
                     <div class="results-controls">
                         <div class="results-left">
-                            <h2 class="section-title">Similar Songs</h2>
+                            <h2 class="section-title">Matching Songs</h2>
                             <div class="results-filters">
                                 <div class="filter-option">
                                     <label class="filter-checkbox-label">
@@ -125,7 +447,7 @@
                                         <span class="filter-text">Manual Selection</span>
                                     </label>
                                 </div>
-                                <div class="filter-option">
+                                <div id="top-artists-filter-option" class="filter-option">
                                     <label class="filter-checkbox-label">
                                         <input type="checkbox" id="top-artists-filter" class="filter-checkbox" disabled>
                                         <span id="top-artists-text" class="filter-text">Only My Top Artists</span>
@@ -133,15 +455,20 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="results-info">
-                            <span id="results-count"></span>
-                            <span id="search-info"></span>
-                            <div class="results-spotify-attribution">
-                                <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer" class="results-spotify-logo-link">
-                                    <img src="{{ url_for('static', filename='assets/2024-spotify-full-logo/Full_Logo_Green_RGB.svg') }}" 
-                                         alt="Spotify" class="results-spotify-logo">
-                                </a>
-                            </div>
+                        <div class="results-right">
+                            <!-- Personalization controls will be moved here via JavaScript -->
+                        </div>
+                    </div>
+                    
+                    <!-- Results info moved to separate line -->
+                    <div class="results-info-line">
+                        <span id="results-count"></span>
+                        <span id="search-info"></span>
+                        <div class="results-spotify-attribution">
+                            <a href="https://open.spotify.com" target="_blank" rel="noopener noreferrer" class="results-spotify-logo-link">
+                                <img src="{{ url_for('static', filename='assets/2024-spotify-full-logo/Full_Logo_Green_RGB.svg') }}" 
+                                     alt="Spotify" class="results-spotify-logo">
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -156,13 +483,12 @@
                             <ul>
                                 <li><strong>Text-to-Song:</strong> Search songs by describing the vibe you're looking for</li>
                                 <li><strong>Song-to-Song:</strong> Find songs that are similar to one that you have in mind</li>
-                                <li><strong>Search aspect:</strong> Select the aspect of the song to search by ("Tags & Genres" by default)</li>
                             </ul>
                             
-                            <h4>🎧 Listen to and filter results</h4>
+                            <h4>🔧 Adjust score weights and filter results</h4>
                             <ul>
-                                <li><strong>Playable songs:</strong> Click on any song card to play the song in the built-in web player</li>
-                                <li><strong>Search filters:</strong> Refine your search results by adding one or more filters</li>
+                                <li><strong>Tunable weights:</strong> Adjust the score weights to prioritize different aspects of the song</li>
+                                <li><strong>Playable results:</strong> Click on any song card to play the song in the built-in web player</li>
                                 <li><strong>Manual selection:</strong> Enable this mode to select specific songs to include in your playlist</li>
                             </ul>
                             
@@ -187,7 +513,7 @@
                 <!-- Loading indicator -->
                 <div id="loading" class="loading" style="display: none;">
                     <div class="loading-spinner"></div>
-                    <p>Searching for similar songs...</p>
+                    <p>Searching for matching songs...</p>
                 </div>
             </section>
         </main>
@@ -208,7 +534,7 @@
                         <img id="player-cover" class="player-cover" src="" alt="Album Cover">
                         <div class="track-details">
                             <div id="player-title" class="player-title">No track selected</div>
-                            <div id="player-artist" class="player-artist">Connect to Spotify to play music</div>
+                            <div id="player-artist" class="player-artist">Click on a track card to play it</div>
                         </div>
                     </div>
                     
@@ -227,12 +553,22 @@
                         </div>
                         <span id="total-time" class="time-label">0:00</span>
                     </div>
+                    
+                    <!-- Auth Status -->
+                    <div class="auth-status">
+                        <span id="auth-indicator" class="auth-indicator">○</span>
+                        <span id="auth-text">Not connected to Spotify</span>
+                        <button id="login-btn" class="login-btn" style="display: none;">Login to Spotify</button>
+                        <button id="logout-btn" class="logout-btn" style="display: none;">Logout</button>
+                    </div>
                 </div>
             </div>
         </footer>
     </div>
 
-    <!-- JavaScript -->
+    <!-- JavaScript Modules -->
+    <script src="{{ url_for('static', filename='utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='spotify-player.js') }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html> 
