@@ -71,7 +71,7 @@ class MusicSearchEngine:
         self.songs = []
         self.embeddings_data = None
         self.embedding_indices = {}
-        self.embedding_lookup = {}  # (song, artist) -> embedding
+        self.embedding_lookup = {}  # track_id -> embedding
         self.fuzzy_search_index = None  # RapidFuzz search index
         
         # Artist embeddings
@@ -90,8 +90,8 @@ class MusicSearchEngine:
         self.artist_matrix_embed_type = constants.DEFAULT_ARTIST_MATRIX_EMBED_TYPE  # Default embedding type for artist similarity
         
         # Performance optimization mappings
-        self.song_key_to_index = {}  # (song, artist) -> index mapping for O(1) lookups
-        self.artist_to_songs = {}  # artist -> [(song_key, index, song_metadata)] mapping
+        self.track_id_to_index = {}  # track_id -> index mapping for O(1) lookups
+        self.artist_to_songs = {}  # artist -> [(track_id, index, song_metadata)] mapping
         
         # Load all data
         self._load_all_data()
@@ -185,23 +185,34 @@ class MusicSearchEngine:
         """Build optimization mappings for fast lookups."""
         logger.info("Building performance optimization mappings...")
         
-        # Build song_key to index mapping
-        self.song_key_to_index = {}
+        # Build track_id to index mapping
+        self.track_id_to_index = {}
         self.artist_to_songs = {}
         
         for i, song in enumerate(self.songs):
-            song_key = (song['original_song'], song['original_artist'])
-            artist = song['original_artist']
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                logger.warning(f"Song at index {i} missing track_id, skipping")
+                continue
+                
+            # Build track_id to index mapping
+            self.track_id_to_index[track_id] = i
             
-            # Build song key to index mapping
-            self.song_key_to_index[song_key] = i
+            # Build artist to songs mapping (handle multiple artists)
+            artists = []
+            if song.get('artists'):
+                # New format: multiple artists in array
+                artists = [artist['name'] for artist in song['artists']]
+            elif song.get('original_artist'):
+                # Backwards compatibility: single artist
+                artists = [song['original_artist']]
             
-            # Build artist to songs mapping
-            if artist not in self.artist_to_songs:
-                self.artist_to_songs[artist] = []
-            self.artist_to_songs[artist].append((song_key, i, song))
+            for artist in artists:
+                if artist not in self.artist_to_songs:
+                    self.artist_to_songs[artist] = []
+                self.artist_to_songs[artist].append((track_id, i, song))
         
-        logger.info(f"Built mappings for {len(self.songs)} songs and {len(self.artist_to_songs)} artists")
+        logger.info(f"Built mappings for {len(self.track_id_to_index)} songs and {len(self.artist_to_songs)} artists")
     
     def _build_text_search_index(self):
         """Build RapidFuzz search index for song/artist/album matching."""
@@ -242,9 +253,17 @@ class MusicSearchEngine:
         """Get OpenAI embedding for text query."""
         return data_utils.get_openai_embedding(text, normalize=True)
     
-    def get_artist_for_song(self, song_key: Tuple[str, str]) -> str:
-        """Extract artist name from song_key tuple."""
-        return song_key[1]  # song_key is (song_name, artist_name)
+    def get_artist_for_song(self, track_id: str) -> str:
+        """Extract artist name from track_id by looking up song metadata."""
+        song_idx = self.track_id_to_index.get(track_id)
+        if song_idx is not None:
+            song = self.songs[song_idx]
+            if song.get('artists'):
+                # Return primary artist (first in list)
+                return song['artists'][0]['name']
+            elif song.get('original_artist'):
+                return song['original_artist']
+        return ""
     
     
     def _get_embedding_dimension(self) -> int:
@@ -299,9 +318,9 @@ class MusicSearchEngine:
         valid_indices = []
         
         for i, song in enumerate(self.songs):
-            song_key = (song['original_song'], song['original_artist'])
-            if song_key in embedding_lookup:
-                embeddings_list.append(embedding_lookup[song_key])
+            track_id = song.get('track_id') or song.get('id')
+            if track_id and track_id in embedding_lookup:
+                embeddings_list.append(embedding_lookup[track_id])
                 valid_indices.append(i)
             else:
                 # Add zero vector for missing embeddings
@@ -397,14 +416,14 @@ class MusicSearchEngine:
             return self.artist_similarity_matrix is not None
         return True
     
-    def compute_artist_similarity_v2(self, query_song_key: Tuple[str, str], candidate_song_key: Tuple[str, str], 
+    def compute_artist_similarity_v2(self, query_track_id: str, candidate_track_id: str, 
                                    query_embedding: np.ndarray = None) -> Tuple[float, float]:
         """
         Compute artist similarity using score-then-average approach (V2) - OPTIMIZED.
         
         Args:
-            query_song_key: (song, artist) tuple for query song (for song-to-song search)
-            candidate_song_key: (song, artist) tuple for candidate song
+            query_track_id: track_id for query song (for song-to-song search)
+            candidate_track_id: track_id for candidate song
             query_embedding: Normalized query embedding (for text-to-song search)
             
         Returns:
@@ -415,7 +434,10 @@ class MusicSearchEngine:
             logger.warning("Artist similarity matrix not available, falling back to zero similarities")
             return 0.0, 0.0
         
-        candidate_artist = candidate_song_key[1]
+        # Get candidate artist from track_id
+        candidate_artist = self.get_artist_for_song(candidate_track_id)
+        if not candidate_artist:
+            return 0.0, 0.0
         
         # Use optimized artist-to-songs mapping for O(1) lookup
         if candidate_artist not in self.artist_to_songs:
@@ -425,10 +447,10 @@ class MusicSearchEngine:
         
         # Get query song index for song-to-song searches (O(1) lookup)
         query_idx = None
-        if query_song_key is not None:
-            query_idx = self.song_key_to_index.get(query_song_key)
+        if query_track_id is not None:
+            query_idx = self.track_id_to_index.get(query_track_id)
             if query_idx is None:
-                logger.warning(f"Query song {query_song_key} not found in index")
+                logger.warning(f"Query track_id {query_track_id} not found in index")
                 return 0.0, 0.0
         
         # Compute individual similarities for each song by the candidate artist
@@ -438,18 +460,18 @@ class MusicSearchEngine:
         
         # Pre-fetch embedding lookup for text-to-song searches
         embedding_lookup = None
-        if query_song_key is None and self.artist_matrix_embed_type in self.embedding_lookups:
+        if query_track_id is None and self.artist_matrix_embed_type in self.embedding_lookups:
             embedding_lookup = self.embedding_lookups[self.artist_matrix_embed_type]
         
-        for song_key, song_idx, song_metadata in artist_songs_data:
+        for track_id, song_idx, song_metadata in artist_songs_data:
             # Get similarity score
-            if query_song_key is not None:
+            if query_track_id is not None:
                 # Song-to-song search: use precomputed matrix (O(1) lookup)
                 similarity = self.artist_similarity_matrix[query_idx, song_idx]
             else:
                 # Text-to-song search: compute against query embedding
-                if embedding_lookup and song_key in embedding_lookup:
-                    candidate_embedding = embedding_lookup[song_key]
+                if embedding_lookup and track_id in embedding_lookup:
+                    candidate_embedding = embedding_lookup[track_id]
                     candidate_norm = self._safe_normalize(candidate_embedding)
                     similarity = np.dot(query_embedding, candidate_norm)
                 else:
@@ -461,8 +483,10 @@ class MusicSearchEngine:
             
             # Get popularity weight from cached metadata
             popularity_weight = 0.0
-            if ('metadata' in song_metadata and song_metadata['metadata'] and 
-                'popularity' in song_metadata['metadata']):
+            if song_metadata.get('popularity'):
+                popularity_weight = song_metadata['popularity'] / 100.0
+            elif ('metadata' in song_metadata and song_metadata['metadata'] and 
+                  'popularity' in song_metadata['metadata']):
                 popularity_weight = song_metadata['metadata']['popularity'] / 100.0
             
             popularity_weights.append(popularity_weight)
@@ -471,8 +495,8 @@ class MusicSearchEngine:
             personal_weight = 0.0
             if (hasattr(self.ranking_engine, 'track_stats') and 
                 self.ranking_engine.track_stats and 
-                song_key in self.ranking_engine.track_stats):
-                track_data = self.ranking_engine.track_stats[song_key]
+                track_id in self.ranking_engine.track_stats):
+                track_data = self.ranking_engine.track_stats[track_id]
                 if 'R_t' in track_data:
                     personal_weight = np.clip(track_data['R_t'], 0, 1)
             
@@ -528,13 +552,15 @@ class MusicSearchEngine:
             raise ValueError(f"Embedding type '{embed_type}' not available. Available types: {available_types}")
         
         song = self.songs[song_idx]
-        song_key = (song['original_song'], song['original_artist'])
+        track_id = song.get('track_id') or song.get('id')
+        if not track_id:
+            raise KeyError(f"Song at index {song_idx} missing track_id")
         
         embedding_lookup = self.embedding_lookups[embed_type]
-        if song_key not in embedding_lookup:
-            raise KeyError(f"No '{embed_type}' embedding for song: {song_key}")
+        if track_id not in embedding_lookup:
+            raise KeyError(f"No '{embed_type}' embedding for track_id: {track_id}")
         
-        return embedding_lookup[song_key]
+        return embedding_lookup[track_id]
     
     def compute_artist_similarity(self, query_artist_or_text: str, candidate_artist: str, is_text_query: bool = False) -> float:
         """
@@ -610,7 +636,7 @@ class MusicSearchEngine:
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0, 
                          embed_type: str = 'full_profile', lambda_val: float = 0.5,
                          familiarity_min: float = 0.0, familiarity_max: float = 1.0,
-                         query_song_key: Tuple[str, str] = None, 
+                         query_track_id: str = None, 
                          genre_query_embedding: np.ndarray = None,
                          query_text: str = None,
                          **advanced_params) -> Tuple[List[Dict], int]:
@@ -625,7 +651,7 @@ class MusicSearchEngine:
             lambda_val: Weight for semantic vs personal utility (0=personal, 1=semantic)
             familiarity_min: Minimum familiarity score to include (0.0-1.0)
             familiarity_max: Maximum familiarity score to include (0.0-1.0)
-            query_song_key: If provided, enables song-to-song search with artist similarities (song_name, artist_name)
+            query_track_id: If provided, enables song-to-song search with artist similarities
             genre_query_embedding: Optional genre query embedding for dual similarity scoring
             query_text: Original text query for text-to-song artist similarity (optional)
         
@@ -681,22 +707,21 @@ class MusicSearchEngine:
         query_song_idx = None
         user_matrix = None
         
-        if query_song_key is not None:
+        if query_track_id is not None:
             # Song-to-song search: try to use precomputed matrix
             user_matrix = self.get_similarity_matrix(embed_type, 'user')
             if user_matrix is not None:
-                # Find query song index
-                for i, song in enumerate(self.songs):
-                    if (song['original_song'], song['original_artist']) == query_song_key:
-                        query_song_idx = i
-                        break
+                # Find query song index using track_id
+                query_song_idx = self.track_id_to_index.get(query_track_id)
                 
                 if query_song_idx is not None:
                     use_precomputed_matrix = True
                     logger.debug(f"Using precomputed similarity matrix for song-to-song search")
         
         for i, song in enumerate(self.songs):
-            song_key = (song['original_song'], song['original_artist'])
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                continue  # Skip songs without track_id
             
             # Compute semantic similarity
             if use_precomputed_matrix:
@@ -704,8 +729,8 @@ class MusicSearchEngine:
                 semantic_similarity = user_matrix[query_song_idx, i]
             else:
                 # Use direct embedding computation
-                if song_key in embedding_lookup:
-                    song_embedding = embedding_lookup[song_key]
+                if track_id in embedding_lookup:
+                    song_embedding = embedding_lookup[track_id]
                     semantic_similarity = np.dot(query_embedding, song_embedding)
                 else:
                     # No embedding available for this type, skip
@@ -716,7 +741,7 @@ class MusicSearchEngine:
             
             candidates_data.append({
                 'song_idx': i,
-                'song_key': song_key,
+                'track_id': track_id,
                 'song': song,
                 'semantic_similarity': semantic_similarity,
             })
@@ -744,11 +769,11 @@ class MusicSearchEngine:
             try:
                 # Use V2 score-then-average artist similarity method
                 artist_pop_similarity, artist_personal_similarity = self.compute_artist_similarity_v2(
-                    query_song_key, candidate['song_key'], query_embedding
+                    query_track_id, candidate['track_id'], query_embedding
                 )
                 
             except Exception as e:
-                logger.warning(f"Error computing V2 artist similarities for {candidate['song_key']}: {e}")
+                logger.warning(f"Error computing V2 artist similarities for {candidate['track_id']}: {e}")
                 # Keep default values of 0.0 for both similarities
             
             # Compute genre similarity if genre query embedding is provided
@@ -756,8 +781,8 @@ class MusicSearchEngine:
             if genre_query_embedding is not None:
                 try:
                     # Get genre embedding for the candidate song
-                    if 'genres' in self.embedding_lookups and candidate['song_key'] in self.embedding_lookups['genres']:
-                        candidate_genre_embedding = self.embedding_lookups['genres'][candidate['song_key']]
+                    if 'genres' in self.embedding_lookups and candidate['track_id'] in self.embedding_lookups['genres']:
+                        candidate_genre_embedding = self.embedding_lookups['genres'][candidate['track_id']]
                         candidate_genre_norm = self._safe_normalize(candidate_genre_embedding)
                         genre_query_norm = self._safe_normalize(genre_query_embedding)
                         genre_similarity = np.dot(genre_query_norm, candidate_genre_norm)
@@ -767,24 +792,24 @@ class MusicSearchEngine:
                         # No genre embedding available for this song
                         genre_similarity = 0.0
                 except Exception as e:
-                    logger.warning(f"Error computing genre similarity for {candidate['song_key']}: {e}")
+                    logger.warning(f"Error computing genre similarity for {candidate['track_id']}: {e}")
                     genre_similarity = 0.0
             
             # Compute artist-artist similarity
             artist_similarity = 0.0
-            if query_song_key is not None:
+            if query_track_id is not None:
                 # Song-to-song search: compare query artist with candidate artist
-                query_artist = query_song_key[1]
-                candidate_artist = candidate['song_key'][1]
+                query_artist = self.get_artist_for_song(query_track_id)
+                candidate_artist = self.get_artist_for_song(candidate['track_id'])
                 artist_similarity = self.compute_artist_similarity(query_artist, candidate_artist, is_text_query=False)
             elif query_text is not None and query_artist_embedding is not None:
                 # Text-to-song search: use pre-computed query embedding to avoid repeated API calls
-                candidate_artist = candidate['song_key'][1]
+                candidate_artist = self.get_artist_for_song(candidate['track_id'])
                 artist_similarity = self.compute_artist_similarity_with_embedding(query_artist_embedding, candidate_artist)
             
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 
-                candidate['song_key'],
+                candidate['track_id'],
                 artist_pop_similarity,
                 artist_personal_similarity,
                 genre_similarity,
@@ -792,8 +817,8 @@ class MusicSearchEngine:
             )
             
             # Get familiarity score for filtering
-            if candidate['song_key'] in self.ranking_engine.track_priors:
-                fam_t = self.ranking_engine.track_priors[candidate['song_key']]['Fam_t']
+            if candidate['track_id'] in self.ranking_engine.track_priors:
+                fam_t = self.ranking_engine.track_priors[candidate['track_id']]['Fam_t']
             else:
                 # If no history, use a default low familiarity
                 fam_t = 0.0
@@ -802,7 +827,7 @@ class MusicSearchEngine:
             if familiarity_min <= fam_t <= familiarity_max:
                 candidate_scores.append({
                     'song_idx': candidate['song_idx'],
-                    'song_key': candidate['song_key'],
+                    'track_id': candidate['track_id'],
                     'final_score': final_score,
                     'semantic_similarity': candidate['semantic_similarity'],
                     'familiarity': fam_t,
@@ -823,17 +848,28 @@ class MusicSearchEngine:
         for result in paginated_results:
             song_idx = result['song_idx']
             song = self.songs[song_idx]
-            song_key = result['song_key']
+            track_id = result['track_id']
+            
+            # Extract metadata from new Spotify structure
+            artists_list = song.get('artists', [])
+            primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+            all_artists = [artist['name'] for artist in artists_list] if artists_list else [primary_artist]
+            
+            # Get album cover - use 300x300 image (index 1)
+            album_images = song.get('album', {}).get('images', [])
+            cover_url = album_images[1]['url'] if len(album_images) > 1 else (album_images[0]['url'] if album_images else '')
             
             # Build result dict with V2.6 structure
             result_dict = {
                 'song_idx': song_idx,
-                'song': song['original_song'],
-                'artist': song['original_artist'],
-                'cover_url': song.get('metadata', {}).get('cover_url'),
-                'album': song.get('metadata', {}).get('album_name', 'Unknown Album'),
-                'spotify_id': song.get('metadata', {}).get('song_id', ''),
-                'field_value': self._get_field_value(song_key, embed_type),
+                'song': song.get('name', song.get('original_song', '')),
+                'artist': primary_artist,
+                'all_artists': all_artists,  # New: support for multiple artists
+                'cover_url': cover_url,
+                'album': song.get('album', {}).get('name', 'Unknown Album'),
+                'spotify_id': track_id,  # Use track_id directly
+                'duration_ms': song.get('duration_ms', 0),  # New: duration in milliseconds
+                'field_value': self._get_field_value(track_id, embed_type),
                 'genres': song.get('genres', []),
                 'tags': song.get('tags', []),
                 'final_score': result['final_score'],
@@ -841,7 +877,7 @@ class MusicSearchEngine:
             }
             
             # Add has_history flag for compatibility
-            result_dict['scoring_components']['has_history'] = song_key in (
+            result_dict['scoring_components']['has_history'] = track_id in (
                 self.ranking_engine.track_stats if self.ranking_engine.track_stats else {}
             )
             
@@ -849,20 +885,19 @@ class MusicSearchEngine:
         
         return results, total_count
     
-    def _get_field_value(self, song_key: Tuple[str, str], embed_type: str) -> str:
-        """Get field value for a song and embedding type."""
+    def _get_field_value(self, track_id: str, embed_type: str) -> str:
+        """Get field value for a track_id and embedding type."""
         try:
             if embed_type in self.embedding_indices:
                 indices = self.embedding_indices[embed_type]
                 
-                # Find the song in the embedding data
-                for i, song_idx in enumerate(indices['song_indices']):
-                    if song_idx < len(self.songs):
-                        song = self.songs[song_idx]
-                        if (song['original_song'], song['original_artist']) == song_key:
-                            if 'field_values' in indices and i < len(indices['field_values']):
-                                return str(indices['field_values'][i])
-                            break
+                # Find the track_id in the embedding data
+                track_ids = indices.get('track_ids', [])
+                for i, tid in enumerate(track_ids):
+                    if tid == track_id:
+                        if 'field_values' in indices and i < len(indices['field_values']):
+                            return str(indices['field_values'][i])
+                        break
             
             # Fallback based on embedding type
             if embed_type == 'full_profile':
@@ -872,7 +907,7 @@ class MusicSearchEngine:
             else:
                 return 'N/A'
         except Exception as e:
-            logger.debug(f"Error getting field value for {song_key}, {embed_type}: {e}")
+            logger.debug(f"Error getting field value for {track_id}, {embed_type}: {e}")
             return 'N/A'
     
     def search_songs_by_text(self, query: str, limit: int = 10) -> List[Tuple[int, float, str]]:
@@ -922,11 +957,11 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             # Fallback defaults
             default_songs = Path(__file__).parent.parent / constants.DEFAULT_SONGS_FILE
             default_embeddings = Path(__file__).parent.parent / constants.DEFAULT_EMBEDDINGS_PATH
-            default_artist_embeddings = Path(__file__).parent.parent / constants.DEFAULT_ARTIST_EMBEDDINGS_PATH
+            default_artist_embeddings = (Path(__file__).parent.parent / constants.DEFAULT_ARTIST_EMBEDDINGS_PATH) if constants.DEFAULT_ARTIST_EMBEDDINGS_PATH else None
             songs_path = songs_file or str(default_songs)
             embeddings_path = embeddings_file or str(default_embeddings)
             history_path_arg = history_path
-            artist_embeddings_path = artist_embeddings_file or str(default_artist_embeddings)
+            artist_embeddings_path = artist_embeddings_file or (str(default_artist_embeddings) if default_artist_embeddings else None)
         
         # Validate that files exist
         if not Path(songs_path).exists():
@@ -1081,22 +1116,25 @@ def search():
                 return jsonify({'error': 'Invalid song_idx'}), 400
             
             reference_song = search_engine.songs[song_idx]
-            song_key = (reference_song['original_song'], reference_song['original_artist'])
+            track_id = reference_song.get('track_id') or reference_song.get('id')
+            
+            if not track_id:
+                return jsonify({'error': 'Reference song missing track_id'}), 400
             
             # Get embedding for the specified type
             embedding_lookup = search_engine.embedding_lookups.get(embed_type, {})
-            if song_key in embedding_lookup:
-                query_embedding = embedding_lookup[song_key]
+            if track_id in embedding_lookup:
+                query_embedding = embedding_lookup[track_id]
                 
                 # Get genre embedding for the reference song (for genre similarity)
                 genre_query_embedding = None
-                if 'genres' in search_engine.embedding_lookups and song_key in search_engine.embedding_lookups['genres']:
-                    genre_query_embedding = search_engine.embedding_lookups['genres'][song_key]
+                if 'genres' in search_engine.embedding_lookups and track_id in search_engine.embedding_lookups['genres']:
+                    genre_query_embedding = search_engine.embedding_lookups['genres'][track_id]
                 
                 results, total_count = search_engine.similarity_search(
                     query_embedding, k=limit, offset=offset, embed_type=embed_type,
                     lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
-                    query_song_key=song_key,  # Enable song-to-song artist similarities
+                    query_track_id=track_id,  # Enable song-to-song artist similarities
                     genre_query_embedding=genre_query_embedding,
                     **advanced_params
                 )
@@ -1305,15 +1343,28 @@ def search_suggestions():
     suggestions = []
     for song_idx, score, label in results:
         song = search_engine.songs[song_idx]
-        metadata = song.get('metadata', {})
+        
+        # Extract data from new Spotify metadata structure
+        track_id = song.get('track_id') or song.get('id', '')
+        song_name = song.get('name', song.get('original_song', ''))
+        
+        # Handle multiple artists
+        artists_list = song.get('artists', [])
+        primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+        
+        # Get album info and cover art
+        album_name = song.get('album', {}).get('name', '')
+        album_images = song.get('album', {}).get('images', [])
+        cover_url = album_images[1]['url'] if len(album_images) > 1 else (album_images[0]['url'] if album_images else '')
+        
         suggestions.append({
             'song_idx': int(song_idx),  # Convert numpy.int64 to native Python int
             'label': label,
-            'song': song['original_song'],
-            'artist': song['original_artist'],
-            'album': metadata.get('album_name', ''),
-            'cover_url': metadata.get('cover_url', ''),
-            'spotify_id': metadata.get('song_id', ''),
+            'song': song_name,
+            'artist': primary_artist,
+            'album': album_name,
+            'cover_url': cover_url,
+            'spotify_id': track_id,
             'score': float(score)  # Convert numpy.float64 to native Python float
         })
     
@@ -1505,15 +1556,33 @@ def get_song():
         return jsonify({'error': 'Invalid song_idx'}), 400
     
     song = search_engine.songs[song_idx]
-    metadata = song.get('metadata', {})
+    
+    # Extract data from new Spotify metadata structure
+    track_id = song.get('track_id') or song.get('id', '')
+    song_name = song.get('name', song.get('original_song', ''))
+    
+    # Handle multiple artists
+    artists_list = song.get('artists', [])
+    primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+    all_artists = [artist['name'] for artist in artists_list] if artists_list else [primary_artist]
+    
+    # Get album info and cover art
+    album_name = song.get('album', {}).get('name', '')
+    album_images = song.get('album', {}).get('images', [])
+    cover_url = album_images[1]['url'] if len(album_images) > 1 else (album_images[0]['url'] if album_images else '')
+    
+    # Get duration
+    duration_ms = song.get('duration_ms', 0)
     
     return jsonify({
         'song_idx': song_idx,
-        'song': song['original_song'],
-        'artist': song['original_artist'],
-        'album': metadata.get('album_name', ''),
-        'cover_url': metadata.get('cover_url', ''),
-        'spotify_id': metadata.get('song_id', ''),
+        'song': song_name,
+        'artist': primary_artist,
+        'all_artists': all_artists,  # New: support multiple artists
+        'album': album_name,
+        'cover_url': cover_url,
+        'spotify_id': track_id,
+        'duration_ms': duration_ms,  # New: duration in milliseconds
         'genres': song.get('genres', []),
         'tags': song.get('tags', []),
         'sound': song.get('sound', ''),

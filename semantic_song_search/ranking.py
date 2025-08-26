@@ -303,10 +303,17 @@ class RankingEngine:
         # Create duration lookup
         duration_lookup = {}
         for song in songs_metadata:
-            song_key = (song['original_song'], song['original_artist'])
-            # V2.5 expects track_duration_ms in metadata
-            duration_ms = song.get('metadata', {}).get('duration', 180) * 1000  # Default 3 minutes
-            duration_lookup[song_key] = duration_ms
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                continue
+            # Use duration_ms from new Spotify metadata structure
+            duration_ms = song.get('duration_ms', 180000)  # Default 3 minutes in ms
+            duration_lookup[track_id] = duration_ms
+            
+            # Also create entry for backwards compatibility with song_key fallback
+            if song.get('original_song') and song.get('original_artist'):
+                song_key = (song['original_song'], song['original_artist'])
+                duration_lookup[song_key] = duration_ms
         
         # Work with a copy
         df = history_df.copy()
@@ -326,8 +333,14 @@ class RankingEngine:
         
         # Completion ratios: c_{t,i} = min(ms_played / D_t, 1)
         def calculate_completion(row):
-            song_key = (row['original_song'], row['original_artist'])
-            duration_ms = duration_lookup.get(song_key, 180000)  # Default 3 minutes
+            # Try track_id first, then fallback to song/artist lookup
+            track_id = row.get('track_id')
+            if track_id and track_id in duration_lookup:
+                duration_ms = duration_lookup[track_id]
+            else:
+                # Fallback for backwards compatibility
+                song_key = (row['original_song'], row['original_artist'])
+                duration_ms = duration_lookup.get(song_key, 180000)  # Default 3 minutes
             # Use actual duration without artificial minimum (as per V2.5 spec)
             return min(1.0, row['ms_played'] / max(1, duration_ms))  # Guard against zero duration
         
@@ -348,14 +361,20 @@ class RankingEngine:
         # consider a play a skip if the completion ratio is < 0.25
         df['num_skips'] = (df['c_ti'] < 0.25).astype(int)
         
-        # Group by song key
-        song_key_col = df[['original_song', 'original_artist']].apply(tuple, axis=1)
-        df['song_key'] = song_key_col
+        # Group by track_id (preferred) or fallback to song_key for backwards compatibility
+        if 'track_id' in df.columns:
+            # Use track_id directly
+            groupby_key = 'track_id'
+        else:
+            # Fallback: create song_key from original_song and original_artist
+            song_key_col = df[['original_song', 'original_artist']].apply(tuple, axis=1)
+            df['song_key'] = song_key_col
+            groupby_key = 'song_key'
         
         # Aggregate per track (V2.5 §3.2-3.4)
         track_stats = {}
         
-        for song_key, group in df.groupby('song_key'):
+        for track_key, group in df.groupby(groupby_key):
             # Aggregate signed evidence
             S_t = group['s_ti'].sum()  # Total success evidence
             F_t = group['f_ti'].sum()  # Total failure evidence  
@@ -395,7 +414,18 @@ class RankingEngine:
             # Final expoitation quality score
             Q_t = s_t * A_t * m_f_t
             
-            track_stats[song_key] = {
+            # Extract artist information for this track
+            # For track_id grouping, we need to extract artist from the first row
+            # For song_key grouping, we can extract from the key itself
+            if groupby_key == 'track_id':
+                # Extract artist from first row of group (assumes all rows for a track_id have same artist)
+                first_row = group.iloc[0]
+                artist = first_row.get('original_artist', 'Unknown')
+            else:
+                # song_key grouping: extract artist from key tuple
+                artist = track_key[1] if isinstance(track_key, tuple) and len(track_key) > 1 else 'Unknown'
+            
+            track_stats[track_key] = {
                 'S_t': float(S_t),
                 'F_t': float(F_t),
                 'n_t': float(n_t),
@@ -413,6 +443,7 @@ class RankingEngine:
                 'play_count': num_plays,
                 'num_completions': num_completions,
                 'num_skips': num_skips,
+                'artist': artist,  # Store artist info for later use
                 # Keep for debugging
                 'alpha': float(alpha),
                 'beta': float(beta),
@@ -436,14 +467,21 @@ class RankingEngine:
         track_priors = {}
         
         for song in songs_metadata:
-            song_key = (song['original_song'], song['original_artist'])
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                continue
+                
+            # Get artist for lookups (primary artist)
+            artists_list = song.get('artists', [])
+            primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
+            
             # Compute three priors (V2.5 §4)
-            # P_t: Popularity prior
-            popularity = song.get('metadata', {}).get('popularity', 50)
+            # P_t: Popularity prior from new metadata structure
+            popularity = song.get('popularity', 50)
             P_t = np.clip(popularity / 100.0, 0.0, 1.0)
             
             # C_t: kNN similarity prior
-            C_t = self.knn_similarities.get(song_key)
+            C_t = self.knn_similarities.get(track_id)
             if C_t is not None and self.p05_C_t is not None and self.p95_C_t is not None:
                 C_t_hat = np.clip((C_t - self.p05_C_t) * (1 / (self.p95_C_t - self.p05_C_t)), 0, 1)
             else:
@@ -452,8 +490,8 @@ class RankingEngine:
                 C_t_hat = 0.0
             
             # B_t: Artist affinity prior
-            B_t = self.artist_affinities.get(song_key[1], 0.0)
-            B_A_fam = self.artist_familiarities.get(song_key[1], 0.0)
+            B_t = self.artist_affinities.get(primary_artist, 0.0)
+            B_A_fam = self.artist_familiarities.get(primary_artist, 0.0)
 
             # Combined prior utility E_t
             E_t = (
@@ -463,10 +501,10 @@ class RankingEngine:
             
             # Track familiarity
             Fam_t = 0
-            if song_key in self.track_stats:
-                R_t = self.track_stats[song_key]['R_t']
-                R_t_s = self.track_stats[song_key]['R_t_s']
-                num_plays = self.track_stats[song_key]['play_count']
+            if track_id in self.track_stats:
+                R_t = self.track_stats[track_id]['R_t']
+                R_t_s = self.track_stats[track_id]['R_t_s']
+                num_plays = self.track_stats[track_id]['play_count']
                 if num_plays < self.config.min_plays and R_t < self.config.R_min:
                     Fam_t = B_A_fam * self.config.C_fam
                 else:
@@ -476,7 +514,7 @@ class RankingEngine:
 
             Fam_t = np.clip(Fam_t, 0, 1)
 
-            track_priors[song_key] = {
+            track_priors[track_id] = {
                 'P_t': P_t,
                 'C_t': C_t,
                 'B_t': B_t,
@@ -503,8 +541,13 @@ class RankingEngine:
         
         artist_data = {}
         
-        # Aggregate by artist
-        for (_, artist), stats in self.track_stats.items():
+        # Aggregate by artist - we need to extract artist from track_id
+        # This requires access to songs metadata to map track_id -> artist
+        # For now, track_stats keys are track_ids, so we need another approach
+        # We'll store artist info in track_stats during computation
+        for track_id, stats in self.track_stats.items():
+            # Get artist from stored artist info in stats (we'll need to add this)
+            artist = stats.get('artist', 'Unknown')  # We'll need to add this during track stats computation
             if artist not in artist_data:
                 artist_data[artist] = {'E_A': 0, 'F_A': 0}
 
@@ -523,7 +566,7 @@ class RankingEngine:
         return artist_affinities, artist_familiarities
     
 
-    def compute_knn_similarities(self, embeddings_data: Dict) -> Dict[Tuple[str, str], float]:
+    def compute_knn_similarities(self, embeddings_data: Dict) -> Dict[str, float]:
         """
         Compute kNN similarity prior C_t for all tracks in embeddings_data (V2.5 §4.1).
         
@@ -531,10 +574,10 @@ class RankingEngine:
         then compute a trust-weighted average of their Q_t scores.
         
         Args:
-            embeddings_data: Dictionary mapping (song, artist) -> embedding for all tracks
+            embeddings_data: Dictionary mapping track_id -> embedding for all tracks
             
         Returns:
-            Tuple of (knn_similarities_dict, max_terms_dict) for debugging
+            Dictionary mapping track_id -> similarity score
         """
         if not embeddings_data:
             return {}
@@ -547,15 +590,15 @@ class RankingEngine:
         trust_scores = []
         
         t0 = time.time()
-        for song_key in embeddings_data:
-            all_embeddings.append(embeddings_data[song_key])
-            all_track_keys.append(song_key)
+        for track_id in embeddings_data:
+            all_embeddings.append(embeddings_data[track_id])
+            all_track_keys.append(track_id)
             
             # Only tracks with history can be neighbors
-            if song_key in self.track_stats:
-                historical_embeddings.append(embeddings_data[song_key])
-                historical_track_keys.append(song_key)
-                trust_scores.append(self.track_stats[song_key]['Q_t'])
+            if track_id in self.track_stats:
+                historical_embeddings.append(embeddings_data[track_id])
+                historical_track_keys.append(track_id)
+                trust_scores.append(self.track_stats[track_id]['Q_t'])
         
         t1 = time.time()
         print(f"Time taken to get embeddings: {(t1 - t0) * 1000} milliseconds")
@@ -671,7 +714,7 @@ class RankingEngine:
         return quantile_map
     
 
-    def compute_v25_final_score(self, semantic_similarity: float, song_key: Tuple[str, str], 
+    def compute_v25_final_score(self, semantic_similarity: float, track_id: str, 
                                artist_pop_similarity: float = 0.0, artist_personal_similarity: float = 0.0,
                                genre_similarity: float = None, artist_similarity: float = 0.0) -> Tuple[float, Dict]:
         """
@@ -681,7 +724,7 @@ class RankingEngine:
         
         Args:
             semantic_similarity: Query-track semantic similarity [0, 1]
-            song_key: (song, artist) tuple
+            track_id: Spotify track ID
             artist_pop_similarity: Query-artist popularity vibe similarity [0, 1] (default: 0.0)
             artist_personal_similarity: Query-artist personal vibe similarity [0, 1] (default: 0.0)
             genre_similarity: Query-track genre similarity [0, 1] (default: None)
@@ -697,7 +740,7 @@ class RankingEngine:
         S_artist_pop = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
         S_artist_personal = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
         S_artist = 0.0 if np.isnan(artist_similarity) else artist_similarity
-        S_pop = self.track_priors[song_key]['P_t'] if song_key in self.track_priors else 0.0
+        S_pop = self.track_priors[track_id]['P_t'] if track_id in self.track_priors else 0.0
         
         # Compute weighted combined semantic similarity (track + artist similarities)
         total_weight = self.config.beta_track + self.config.beta_genre + self.config.beta_artist_pop + self.config.beta_artist_personal + self.config.beta_pop + self.config.beta_artist
@@ -749,8 +792,8 @@ class RankingEngine:
         S_t = S_semantic
 
         # Get track statistics if available
-        if song_key in self.track_stats:
-            stats = self.track_stats[song_key]
+        if track_id in self.track_stats:
+            stats = self.track_stats[track_id]
             Q_t = stats['Q_t']
             h_t = stats['h_t']
         else:
@@ -758,7 +801,7 @@ class RankingEngine:
             Q_t = 0.0
             h_t = 0.0
 
-        priors = self.track_priors[song_key]
+        priors = self.track_priors[track_id]
         P_t = priors['P_t']
         C_t = priors['C_t']
         B_t = priors['B_t']

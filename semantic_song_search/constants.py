@@ -26,9 +26,9 @@ FUZZY_SEARCH_CONSTANTS = {
 }
 
 # Default File Paths  
-DEFAULT_SONGS_FILE = "data/eval_set_v2/eval_set_v2_metadata_ready.json"
-DEFAULT_EMBEDDINGS_PATH = "data/eval_set_v2/eval_set_v2_embeddings"
-DEFAULT_ARTIST_EMBEDDINGS_PATH = "data/eval_set_v2/eval_set_v2_artist_embeddings"
+DEFAULT_SONGS_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_metadata.json"
+DEFAULT_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_embeddings"
+DEFAULT_ARTIST_EMBEDDINGS_PATH = None
 
 # Embedding Types
 EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']

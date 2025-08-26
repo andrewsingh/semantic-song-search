@@ -150,7 +150,11 @@ class SpotifyPlayer {
     }
 
     async playSong(song, isAutoAdvance = false) {
-        console.log(`🎵 Playing song: "${song.song}" by ${song.artist}${isAutoAdvance ? ' (auto-advance)' : ''}`);
+        // Handle multiple artists for display
+        const artistText = song.all_artists && song.all_artists.length > 1 
+            ? song.all_artists.join(', ')
+            : song.artist;
+        console.log(`🎵 Playing song: "${song.song}" by ${artistText}${isAutoAdvance ? ' (auto-advance)' : ''}`);
         
         if (!song.spotify_id) {
             console.error('❌ Song has no Spotify ID:', song);
@@ -202,7 +206,7 @@ class SpotifyPlayer {
             this.app.analytics.trackEvent('Song Played', {
                 'song_spotify_id': song.spotify_id || 'unknown',
                 'song_title': song.song || 'unknown',
-                'artist': song.artist || 'unknown',
+                'artist': artistText || 'unknown',
                 'play_method': isAutoAdvance ? 'auto_advance' : 'manual_click',
                 'similarity_score': song.similarity || 0,
                 'position_in_results': this.searchResults.findIndex(r => r.song_idx === song.song_idx) + 1,
@@ -242,11 +246,15 @@ class SpotifyPlayer {
         } catch (error) {
             console.error('❌ Error playing song:', error);
             
-            // Track song play failures
+            // Track song play failures - recompute artistText in catch block scope
+            const errorArtistText = song.all_artists && song.all_artists.length > 1 
+                ? song.all_artists.join(', ')
+                : song.artist;
+                
             this.app.analytics.trackEvent('Song Play Failed', {
                 'song_spotify_id': song.spotify_id || 'unknown',
                 'song_title': song.song || 'unknown',
-                'artist': song.artist || 'unknown',
+                'artist': errorArtistText || 'unknown',
                 'error_message': error.message || 'Unknown error',
                 'play_method': isAutoAdvance ? 'auto_advance' : 'manual_click'
             });

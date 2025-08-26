@@ -1155,9 +1155,8 @@ body {
 .card-artist {
     color: #b3b3b3;
     margin-bottom: 0.25rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 0.95rem;
+    line-height: 1.3;
 }
 
 .card-album {
