@@ -779,16 +779,21 @@ class MusicSearchEngine:
             logger.error(f"No embeddings available for type {embed_type}")
             return [], 0
         
+        logger.info(f"Using embedding lookup with {len(embedding_lookup)} songs for type: {embed_type}")
+        
         # V2.6: Compute candidates and their priors for quantile normalization
         candidates_data = []
         
-        # Try to use precomputed similarity matrix for song-to-song searches
+        # For song-to-song searches, get query embedding directly instead of computing full matrix
+        # This avoids memory issues with large datasets in production
         use_precomputed_matrix = False
         query_song_idx = None
         user_matrix = None
         
-        if query_track_id is not None:
-            # Song-to-song search: try to use precomputed matrix
+        # For now, disable precomputed matrix to avoid memory issues in production
+        # TODO: Implement smarter matrix caching or chunked computation for large datasets
+        if False and query_track_id is not None:
+            # Song-to-song search: try to use precomputed matrix (disabled for memory efficiency)
             user_matrix = self.get_similarity_matrix(embed_type, 'user')
             if user_matrix is not None:
                 # Find query song index using track_id
@@ -798,7 +803,14 @@ class MusicSearchEngine:
                     use_precomputed_matrix = True
                     logger.debug(f"Using precomputed similarity matrix for song-to-song search")
         
+        logger.info(f"Processing {len(self.songs)} songs for similarity computation")
+        processed_count = 0
+        
         for i, song in enumerate(self.songs):
+            # Log progress every 1000 songs
+            if i % 1000 == 0 and i > 0:
+                logger.info(f"Processed {i}/{len(self.songs)} songs...")
+            
             track_id = song.get('track_id') or song.get('id')
             if not track_id:
                 continue  # Skip songs without track_id
@@ -816,6 +828,8 @@ class MusicSearchEngine:
                     # No embedding available for this type, skip
                     continue
             
+            processed_count += 1
+            
             # normalize semantic similarity to [0, 1]
             semantic_similarity = np.clip((semantic_similarity + 1) / 2, 0, 1)
             
@@ -826,7 +840,10 @@ class MusicSearchEngine:
                 'semantic_similarity': semantic_similarity,
             })
         
+        logger.info(f"Completed processing {processed_count} songs with valid embeddings")
+        
         if not candidates_data:
+            logger.warning("No candidate songs found for similarity search")
             return [], 0
         
         
@@ -1192,34 +1209,50 @@ def search():
             if song_idx is None:
                 return jsonify({'error': 'song_idx is required for song search'}), 400
             
-            if song_idx >= len(search_engine.songs):
-                return jsonify({'error': 'Invalid song_idx'}), 400
-            
-            reference_song = search_engine.songs[song_idx]
-            track_id = reference_song.get('track_id') or reference_song.get('id')
-            
-            if not track_id:
-                return jsonify({'error': 'Reference song missing track_id'}), 400
-            
-            # Get embedding for the specified type
-            embedding_lookup = search_engine.embedding_lookups.get(embed_type, {})
-            if track_id in embedding_lookup:
-                query_embedding = embedding_lookup[track_id]
+            try:
+                if song_idx >= len(search_engine.songs):
+                    return jsonify({'error': 'Invalid song_idx'}), 400
                 
-                # Get genre embedding for the reference song (for genre similarity)
-                genre_query_embedding = None
-                if 'genres' in search_engine.embedding_lookups and track_id in search_engine.embedding_lookups['genres']:
-                    genre_query_embedding = search_engine.embedding_lookups['genres'][track_id]
+                reference_song = search_engine.songs[song_idx]
+                track_id = reference_song.get('track_id') or reference_song.get('id')
                 
-                results, total_count = search_engine.similarity_search(
-                    query_embedding, k=limit, offset=offset, embed_type=embed_type,
-                    lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
-                    query_track_id=track_id,  # Enable song-to-song artist similarities
-                    genre_query_embedding=genre_query_embedding,
-                    **advanced_params
-                )
-            else:
-                return jsonify({'error': f'No {embed_type} embedding available for reference song'}), 400
+                if not track_id:
+                    return jsonify({'error': 'Reference song missing track_id'}), 400
+                
+                logger.info(f"Song-to-song search for track_id: {track_id}, embed_type: {embed_type}")
+                
+                # Get embedding for the specified type
+                embedding_lookup = search_engine.embedding_lookups.get(embed_type, {})
+                if not embedding_lookup:
+                    logger.error(f"No embedding lookup found for type: {embed_type}")
+                    return jsonify({'error': f'Embedding type {embed_type} not available'}), 400
+                
+                if track_id in embedding_lookup:
+                    query_embedding = embedding_lookup[track_id]
+                    logger.info(f"Found query embedding for track_id: {track_id}, shape: {query_embedding.shape}")
+                    
+                    # Get genre embedding for the reference song (for genre similarity)
+                    genre_query_embedding = None
+                    if 'genres' in search_engine.embedding_lookups and track_id in search_engine.embedding_lookups['genres']:
+                        genre_query_embedding = search_engine.embedding_lookups['genres'][track_id]
+                        logger.info(f"Found genre embedding for track_id: {track_id}")
+                    
+                    logger.info(f"Starting similarity search with {len(search_engine.songs)} total songs")
+                    results, total_count = search_engine.similarity_search(
+                        query_embedding, k=limit, offset=offset, embed_type=embed_type,
+                        lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                        query_track_id=track_id,  # Enable song-to-song artist similarities
+                        genre_query_embedding=genre_query_embedding,
+                        **advanced_params
+                    )
+                    logger.info(f"Similarity search completed, found {total_count} results")
+                else:
+                    logger.error(f"No {embed_type} embedding found for track_id: {track_id}")
+                    return jsonify({'error': f'No {embed_type} embedding available for reference song'}), 400
+            
+            except Exception as e:
+                logger.error(f"Error in song-to-song search: {str(e)}", exc_info=True)
+                return jsonify({'error': f'Song search failed: {str(e)}'}), 500
         
         else:
             return jsonify({'error': 'Invalid search type'}), 400
