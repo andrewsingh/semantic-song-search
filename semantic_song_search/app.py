@@ -93,6 +93,10 @@ class MusicSearchEngine:
         self.track_id_to_index = {}  # track_id -> index mapping for O(1) lookups
         self.artist_to_songs = {}  # artist -> [(track_id, index, song_metadata)] mapping
         
+        # Tags and genres lookups
+        self.tags_lookup = {}  # track_id -> list of tags
+        self.genres_lookup = {}  # track_id -> list of genres
+        
         # Load all data
         self._load_all_data()
     
@@ -133,6 +137,9 @@ class MusicSearchEngine:
         
         # Fallback to full_profile for compatibility 
         self.embedding_lookup = self.embedding_lookups.get('full_profile', {})
+        
+        # Build tags and genres lookups from field_values
+        self._build_tags_genres_lookups()
         
         # Build performance optimization mappings
         self._build_performance_mappings()
@@ -180,6 +187,50 @@ class MusicSearchEngine:
             logger.error(f"Failed to load artist embeddings: {e}")
             self.artist_embeddings_data = None
             self.artist_embedding_lookup = {}
+    
+    def _build_tags_genres_lookups(self):
+        """Build tags and genres lookups from embedding field_values."""
+        logger.info("Building tags and genres lookups...")
+        
+        # Initialize lookups
+        self.tags_lookup = {}  # track_id -> list of tags
+        self.genres_lookup = {}  # track_id -> list of genres
+        
+        # Build tags lookup from tags embedding field_values
+        if 'tags' in self.embedding_indices:
+            tags_data = self.embedding_indices['tags']
+            track_ids = tags_data.get('track_ids', [])
+            field_values = tags_data.get('field_values', [])
+            
+            for i, track_id in enumerate(track_ids):
+                if i < len(field_values):
+                    tags_string = field_values[i]
+                    if tags_string:
+                        # Split by comma and clean up
+                        tags_list = [tag.strip() for tag in tags_string.split(',') if tag.strip()]
+                        self.tags_lookup[track_id] = tags_list
+            
+            logger.info(f"Built tags lookup for {len(self.tags_lookup)} songs")
+        else:
+            logger.warning("No 'tags' embedding data found")
+        
+        # Build genres lookup from genres embedding field_values
+        if 'genres' in self.embedding_indices:
+            genres_data = self.embedding_indices['genres']
+            track_ids = genres_data.get('track_ids', [])
+            field_values = genres_data.get('field_values', [])
+            
+            for i, track_id in enumerate(track_ids):
+                if i < len(field_values):
+                    genres_string = field_values[i]
+                    if genres_string:
+                        # Split by comma and clean up
+                        genres_list = [genre.strip() for genre in genres_string.split(',') if genre.strip()]
+                        self.genres_lookup[track_id] = genres_list
+            
+            logger.info(f"Built genres lookup for {len(self.genres_lookup)} songs")
+        else:
+            logger.warning("No 'genres' embedding data found")
     
     def _build_performance_mappings(self):
         """Build optimization mappings for fast lookups."""
@@ -855,9 +906,9 @@ class MusicSearchEngine:
             primary_artist = artists_list[0]['name'] if artists_list else song.get('original_artist', '')
             all_artists = [artist['name'] for artist in artists_list] if artists_list else [primary_artist]
             
-            # Get album cover - use 300x300 image (index 1)
+            # Get album cover - use 64x64 image (last in array)
             album_images = song.get('album', {}).get('images', [])
-            cover_url = album_images[1]['url'] if len(album_images) > 1 else (album_images[0]['url'] if album_images else '')
+            cover_url = album_images[-1]['url'] if album_images else ''
             
             # Build result dict with V2.6 structure
             result_dict = {
@@ -870,8 +921,8 @@ class MusicSearchEngine:
                 'spotify_id': track_id,  # Use track_id directly
                 'duration_ms': song.get('duration_ms', 0),  # New: duration in milliseconds
                 'field_value': self._get_field_value(track_id, embed_type),
-                'genres': song.get('genres', []),
-                'tags': song.get('tags', []),
+                'genres': self.genres_lookup.get(track_id, []),
+                'tags': self.tags_lookup.get(track_id, []),
                 'final_score': result['final_score'],
                 'scoring_components': result  # Include all V2.6 components
             }
@@ -1355,7 +1406,7 @@ def search_suggestions():
         # Get album info and cover art
         album_name = song.get('album', {}).get('name', '')
         album_images = song.get('album', {}).get('images', [])
-        cover_url = album_images[1]['url'] if len(album_images) > 1 else (album_images[0]['url'] if album_images else '')
+        cover_url = album_images[-1]['url'] if album_images else ''
         
         suggestions.append({
             'song_idx': int(song_idx),  # Convert numpy.int64 to native Python int
@@ -1569,7 +1620,7 @@ def get_song():
     # Get album info and cover art
     album_name = song.get('album', {}).get('name', '')
     album_images = song.get('album', {}).get('images', [])
-    cover_url = album_images[1]['url'] if len(album_images) > 1 else (album_images[0]['url'] if album_images else '')
+    cover_url = album_images[-1]['url'] if album_images else ''
     
     # Get duration
     duration_ms = song.get('duration_ms', 0)
@@ -1583,8 +1634,8 @@ def get_song():
         'cover_url': cover_url,
         'spotify_id': track_id,
         'duration_ms': duration_ms,  # New: duration in milliseconds
-        'genres': song.get('genres', []),
-        'tags': song.get('tags', []),
+        'genres': search_engine.genres_lookup.get(track_id, []),
+        'tags': search_engine.tags_lookup.get(track_id, []),
         'sound': song.get('sound', ''),
         'meaning': song.get('meaning', ''),
         'mood': song.get('mood', '')

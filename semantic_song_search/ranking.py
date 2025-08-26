@@ -72,15 +72,19 @@ class RankingConfig:
         R_min: float = 3.0,
         C_fam: float = 0.25,
         min_plays: int = 4,
+
+         # V2.7: raw stream count priors
+        K_total: float = 1e8,
+        K_daily: float = 1e5,
         
-        # V2.6: Similarity search weights (track, artist, genre, popularity) - these weights should sum to 1
+        # V2.7: Similarity search weights (track, artist, genre, total streams, daily streams) - these weights should sum to 1
         beta_track: float = 0.6,         # Weight for track-level similarity
         beta_genre: float = 0.25,        # Weight for genre vs semantic similarity
         beta_artist_pop: float = 0.10,    # Weight for artist popularity vibe similarity  
-        beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity
-        beta_pop: float = 0.05,        # Weight for track popularity vs semantic similarity
+        beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity (disabled for now)
+        beta_streams_total: float = 0.05,        # Weight for track total streams vs semantic similarity
+        beta_streams_daily: float = 0.05,        # Weight for track daily streams vs semantic similarity
         beta_artist: float = 0.0,      # Weight for artist-artist similarity
-
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -116,12 +120,15 @@ class RankingConfig:
             self.R_min = R_min
             self.C_fam = C_fam
             self.min_plays = min_plays
+            self.K_total = K_total
+            self.K_daily = K_daily
             self.beta_track = beta_track
             self.beta_artist_pop = beta_artist_pop
             self.beta_artist_personal = beta_artist_personal
-            self.beta_genre = beta_genre
-            self.beta_pop = beta_pop
+            self.beta_genre = beta_genre    
             self.beta_artist = beta_artist
+            self.beta_streams_total = beta_streams_total
+            self.beta_streams_daily = beta_streams_daily
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -159,12 +166,15 @@ class RankingConfig:
             'R_min': self.R_min,
             'C_fam': self.C_fam,
             'min_plays': self.min_plays,
+            'K_total': self.K_total,
+            'K_daily': self.K_daily,
             'beta_track': self.beta_track,
             'beta_artist_pop': self.beta_artist_pop,
             'beta_artist_personal': self.beta_artist_personal,
             'beta_genre': self.beta_genre,
-            'beta_pop': self.beta_pop,
-            'beta_artist': self.beta_artist
+            'beta_artist': self.beta_artist,
+            'beta_streams_total': self.beta_streams_total,
+            'beta_streams_daily': self.beta_streams_daily,
         }
     
     def update_weights(self, weights: Dict[str, float]):

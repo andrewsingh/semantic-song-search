@@ -1237,14 +1237,6 @@ class SemanticSearchApp {
         const artistText = song.all_artists && song.all_artists.length > 1 
             ? song.all_artists.join(', ')
             : song.artist;
-            
-        // Format duration if available
-        let durationHTML = '';
-        if (song.duration_ms && song.duration_ms > 0) {
-            const minutes = Math.floor(song.duration_ms / 60000);
-            const seconds = Math.floor((song.duration_ms % 60000) / 1000);
-            durationHTML = `<div class="card-duration">${minutes}:${seconds.toString().padStart(2, '0')}</div>`;
-        }
 
         return `
             ${checkboxHTML}
@@ -1254,7 +1246,6 @@ class SemanticSearchApp {
                     <div class="card-title">${escapeHtml(song.song)} (${escapeHtml((song.scoring_components?.S_pop * 100 || 0).toFixed(1))})</div>
                     <div class="card-artist">${escapeHtml(artistText)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
-                    ${durationHTML}
                 </div>
             </div>
             ${tagsHTML}

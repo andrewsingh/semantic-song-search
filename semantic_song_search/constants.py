@@ -26,7 +26,7 @@ FUZZY_SEARCH_CONSTANTS = {
 }
 
 # Default File Paths  
-DEFAULT_SONGS_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_metadata.json"
+DEFAULT_SONGS_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_metadata_with_streams.json"
 DEFAULT_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_embeddings"
 DEFAULT_ARTIST_EMBEDDINGS_PATH = None
 
