@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'semantic_song_search'))
 from app import app, init_search_engine
 
 RAILWAY_VOLUME_MOUNT_PATH = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '/data')
-DATASET_NAME = os.getenv('DATASET_NAME', 'eval_set_v2')
+DATASET_NAME = os.getenv('DATASET_NAME', 'library_v2.1')
 
 def main():
     """Initialize the app with production data files and start the server."""
@@ -26,7 +26,7 @@ def main():
     dataset_path = volume_path / DATASET_NAME
     
     # Use eval_set_v2 data files (adjust paths as needed for your deployment)
-    songs_file = dataset_path / 'eval_set_v2_metadata_ready.json'
+    songs_file = dataset_path / 'library_v2.1_metadata_with_streams.json'
     
     # Verify files exist before starting
     if not songs_file.exists():
@@ -34,8 +34,8 @@ def main():
         sys.exit(1)
     
     # Check for embeddings (either combined file or directory)
-    embeddings_npz = dataset_path / 'eval_set_v2_embeddings.npz'
-    embeddings_dir = dataset_path / 'eval_set_v2_embeddings'
+    embeddings_npz = dataset_path / 'library_v2.1_embeddings.npz'
+    embeddings_dir = dataset_path / 'library_v2.1_embeddings'
     
     if embeddings_npz.exists():
         embeddings_path = embeddings_npz
