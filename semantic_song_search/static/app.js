@@ -1209,7 +1209,7 @@ class SemanticSearchApp {
                 scoringComponentsHTML = `
                     <div class="scoring-components">
                         <span class="scoring-component" title="Track-level similarity">
-                            <span class="component-label">S:</span>
+                            <span class="component-label">V:</span>
                             <span class="component-value">${((components.S_track * 100) || 0).toFixed(1)}</span>
                         </span>
                         <span class="scoring-component" title="Genre similarity">
@@ -1251,7 +1251,7 @@ class SemanticSearchApp {
             <div class="card-header">
                 <img src="${escapeHtml(song.cover_url || '')}" alt="Cover" class="card-cover">
                 <div class="card-info">
-                    <div class="card-title">${escapeHtml(song.song)} (${escapeHtml((song.scoring_components?.S_streams_total * 100 || 0).toFixed(1))})</div>
+                    <div class="card-title">${escapeHtml(song.song)}</div>
                     <div class="card-artist">${escapeHtml(artistText)}</div>
                     <div class="card-album">${escapeHtml(song.album || 'Unknown Album')}</div>
                 </div>

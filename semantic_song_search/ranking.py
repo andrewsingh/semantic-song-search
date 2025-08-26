@@ -74,13 +74,13 @@ class RankingConfig:
         min_plays: int = 4,
 
          # V2.7: raw stream count priors
-        K_total: float = 1e8,
-        K_daily: float = 1e5,
+        K_total: float = 1e7,
+        K_daily: float = 1e4,
         
         # V2.7: Similarity search weights (track, artist, genre, total streams, daily streams) - these weights should sum to 1
-        beta_track: float = 0.6,         # Weight for track-level similarity
+        beta_track: float = 0.5,         # Weight for track-level similarity
         beta_genre: float = 0.25,        # Weight for genre vs semantic similarity
-        beta_artist_pop: float = 0.10,    # Weight for artist popularity vibe similarity  
+        beta_artist_pop: float = 0.15,    # Weight for artist popularity vibe similarity  
         beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity (disabled for now)
         beta_streams_total: float = 0.05,        # Weight for track total streams vs semantic similarity
         beta_streams_daily: float = 0.05,        # Weight for track daily streams vs semantic similarity
