@@ -29,6 +29,7 @@ body {
     border-bottom: 1px solid rgba(29, 185, 84, 0.2);
     backdrop-filter: blur(10px);
     padding: 1rem 2rem;
+    padding-bottom: 0.5rem;
 }
 
 .header-content {
@@ -40,7 +41,7 @@ body {
     text-align: center;
     font-size: 2.4rem;
     font-weight: 700;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
     background: linear-gradient(135deg, #1DB954, #1ed760);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -301,10 +302,12 @@ body {
 .auth-status {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-end;
     gap: 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     color: #b3b3b3;
+    flex: 0 0 auto;
+    margin-left: auto;
 }
 
 .auth-indicator {
@@ -319,10 +322,10 @@ body {
 
 .login-btn, .logout-btn {
     border: none;
-    border-radius: 20px;
-    padding: 0.5rem 1rem;
+    border-radius: 16px;
+    padding: 0.4rem 0.8rem;
     color: white;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     cursor: pointer;
     transition: background 0.3s ease;
     margin-left: 0.5rem;
@@ -634,6 +637,10 @@ body {
     margin-bottom: 0.5rem;
 }
 
+.weights-title > .param-group-title {
+    font-size: 1rem;
+}
+
 .param-row {
     display: flex;
     justify-content: space-between;
@@ -775,32 +782,33 @@ body {
 .weights-inputs {
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: 2.5rem;
     flex: 1;
 }
 
 .weight-input-group {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.6rem;
 }
 
 .weight-label {
     font-size: 0.9rem;
     color: #ccc;
     font-weight: 500;
-    min-width: 70px;
+    min-width: auto;
 }
 
 .weight-input {
     width: 70px;
-    padding: 0.5rem 0.75rem;
+    padding: 0.3rem 0.5rem;
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 6px;
     background: rgba(255, 255, 255, 0.08);
     color: #eaeaea;
-    font-size: 0.9rem;
-    text-align: center;
+    font-size: 1rem;
+    text-align: left;
     transition: all 0.2s ease;
 }
 
@@ -822,11 +830,11 @@ body {
 }
 
 .reset-defaults-btn {
-    background: rgba(106, 90, 205, 0.2);
-    border: 1px solid rgba(106, 90, 205, 0.4);
-    border-radius: 8px;
+    background: rgba(106, 90, 205, 0.3);
+    border: 2px solid rgba(106, 90, 205);
+    border-radius: 12px;
     color: #B19CD9;
-    padding: 0.6rem 1rem;
+    padding: 0.75rem 1.2rem;
     font-size: 0.9rem;
     font-weight: 500;
     cursor: pointer;
@@ -1619,6 +1627,12 @@ body {
     .progress-container {
         order: -1;
         max-width: none;
+    }
+    
+    .auth-status {
+        justify-content: center;
+        margin-left: 0;
+        order: 1;
     }
     
     .player-footer {

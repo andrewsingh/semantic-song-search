@@ -102,13 +102,6 @@
                 <!-- Suggestions Dropdown (for song-to-song search) -->
                 <div id="suggestions" class="suggestions-container" style="display: none;"></div>
                 
-                <!-- Auth Status -->
-                <div class="auth-status">
-                    <span id="auth-indicator" class="auth-indicator">○</span>
-                    <span id="auth-text">Not connected to Spotify</span>
-                    <button id="login-btn" class="login-btn" style="display: none;">Login to Spotify</button>
-                    <button id="logout-btn" class="logout-btn" style="display: none;">Logout</button>
-                </div>
             </div>
         </header>
 
@@ -137,7 +130,7 @@
                             <div id="song-count-field" class="export-field">
                                 <label for="song-count" class="export-label">Number of Songs:</label>
                                 <input type="number" id="song-count" class="export-input" 
-                                       min="1" max="100" value="20">
+                                       min="1" max="100" value="48">
                             </div>
                             <div id="manual-selection-info" class="export-field" style="display: none;">
                                 <span class="export-label">Selected Songs:</span>
@@ -405,6 +398,9 @@
             <!-- No-History Weights Section -->
             <section id="no-history-weights-section" class="no-history-weights-section" style="display: none;">
                 <div class="weights-container">
+                    <div class="weights-title">
+                        <h4 class="param-group-title">Score<br>Weights</h4>
+                    </div>
                     <div class="weights-inputs">
                         <div class="weight-input-group">
                             <label for="nh_beta_track" class="weight-label">Vibe (V):</label>
@@ -427,12 +423,12 @@
                             <input type="number" id="nh_beta_streams_daily" class="weight-input" value="{{ default_config.beta_streams_daily }}" step="0.05" min="0" max="1">
                         </div>
                     </div>
-                    <div class="weights-buttons">
-                        <button id="no-history-reset-btn" class="reset-defaults-btn">
-                            <span>↺ Reset to Defaults</span>
-                        </button>
+                    <div class="weights-buttons"> 
                         <button id="no-history-rerun-btn" class="rerun-search-btn" disabled>
                             <span>🔄 Rerun Search</span>
+                        </button>
+                        <button id="no-history-reset-btn" class="reset-defaults-btn">
+                            <span>↺ Reset to Defaults</span>
                         </button>
                     </div>
                 </div>
@@ -487,13 +483,12 @@
                             <ul>
                                 <li><strong>Text-to-Song:</strong> Search songs by describing the vibe you're looking for</li>
                                 <li><strong>Song-to-Song:</strong> Find songs that are similar to one that you have in mind</li>
-                                <li><strong>Search aspect:</strong> Select the aspect of the song to search by ("Tags & Genres" by default)</li>
                             </ul>
                             
-                            <h4>🎧 Listen to and filter results</h4>
+                            <h4>🔧 Adjust score weights and filter results</h4>
                             <ul>
-                                <li><strong>Playable songs:</strong> Click on any song card to play the song in the built-in web player</li>
-                                <li><strong>Search filters:</strong> Refine your search results by adding one or more filters</li>
+                                <li><strong>Tunable weights:</strong> Adjust the score weights to prioritize different aspects of the song</li>
+                                <li><strong>Playable results:</strong> Click on any song card to play the song in the built-in web player</li>
                                 <li><strong>Manual selection:</strong> Enable this mode to select specific songs to include in your playlist</li>
                             </ul>
                             
@@ -518,7 +513,7 @@
                 <!-- Loading indicator -->
                 <div id="loading" class="loading" style="display: none;">
                     <div class="loading-spinner"></div>
-                    <p>Searching for similar songs...</p>
+                    <p>Searching for matching songs...</p>
                 </div>
             </section>
         </main>
@@ -557,6 +552,14 @@
                             </div>
                         </div>
                         <span id="total-time" class="time-label">0:00</span>
+                    </div>
+                    
+                    <!-- Auth Status -->
+                    <div class="auth-status">
+                        <span id="auth-indicator" class="auth-indicator">○</span>
+                        <span id="auth-text">Not connected to Spotify</span>
+                        <button id="login-btn" class="login-btn" style="display: none;">Login to Spotify</button>
+                        <button id="logout-btn" class="logout-btn" style="display: none;">Logout</button>
                     </div>
                 </div>
             </div>
