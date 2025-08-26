@@ -5,10 +5,6 @@ Constants and configuration values shared across the semantic song search applic
 # OpenAI Configuration
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-large"
 
-# Text Search Configuration (Legacy TF-IDF - being replaced)
-TFIDF_NGRAM_RANGE = (1, 2)
-TFIDF_MAX_FEATURES = 5000
-TEXT_SEARCH_MIN_SCORE = 0.01
 
 # RapidFuzz Search Configuration
 FUZZY_SEARCH_CONSTANTS = {
@@ -41,7 +37,6 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
 
 # Search Configuration
-DEFAULT_SEARCH_LIMIT = 48
 DEFAULT_SUGGESTION_LIMIT = 20
 
 # Spotify Configuration

@@ -7,9 +7,11 @@ class SemanticSearchApp {
         this.analytics = new AnalyticsHelper();
         
         // Search state
+        this.search_k = 48; // number of results to return
         this.currentQuery = null;
         this.currentQuerySong = null;
         this.currentSearchType = 'text'; // Initialize to match HTML default
+        this.currentSuggestions = []; // Store current suggestions for Enter key handling
         this.searchResults = [];
         this.currentSearchData = null;
         this.lastSearchRequestData = null;
@@ -42,8 +44,8 @@ class SemanticSearchApp {
         // No-history weights tracking
         this.currentNoHistoryWeights = {
             beta_track: 0.5,
-            beta_genre: 0.2,
-            beta_artist_pop: 0.15,
+            beta_genre: 0.3,
+            beta_artist_pop: 0.1,
             beta_streams_total: 0.05,
             beta_streams_daily: 0.05,
             beta_artist: 0.0
@@ -174,7 +176,7 @@ class SemanticSearchApp {
         
         searchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                this.handleSearch();
+                this.handleEnterKey();
             }
         });
         
@@ -427,13 +429,16 @@ class SemanticSearchApp {
         if (searchType === 'song' && query.trim().length > 2) {
             try {
                 const suggestions = await this.api.get(`/api/search_suggestions?query=${encodeURIComponent(query)}`);
+                this.currentSuggestions = suggestions; // Store suggestions for Enter key handling
                 this.displaySuggestions(suggestions);
                 suggestionsContainer.style.display = 'block';
             } catch (error) {
                 console.error('Error fetching suggestions:', error);
+                this.currentSuggestions = []; // Clear suggestions on error
                 suggestionsContainer.style.display = 'none';
             }
         } else {
+            this.currentSuggestions = []; // Clear suggestions for text search or short queries
             suggestionsContainer.style.display = 'none';
         }
     }
@@ -474,6 +479,29 @@ class SemanticSearchApp {
         queryCard.dataset.spotifyId = song.spotify_id; // Set the spotify ID for consistency
         queryCard.innerHTML = this.createSongCardHTML(song, { isQuery: true });
         querySection.style.display = 'block';
+    }
+    
+    handleEnterKey() {
+        const searchType = this.getSearchType();
+        const currentInput = this.domElements.searchInput.value.trim();
+        
+        // For song-to-song search, if we're typing a new query (input doesn't match current song)
+        // and we have suggestions, auto-select the top one
+        if (searchType === 'song') {
+            const hasValidSuggestions = this.currentSuggestions.length > 0;
+            const isTypingNewQuery = !this.currentQuerySong || 
+                (this.currentQuerySong && this.currentQuerySong.label !== currentInput);
+            
+            if (hasValidSuggestions && isTypingNewQuery) {
+                // Auto-select the first (top) suggestion
+                const topSuggestion = this.currentSuggestions[0];
+                this.selectSuggestion(topSuggestion);
+                return; // selectSuggestion will call handleSearch() internally
+            }
+        }
+        
+        // For text search or when a song is already selected, proceed with normal search
+        this.handleSearch();
     }
     
     async handleSearch() {
@@ -600,7 +628,7 @@ class SemanticSearchApp {
             search_type: searchType,
             embed_type: embedType,
             query: query,
-            k: 48,
+            k: this.search_k,
             offset: 0,
             // Personalization parameters  
             lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
@@ -1455,6 +1483,7 @@ class SemanticSearchApp {
         this.hideExportStatus();
         
         this.currentQuerySong = null;
+        this.currentSuggestions = []; // Clear stored suggestions
         this.searchResults = [];
         this.originalSearchResults = [];
         this.currentSearchData = null;
