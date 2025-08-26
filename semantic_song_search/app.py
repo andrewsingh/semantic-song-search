@@ -326,7 +326,7 @@ class MusicSearchEngine:
             self.ranking_engine = ranking.RankingEngine(config)
             # Even without history, we need track priors for scoring
             self.ranking_engine.compute_track_priors(self.songs)
-            logger.info("Initialized ranking engine without history")
+            logger.info("Initialized ranking engine without history, still computed track priors")
     
     def get_text_embedding(self, text: str) -> np.ndarray:
         """Get OpenAI embedding for text query."""
@@ -560,13 +560,14 @@ class MusicSearchEngine:
             similarity = np.clip((similarity + 1) / 2, 0, 1)
             similarities.append(similarity)
             
-            # Get popularity weight from cached metadata
+            # Get popularity weight from stream-based S_total score
             popularity_weight = 0.0
-            if song_metadata.get('popularity'):
-                popularity_weight = song_metadata['popularity'] / 100.0
-            elif ('metadata' in song_metadata and song_metadata['metadata'] and 
-                  'popularity' in song_metadata['metadata']):
-                popularity_weight = song_metadata['metadata']['popularity'] / 100.0
+            if (hasattr(self.ranking_engine, 'track_priors') and 
+                self.ranking_engine.track_priors and 
+                track_id in self.ranking_engine.track_priors):
+                track_priors = self.ranking_engine.track_priors[track_id]
+                if 'S_total' in track_priors:
+                    popularity_weight = track_priors['S_total']  # Already normalized to [0,1]
             
             popularity_weights.append(popularity_weight)
             

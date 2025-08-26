@@ -79,11 +79,11 @@ class RankingConfig:
         
         # V2.7: Similarity search weights (track, artist, genre, total streams, daily streams) - these weights should sum to 1
         beta_track: float = 0.5,         # Weight for track-level similarity
-        beta_genre: float = 0.35,        # Weight for genre vs semantic similarity
+        beta_genre: float = 0.3,        # Weight for genre vs semantic similarity
         beta_artist_pop: float = 0.1,    # Weight for artist popularity vibe similarity  
         beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity (disabled for now)
-        beta_streams_total: float = 0.025,        # Weight for track total streams vs semantic similarity
-        beta_streams_daily: float = 0.025,        # Weight for track daily streams vs semantic similarity
+        beta_streams_total: float = 0.05,        # Weight for track total streams vs semantic similarity
+        beta_streams_daily: float = 0.05,        # Weight for track daily streams vs semantic similarity
         beta_artist: float = 0.0,      # Weight for artist-artist similarity
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
