@@ -23,6 +23,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 import mixpanel
 import pandas as pd
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -784,16 +785,14 @@ class MusicSearchEngine:
         # V2.6: Compute candidates and their priors for quantile normalization
         candidates_data = []
         
-        # For song-to-song searches, get query embedding directly instead of computing full matrix
-        # This avoids memory issues with large datasets in production
+        # Try to use precomputed similarity matrix for song-to-song searches
         use_precomputed_matrix = False
         query_song_idx = None
         user_matrix = None
         
-        # For now, disable precomputed matrix to avoid memory issues in production
-        # TODO: Implement smarter matrix caching or chunked computation for large datasets
-        if False and query_track_id is not None:
-            # Song-to-song search: try to use precomputed matrix (disabled for memory efficiency)
+        if query_track_id is not None:
+            # Song-to-song search: use precomputed matrix for efficiency
+            logger.info(f"Computing similarity matrix for song-to-song search with {len(self.songs)} songs")
             user_matrix = self.get_similarity_matrix(embed_type, 'user')
             if user_matrix is not None:
                 # Find query song index using track_id
@@ -801,16 +800,14 @@ class MusicSearchEngine:
                 
                 if query_song_idx is not None:
                     use_precomputed_matrix = True
-                    logger.debug(f"Using precomputed similarity matrix for song-to-song search")
+                    logger.info(f"Using precomputed similarity matrix for song-to-song search (matrix shape: {user_matrix.shape})")
+                else:
+                    logger.warning(f"Query track_id {query_track_id} not found in track index")
+            else:
+                logger.warning("Failed to compute similarity matrix, falling back to direct computation")
         
-        logger.info(f"Processing {len(self.songs)} songs for similarity computation")
-        processed_count = 0
-        
+        t0 = time.time()
         for i, song in enumerate(self.songs):
-            # Log progress every 1000 songs
-            if i % 1000 == 0 and i > 0:
-                logger.info(f"Processed {i}/{len(self.songs)} songs...")
-            
             track_id = song.get('track_id') or song.get('id')
             if not track_id:
                 continue  # Skip songs without track_id
@@ -828,8 +825,6 @@ class MusicSearchEngine:
                     # No embedding available for this type, skip
                     continue
             
-            processed_count += 1
-            
             # normalize semantic similarity to [0, 1]
             semantic_similarity = np.clip((semantic_similarity + 1) / 2, 0, 1)
             
@@ -840,25 +835,30 @@ class MusicSearchEngine:
                 'semantic_similarity': semantic_similarity,
             })
         
-        logger.info(f"Completed processing {processed_count} songs with valid embeddings")
-        
+        t1 = time.time()
+        logger.info(f"Time taken to compute semantic similarities: {t1 - t0} seconds")
+
+
         if not candidates_data:
             logger.warning("No candidate songs found for similarity search")
             return [], 0
         
         
+        # TODO: re-enable this once artist similarity is re-enabled
         # Pre-compute query embedding for text-to-song artist similarity (to avoid repeated API calls)
-        query_artist_embedding = None
-        if query_text is not None and self.artist_embedding_lookup:
-            try:
-                query_artist_embedding = self.get_text_embedding(query_text)
-            except Exception as e:
-                logger.warning(f"Failed to compute query embedding for artist similarity: {e}")
+        # query_artist_embedding = None
+        # if query_text is not None and self.artist_embedding_lookup:
+        #     try:
+        #         query_artist_embedding = self.get_text_embedding(query_text)
+        #     except Exception as e:
+        #         logger.warning(f"Failed to compute query embedding for artist similarity: {e}")
         
         # Compute V2.6 final scores with familiarity filtering
         candidate_scores = []
         
+        candidate_total_times = [0, 0, 0]
         for candidate in candidates_data:
+            tc0 = time.time()
             # Compute artist similarities for multi-dimensional search
             artist_pop_similarity = 0.0
             artist_personal_similarity = 0.0
@@ -872,6 +872,9 @@ class MusicSearchEngine:
             except Exception as e:
                 logger.warning(f"Error computing V2 artist similarities for {candidate['track_id']}: {e}")
                 # Keep default values of 0.0 for both similarities
+            
+            tc1 = time.time()
+            candidate_total_times[0] += tc1 - tc0
             
             # Compute genre similarity if genre query embedding is provided
             genre_similarity = None
@@ -892,17 +895,20 @@ class MusicSearchEngine:
                     logger.warning(f"Error computing genre similarity for {candidate['track_id']}: {e}")
                     genre_similarity = 0.0
             
-            # Compute artist-artist similarity
+            tc2 = time.time()
+            candidate_total_times[1] += tc2 - tc1
+            
+            # Compute artist-artist similarity (disabled for now)
             artist_similarity = 0.0
-            if query_track_id is not None:
-                # Song-to-song search: compare query artist with candidate artist
-                query_artist = self.get_artist_for_song(query_track_id)
-                candidate_artist = self.get_artist_for_song(candidate['track_id'])
-                artist_similarity = self.compute_artist_similarity(query_artist, candidate_artist, is_text_query=False)
-            elif query_text is not None and query_artist_embedding is not None:
-                # Text-to-song search: use pre-computed query embedding to avoid repeated API calls
-                candidate_artist = self.get_artist_for_song(candidate['track_id'])
-                artist_similarity = self.compute_artist_similarity_with_embedding(query_artist_embedding, candidate_artist)
+            # if query_track_id is not None:
+            #     # Song-to-song search: compare query artist with candidate artist
+            #     query_artist = self.get_artist_for_song(query_track_id)
+            #     candidate_artist = self.get_artist_for_song(candidate['track_id'])
+            #     artist_similarity = self.compute_artist_similarity(query_artist, candidate_artist, is_text_query=False)
+            # elif query_text is not None and query_artist_embedding is not None:
+            #     # Text-to-song search: use pre-computed query embedding to avoid repeated API calls
+            #     candidate_artist = self.get_artist_for_song(candidate['track_id'])
+            #     artist_similarity = self.compute_artist_similarity_with_embedding(query_artist_embedding, candidate_artist)
             
             final_score, components = self.ranking_engine.compute_v25_final_score(
                 candidate['semantic_similarity'], 
@@ -930,6 +936,16 @@ class MusicSearchEngine:
                     'familiarity': fam_t,
                     **components  # Include all component scores for debugging
                 })
+
+            tc3 = time.time()
+            candidate_total_times[2] += tc3 - tc2
+
+
+        t2 = time.time()
+        logger.info(f"Time taken to compute final scores: {t2 - t1} seconds")
+        logger.info(f"Total time taken to compute artist similarities: {candidate_total_times[0]} seconds")
+        logger.info(f"Total time taken to compute genre similarity: {candidate_total_times[1]} seconds")
+        logger.info(f"Total time taken to compute final score: {candidate_total_times[2]} seconds")
         
         # Sort by final score
         candidate_scores.sort(key=lambda x: x['final_score'], reverse=True)
@@ -983,6 +999,8 @@ class MusicSearchEngine:
             
             results.append(result_dict)
         
+        t3 = time.time()
+        logger.info(f"Time taken to convert to V2.6 result format: {t3 - t2} seconds")
         return results, total_count
     
     def _convert_numpy_to_python(self, obj):
