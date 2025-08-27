@@ -672,8 +672,8 @@ class MusicSearchEngine:
         if cache_key in self.artist_similarity_cache:
             return self.artist_similarity_cache[cache_key]
         
-        # Compute similarity if not in cache
-        result = self._compute_artist_similarity_v2_uncached(query_track_id, candidate_artist, query_embedding)
+        # Compute similarity if not in cache (pass None for all_artist_similarities since this is called from main loop)
+        result = self._compute_artist_similarity_v2_uncached(query_track_id, candidate_artist, query_embedding, None)
         
         # Store in cache
         self.artist_similarity_cache[cache_key] = result
@@ -681,7 +681,8 @@ class MusicSearchEngine:
         return result
     
     def _compute_artist_similarity_v2_uncached(self, query_track_id: str, candidate_artist: str, 
-                                             query_embedding: np.ndarray = None) -> Tuple[float, float]:
+                                             query_embedding: np.ndarray = None, 
+                                             all_artist_similarities: np.ndarray = None) -> Tuple[float, float]:
         """
         Compute artist similarity using vectorized operations (uncached).
         """
@@ -722,14 +723,24 @@ class MusicSearchEngine:
             else:
                 return 0.0, 0.0
         else:
-            # Text-to-song search: use vectorized matrix multiplication
-            if (self.artist_embeddings_matrix is not None and 
-                candidate_artist in self.artist_to_track_indices):
-                
-                # Get similarities for all artist's tracks using vectorized computation
-                similarities = np.dot(query_embedding, self.artist_embeddings_matrix[:, track_indices])
+            # Text-to-song search: use precomputed similarities if available
+            if all_artist_similarities is not None and candidate_artist in self.artist_to_track_indices:
+                # Use precomputed similarities - just index into the array! O(1) operation
+                track_indices = self.artist_to_track_indices[candidate_artist]
+                if len(track_indices) > 0:
+                    similarities = all_artist_similarities[track_indices]
+                else:
+                    return 0.0, 0.0
+            elif (self.artist_embeddings_matrix is not None and 
+                  candidate_artist in self.artist_to_track_indices):
+                # Fallback to per-artist matrix multiplication 
+                track_indices = self.artist_to_track_indices[candidate_artist]
+                if len(track_indices) > 0:
+                    similarities = np.dot(query_embedding, self.artist_embeddings_matrix[:, track_indices])
+                else:
+                    return 0.0, 0.0
             else:
-                # Fallback to individual computations
+                # Final fallback to individual computations
                 artist_embed_type = getattr(self, 'artist_matrix_embed_type', 'full_profile')
                 if artist_embed_type in self.embedding_lookups:
                     embedding_lookup = self.embedding_lookups[artist_embed_type]
@@ -1091,9 +1102,19 @@ class MusicSearchEngine:
         genre_precompute_time = t_genre_precompute_end - t_genre_precompute_start
         logger.info(f"Time taken to pre-compute genre similarities: {genre_precompute_time} seconds")
         
-        # Pre-compute artist similarities for all unique artists in candidate set
+        # Pre-compute artist similarities using full vectorization
         t_artist_precompute_start = time.time()
-
+        
+        # Step 1: Compute ALL track similarities in a single matrix multiplication
+        all_artist_similarities = None
+        if (query_track_id is None and 
+            query_embedding is not None and 
+            self.artist_embeddings_matrix is not None):
+            # Text-to-song: compute similarities for ALL tracks at once
+            all_artist_similarities = np.dot(query_embedding, self.artist_embeddings_matrix)
+            logger.info(f"Computed artist similarities for all {all_artist_similarities.shape[0]} tracks in single matrix multiplication")
+        
+        # Step 2: Pre-compute artist-level scores for all unique artists
         unique_artists = set()
         for candidate in candidates_data:
             artist = self.get_artist_for_song(candidate['track_id'])
@@ -1104,20 +1125,19 @@ class MusicSearchEngine:
         for artist in unique_artists:
             # This will populate the cache for all unique artists
             try:
-                self._compute_artist_similarity_v2_uncached(query_track_id, artist, query_embedding)
+                self._compute_artist_similarity_v2_uncached(query_track_id, artist, query_embedding, all_artist_similarities)
             except Exception as e:
                 logger.warning(f"Failed to pre-compute artist similarity for {artist}: {e}")
         
         t_artist_precompute_end = time.time()
         artist_precompute_time = t_artist_precompute_end - t_artist_precompute_start
-        logger.info(f"Time taken to pre-compute artist similarities: {artist_precompute_time} seconds (cache hits will be O(1))")
+        logger.info(f"Time taken to pre-compute artist similarities: {artist_precompute_time} seconds (full vectorization: {all_artist_similarities is not None})")
         
         # Compute V2.6 final scores with familiarity filtering
         candidate_scores = []
         
         t_final_scores_start = time.time()
         for candidate in candidates_data:
-            tc0 = time.time()
             # Compute artist similarities for multi-dimensional search
             artist_pop_similarity = 0.0
             artist_personal_similarity = 0.0
