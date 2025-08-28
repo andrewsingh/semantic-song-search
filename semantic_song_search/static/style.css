@@ -22,12 +22,8 @@ body {
 
 /* Header Styles */
 .search-header {
-    position: sticky;
-    top: 0;
-    z-index: 1000;
-    background: linear-gradient(135deg, rgba(29, 185, 84, 0.1) 0%, rgba(29, 185, 84, 0.05) 100%);
-    border-bottom: 1px solid rgba(29, 185, 84, 0.2);
-    backdrop-filter: blur(10px);
+    position: static;
+    background: #0a0a0f;
     padding: 1rem 2rem;
     padding-bottom: 0.5rem;
 }
@@ -206,7 +202,7 @@ body {
 
 .search-input {
     width: 100%;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.16);
     border: 2px solid rgba(29, 185, 84, 0.4);
     border-radius: 16px;
     padding: 1.25rem 2rem;
@@ -220,7 +216,7 @@ body {
     outline: none;
     border-color: #1DB954;
     box-shadow: 0 0 0 3px rgba(29, 185, 84, 0.2);
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.2);
 }
 
 .search-input::placeholder {
