@@ -1,6 +1,6 @@
 # Semantic Song Search
 
-**Try the app here:** https://semanticsongsearch.up.railway.app
+**Try the app here:** https://songmatch.up.railway.app
 
 ## Getting Started
 
