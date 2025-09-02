@@ -11,7 +11,7 @@ import os
 import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
-from profiles import ArtistProfileV4
+from profiles import ArtistProfile
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
 RATE_LIMIT_RPM   = 50                  # <-- edit this if your quota changes
@@ -104,7 +104,7 @@ async def get_response(session: aiohttp.ClientSession, prompt: str):
         ],
         "response_format": { 
             "type": "json_schema", 
-            "json_schema": {"schema": ArtistProfileV4.model_json_schema()} }
+            "json_schema": {"schema": ArtistProfile.model_json_schema()} }
     }
 
     async with session.post(url, headers=headers, json=payload) as response:

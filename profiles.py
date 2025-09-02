@@ -13,14 +13,6 @@ class SongProfile(BaseModel):
     tags: List[str] | None
 
 
-class ArtistProfile(BaseModel):
-    artist: str
-    familiar: bool
-    musical_style: str | None
-    lyrical_themes: str | None
-    mood: str | None
-
-
 class ArtistProfileV4(BaseModel):
     artist: str
     familiar: bool
@@ -30,4 +22,3 @@ class ArtistProfileV4(BaseModel):
     lyrical_themes: str | None
     mood_atmosphere: str | None
     cultural_context_scene: str | None
-    tags: List[str] | None
