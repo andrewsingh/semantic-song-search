@@ -11,7 +11,7 @@ import os
 import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
-from profiles import ArtistProfile
+from profiles import ArtistProfileV4
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
 RATE_LIMIT_RPM   = 50                  # <-- edit this if your quota changes
@@ -104,7 +104,7 @@ async def get_response(session: aiohttp.ClientSession, prompt: str):
         ],
         "response_format": { 
             "type": "json_schema", 
-            "json_schema": {"schema": ArtistProfile.model_json_schema()} }
+            "json_schema": {"schema": ArtistProfileV4.model_json_schema()} }
     }
 
     async with session.post(url, headers=headers, json=payload) as response:
@@ -217,6 +217,10 @@ async def main(args) -> None:
     if len(artists) == 0:
         print("No artists to process - all artists have already been completed!")
         return
+
+    # If directory of output path doesn't exist, create it
+    print(f"Creating directory for output path: {output_path.parent}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Sanity check: print first formatted prompt
     first_artist = artists[0]

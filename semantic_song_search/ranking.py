@@ -325,10 +325,7 @@ class RankingEngine:
             duration_ms = song.get('duration_ms', 180000)  # Default 3 minutes in ms
             duration_lookup[track_id] = duration_ms
             
-            # Also create entry for backwards compatibility with song_key fallback
-            if song.get('original_song') and song.get('original_artist'):
-                song_key = (song['original_song'], song['original_artist'])
-                duration_lookup[song_key] = duration_ms
+            # No need for backwards compatibility entries - we only use track_id now
         
         # Work with a copy
         df = history_df.copy()
@@ -348,14 +345,13 @@ class RankingEngine:
         
         # Completion ratios: c_{t,i} = min(ms_played / D_t, 1)
         def calculate_completion(row):
-            # Try track_id first, then fallback to song/artist lookup
+            # Use track_id for duration lookup
             track_id = row.get('track_id')
             if track_id and track_id in duration_lookup:
                 duration_ms = duration_lookup[track_id]
             else:
-                # Fallback for backwards compatibility
-                song_key = (row['original_song'], row['original_artist'])
-                duration_ms = duration_lookup.get(song_key, 180000)  # Default 3 minutes
+                # Use default duration if track not found
+                duration_ms = 180000  # Default 3 minutes in ms
             # Use actual duration without artificial minimum (as per V2.5 spec)
             return min(1.0, row['ms_played'] / max(1, duration_ms))  # Guard against zero duration
         
@@ -376,15 +372,10 @@ class RankingEngine:
         # consider a play a skip if the completion ratio is < 0.25
         df['num_skips'] = (df['c_ti'] < 0.25).astype(int)
         
-        # Group by track_id (preferred) or fallback to song_key for backwards compatibility
-        if 'track_id' in df.columns:
-            # Use track_id directly
-            groupby_key = 'track_id'
-        else:
-            # Fallback: create song_key from original_song and original_artist
-            song_key_col = df[['original_song', 'original_artist']].apply(tuple, axis=1)
-            df['song_key'] = song_key_col
-            groupby_key = 'song_key'
+        # Group by track_id
+        if 'track_id' not in df.columns:
+            raise ValueError("track_id column is required in history DataFrame")
+        groupby_key = 'track_id'
         
         # Aggregate per track (V2.5 §3.2-3.4)
         track_stats = {}
@@ -430,15 +421,9 @@ class RankingEngine:
             Q_t = s_t * A_t * m_f_t
             
             # Extract artist information for this track
-            # For track_id grouping, we need to extract artist from the first row
-            # For song_key grouping, we can extract from the key itself
-            if groupby_key == 'track_id':
-                # Extract artist from first row of group (assumes all rows for a track_id have same artist)
-                first_row = group.iloc[0]
-                artist = first_row.get('original_artist', 'Unknown')
-            else:
-                # song_key grouping: extract artist from key tuple
-                artist = track_key[1] if isinstance(track_key, tuple) and len(track_key) > 1 else 'Unknown'
+            # Extract artist from first row of group (assumes all rows for a track_id have same artist)
+            first_row = group.iloc[0]
+            artist = first_row.get('original_artist', 'Unknown')
             
             track_stats[track_key] = {
                 'S_t': float(S_t),
@@ -689,9 +674,9 @@ class RankingEngine:
         t4 = time.time()
         print(f"Time taken to compute C_t: {(t4 - t3) * 1000} milliseconds")
         
-        # Build dictionaries mapping (song, artist) -> values
-        knn_similarities = {song_key: float(C_t_val) for song_key, C_t_val in zip(all_track_keys, C_t_values)}
-        # max_terms_dict = {song_key: float(max_term) for song_key, max_term in zip(all_track_keys, max_terms)}
+        # Build dictionaries mapping track_id -> values
+        knn_similarities = {track_id: float(C_t_val) for track_id, C_t_val in zip(all_track_keys, C_t_values)}
+        # max_terms_dict = {track_id: float(max_term) for track_id, max_term in zip(all_track_keys, max_terms)}
         
         self.p05_C_t = np.percentile(C_t_values, 5)
         self.p95_C_t = np.percentile(C_t_values, 95)
@@ -893,7 +878,7 @@ class RankingEngine:
         # Final validation and sanitization
         final_score_clean = float(np.clip(final_score, 0, 1))
         if np.isnan(final_score_clean):
-            logger.warning(f"NaN final score detected for {song_key}, defaulting to 0.0")
+            logger.warning(f"NaN final score detected for {track_id}, defaulting to 0.0")
             final_score_clean = 0.0
             
         return final_score_clean, components
@@ -908,7 +893,7 @@ def initialize_ranking_engine(history_df: pd.DataFrame, songs_metadata: List[Dic
     Args:
         history_df: Listening history DataFrame
         songs_metadata: List of song metadata dicts
-        embedding_lookups: Dictionary mapping embed_type -> {song_key -> embedding}
+        embedding_lookups: Dictionary mapping embed_type -> {track_id -> embedding}
         config: Optional custom configuration
         
     Returns:

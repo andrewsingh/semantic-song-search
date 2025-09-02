@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Generate text embeddings for artist profiles using OpenAI's text-embedding-3-large model.
-Creates 4 embeddings per artist: musical_style, lyrical_themes, mood, and full_profile.
+Creates 8 embeddings per artist: genres, vocal_style, production_sound_design, lyrical_themes, 
+mood_atmosphere, cultural_context_scene, tags, and full_profile.
 Saves embeddings in separate files by type following the new embedding structure.
 
 Usage:
   # Save to directory (recommended)
-  python embed_artist_profiles.py -i selected_artists_v0_profiles.jsonl \
+  python embed_artist_profiles.py -i selected_artists_v4_profiles.jsonl \
                                   -o artist_embeddings/ \
                                   -n 10  # optional, for testing
   
@@ -14,10 +15,14 @@ Usage:
   python embed_artist_profiles.py -i input.jsonl -o artist_embeddings
   
   # This creates:
-  # - musical_style_embeddings.npz
-  # - lyrical_themes_embeddings.npz  
-  # - mood_embeddings.npz
-  # - full_profile_embeddings.npz
+  # - genres_artist_embeddings.npz
+  # - vocal_style_artist_embeddings.npz
+  # - production_sound_design_artist_embeddings.npz
+  # - lyrical_themes_artist_embeddings.npz  
+  # - mood_atmosphere_artist_embeddings.npz
+  # - cultural_context_scene_artist_embeddings.npz
+  # - tags_artist_embeddings.npz
+  # - full_profile_artist_embeddings.npz
 """
 import argparse, asyncio, json, time
 from pathlib import Path
@@ -40,23 +45,42 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 def format_individual_sections(profile_data):
     artist = profile_data['artist']
     
-    musical_style_text = f"Musical style of {artist}: {profile_data['musical_style']}"
+    genres_text = f"Genres of {artist}: {profile_data['genres']}"
+    vocal_style_text = f"Vocal style of {artist}: {profile_data['vocal_style']}"
+    production_sound_design_text = f"Production and sound design of {artist}: {profile_data['production_sound_design']}"
     lyrical_themes_text = f"Lyrical themes of {artist}: {profile_data['lyrical_themes']}"
-    mood_text = f"Mood of {artist}'s music: {profile_data['mood']}"
+    mood_atmosphere_text = f"Mood and atmosphere of {artist}'s music: {profile_data['mood_atmosphere']}"
+    cultural_context_scene_text = f"Cultural context and scene of {artist}: {profile_data['cultural_context_scene']}"
     
-    return musical_style_text, lyrical_themes_text, mood_text
+    # Format tags as a comma-separated string
+    tags_list = profile_data.get('tags', [])
+    tags_text = ', '.join(tags_list) if tags_list else 'No tags available'
+    
+    return genres_text, vocal_style_text, production_sound_design_text, lyrical_themes_text, mood_atmosphere_text, cultural_context_scene_text, tags_text
 
 
 def format_full_profile(profile_data):
     artist = profile_data['artist']
     
+    # Format tags as a comma-separated string
+    tags_list = profile_data.get('tags', [])
+    tags_formatted = ', '.join(tags_list) if tags_list else 'No tags available'
+    
     full_profile_text = f"""Artist: {artist}
 
-Musical Style: {profile_data['musical_style']}
+Genres: {profile_data['genres']}
+
+Vocal Style: {profile_data['vocal_style']}
+
+Production & Sound Design: {profile_data['production_sound_design']}
 
 Lyrical Themes: {profile_data['lyrical_themes']}
 
-Mood: {profile_data['mood']}"""
+Mood & Atmosphere: {profile_data['mood_atmosphere']}
+
+Cultural Context & Scene: {profile_data['cultural_context_scene']}
+
+Tags: {tags_formatted}"""
     
     return full_profile_text
 
@@ -71,19 +95,31 @@ def log_text_examples(profiles: List[Dict], num_examples: int = 3):
         print(f"\n--- Example {i+1}: {artist} ---")
         
         # Get formatted texts
-        musical_style_text, lyrical_themes_text, mood_text = format_individual_sections(profile)
+        genres_text, vocal_style_text, production_sound_design_text, lyrical_themes_text, mood_atmosphere_text, cultural_context_scene_text, tags_text = format_individual_sections(profile)
         full_profile_text = format_full_profile(profile)
         
-        print(f"\n1. MUSICAL STYLE TEXT:")
-        print(f"   {musical_style_text}")
+        print(f"\n1. GENRES TEXT:")
+        print(f"   {genres_text}")
         
-        print(f"\n2. LYRICAL THEMES TEXT:")
+        print(f"\n2. VOCAL STYLE TEXT:")
+        print(f"   {vocal_style_text}")
+        
+        print(f"\n3. PRODUCTION & SOUND DESIGN TEXT:")
+        print(f"   {production_sound_design_text}")
+        
+        print(f"\n4. LYRICAL THEMES TEXT:")
         print(f"   {lyrical_themes_text}")
         
-        print(f"\n3. MOOD TEXT:")
-        print(f"   {mood_text}")
+        print(f"\n5. MOOD & ATMOSPHERE TEXT:")
+        print(f"   {mood_atmosphere_text}")
         
-        print(f"\n4. FULL PROFILE TEXT:")
+        print(f"\n6. CULTURAL CONTEXT & SCENE TEXT:")
+        print(f"   {cultural_context_scene_text}")
+        
+        print(f"\n7. TAGS TEXT:")
+        print(f"   {tags_text}")
+        
+        print(f"\n8. FULL PROFILE TEXT:")
         print(f"   {full_profile_text}")
         
         print(f"\n{'-'*50}")
@@ -115,33 +151,45 @@ async def get_embedding(text: str) -> List[float]:
                 await asyncio.sleep(wait)
 
 async def process_artist_profile(profile_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Process a single artist profile and generate all 4 embeddings."""
+    """Process a single artist profile and generate all 8 embeddings."""
     artist = profile_data['artist']
     
     # Get the formatted text strings using existing functions
-    musical_style_text, lyrical_themes_text, mood_text = format_individual_sections(profile_data)
+    genres_text, vocal_style_text, production_sound_design_text, lyrical_themes_text, mood_atmosphere_text, cultural_context_scene_text, tags_text = format_individual_sections(profile_data)
     full_profile_text = format_full_profile(profile_data)
     
-    # Generate all 4 embeddings concurrently
-    musical_style_embedding, lyrical_themes_embedding, mood_embedding, full_profile_embedding = await asyncio.gather(
-        get_embedding(musical_style_text),
+    # Generate all 8 embeddings concurrently
+    genres_embedding, vocal_style_embedding, production_sound_design_embedding, lyrical_themes_embedding, mood_atmosphere_embedding, cultural_context_scene_embedding, tags_embedding, full_profile_embedding = await asyncio.gather(
+        get_embedding(genres_text),
+        get_embedding(vocal_style_text),
+        get_embedding(production_sound_design_text),
         get_embedding(lyrical_themes_text), 
-        get_embedding(mood_text),
+        get_embedding(mood_atmosphere_text),
+        get_embedding(cultural_context_scene_text),
+        get_embedding(tags_text),
         get_embedding(full_profile_text)
     )
     
     return {
         "artist": artist,
         "embeddings": {
-            "musical_style": musical_style_embedding,
+            "genres": genres_embedding,
+            "vocal_style": vocal_style_embedding,
+            "production_sound_design": production_sound_design_embedding,
             "lyrical_themes": lyrical_themes_embedding,
-            "mood": mood_embedding,
+            "mood_atmosphere": mood_atmosphere_embedding,
+            "cultural_context_scene": cultural_context_scene_embedding,
+            "tags": tags_embedding,
             "full_profile": full_profile_embedding
         },
         "original_texts": {
-            "musical_style": musical_style_text,
+            "genres": genres_text,
+            "vocal_style": vocal_style_text,
+            "production_sound_design": production_sound_design_text,
             "lyrical_themes": lyrical_themes_text,
-            "mood": mood_text,
+            "mood_atmosphere": mood_atmosphere_text,
+            "cultural_context_scene": cultural_context_scene_text,
+            "tags": tags_text,
             "full_profile": full_profile_text
         }
     }
@@ -155,7 +203,7 @@ def save_embeddings_numpy(results: List[Dict], output_path: str):
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Prepare data for each embedding type
-    embedding_types = ['musical_style', 'lyrical_themes', 'mood', 'full_profile']
+    embedding_types = ['genres', 'vocal_style', 'production_sound_design', 'lyrical_themes', 'mood_atmosphere', 'cultural_context_scene', 'tags', 'full_profile']
     
     for embedding_type in embedding_types:
         artists = []
@@ -219,7 +267,7 @@ async def main(input_file: str, output_path: str, output_format: str = "numpy", 
         profiles = profiles[:num_entries]
     
     print(f"Processing {len(profiles)} artist profiles...")
-    print(f"Generating 4 embeddings per artist (total: {len(profiles) * 4} embeddings)")
+    print(f"Generating 8 embeddings per artist (total: {len(profiles) * 8} embeddings)")
     
     # Log text examples for sanity checking
     log_text_examples(profiles, num_examples=min(3, len(profiles)))
