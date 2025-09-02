@@ -13,7 +13,7 @@ class SongProfile(BaseModel):
     tags: List[str] | None
 
 
-class ArtistProfileV4(BaseModel):
+class ArtistProfile(BaseModel):
     artist: str
     familiar: bool
     genres: str | None
