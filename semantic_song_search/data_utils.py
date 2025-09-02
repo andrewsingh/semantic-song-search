@@ -715,7 +715,7 @@ def clean_history_entries(entries: List[Dict]) -> List[Dict]:
             'original_song': entry["master_metadata_track_name"],
             'original_artist': entry["master_metadata_album_artist_name"],
             'ms_played': int(entry.get("ms_played", 0)),
-            'track_uri': entry["spotify_track_uri"],
+            'track_id': entry["spotify_track_uri"].split(":")[-1],
             'timestamp': timestamp,
             'skipped': entry.get("skipped", False),
             'offline': entry.get("offline", False)

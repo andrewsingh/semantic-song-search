@@ -217,6 +217,10 @@ async def main(args) -> None:
     if len(artists) == 0:
         print("No artists to process - all artists have already been completed!")
         return
+
+    # If directory of output path doesn't exist, create it
+    print(f"Creating directory for output path: {output_path.parent}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Sanity check: print first formatted prompt
     first_artist = artists[0]
