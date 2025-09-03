@@ -78,13 +78,16 @@ class RankingConfig:
         K_daily: float = 1e4,
         
         # V2.7: Similarity search weights (track, artist, genre, total streams, daily streams) - these weights should sum to 1
-        beta_track: float = 0.5,         # Weight for track-level similarity
+        beta_track: float = 0.6,         # Weight for track-level similarity
         beta_genre: float = 0.3,        # Weight for genre vs semantic similarity
-        beta_artist_pop: float = 0.1,    # Weight for artist popularity vibe similarity  
-        beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity (disabled for now)
+        beta_artist_pop: float = 0.0,    # Weight for artist popularity vibe similarity (V2 DISABLED)
+        beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity (V2 DISABLED)
         beta_streams_total: float = 0.05,        # Weight for track total streams vs semantic similarity
         beta_streams_daily: float = 0.05,        # Weight for track daily streams vs semantic similarity
-        beta_artist: float = 0.0,      # Weight for artist-artist similarity
+        beta_artist: float = 0.0,      # Weight for artist-artist similarity (deprecated)
+        # V3: Artist similarity beta weights
+        beta_artist_tags: float = 0.0,   # Weight for V3 artist tags similarity
+        beta_artist_genres: float = 0.0, # Weight for V3 artist genre similarity
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -129,6 +132,8 @@ class RankingConfig:
             self.beta_artist = beta_artist
             self.beta_streams_total = beta_streams_total
             self.beta_streams_daily = beta_streams_daily
+            self.beta_artist_tags = beta_artist_tags
+            self.beta_artist_genres = beta_artist_genres
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -175,6 +180,8 @@ class RankingConfig:
             'beta_artist': self.beta_artist,
             'beta_streams_total': self.beta_streams_total,
             'beta_streams_daily': self.beta_streams_daily,
+            'beta_artist_tags': self.beta_artist_tags,
+            'beta_artist_genres': self.beta_artist_genres,
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -226,7 +233,7 @@ class RankingConfig:
                     # Additional validation for other parameters
                     if key in ['beta_p', 'beta_s', 'beta_a'] and not 0.0 <= float_value <= 1.0:
                         logger.warning(f"{key} should typically be in [0,1], got {float_value}")
-                    elif key in ['beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_streams_total', 'beta_streams_daily', 'beta_artist'] and float_value < 0.0:
+                    elif key in ['beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_streams_total', 'beta_streams_daily', 'beta_artist', 'beta_artist_tags', 'beta_artist_genres'] and float_value < 0.0:
                         logger.warning(f"{key} should be non-negative, got {float_value}")
                     setattr(self, key, float_value)
                 else:
@@ -722,7 +729,8 @@ class RankingEngine:
 
     def compute_v25_final_score(self, semantic_similarity: float, track_id: str, 
                                artist_pop_similarity: float = 0.0, artist_personal_similarity: float = 0.0,
-                               genre_similarity: float = None, artist_similarity: float = 0.0) -> Tuple[float, Dict]:
+                               genre_similarity: float = None, artist_similarity: float = 0.0,
+                               artist_tags_similarity: float = 0.0, artist_genre_similarity: float = 0.0) -> Tuple[float, Dict]:
         """
         Compute final V2.6 score for a track with multi-dimensional similarity.
         
@@ -731,10 +739,12 @@ class RankingEngine:
         Args:
             semantic_similarity: Query-track semantic similarity [0, 1]
             track_id: Spotify track ID
-            artist_pop_similarity: Query-artist popularity vibe similarity [0, 1] (default: 0.0)
-            artist_personal_similarity: Query-artist personal vibe similarity [0, 1] (default: 0.0)
+            artist_pop_similarity: Query-artist popularity vibe similarity [0, 1] (V2 DEPRECATED, default: 0.0)
+            artist_personal_similarity: Query-artist personal vibe similarity [0, 1] (V2 DEPRECATED, default: 0.0)
             genre_similarity: Query-track genre similarity [0, 1] (default: None)
-            artist_similarity: Query-artist similarity [0, 1] (default: 0.0)
+            artist_similarity: Query-artist similarity [0, 1] (deprecated, default: 0.0)
+            artist_tags_similarity: V3 artist tags similarity [0, 1] (default: 0.0)
+            artist_genre_similarity: V3 artist genre similarity [0, 1] (default: 0.0)
             
         Returns:
             Tuple of (final_score, component_breakdown)
@@ -746,11 +756,24 @@ class RankingEngine:
         S_artist_pop = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
         S_artist_personal = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
         S_artist = 0.0 if np.isnan(artist_similarity) else artist_similarity
+        S_artist_tags = 0.0 if np.isnan(artist_tags_similarity) else artist_tags_similarity
+        S_artist_genres = 0.0 if np.isnan(artist_genre_similarity) else artist_genre_similarity
         S_streams_total = self.track_priors[track_id]['S_total'] if track_id in self.track_priors else 0.0
         S_streams_daily = self.track_priors[track_id]['S_daily'] if track_id in self.track_priors else 0.0
+
+        beta_artist_tags = self.config.beta_artist_tags
+        beta_artist_genres = self.config.beta_artist_genres
+        if S_artist_tags >= 1.0:
+            beta_artist_tags = 0.0
+        if S_artist_genres >= 1.0:
+            beta_artist_genres = 0.0
+        
         
         # Compute weighted combined semantic similarity (track + artist + stream similarities)
-        total_weight = self.config.beta_track + self.config.beta_genre + self.config.beta_artist_pop + self.config.beta_artist_personal + self.config.beta_streams_total + self.config.beta_streams_daily + self.config.beta_artist
+        total_weight = (self.config.beta_track + self.config.beta_genre + 
+                       self.config.beta_artist_pop + self.config.beta_artist_personal + 
+                       self.config.beta_streams_total + self.config.beta_streams_daily + 
+                       self.config.beta_artist + beta_artist_tags + beta_artist_genres)
 
         if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
             # Normalize weights to ensure they sum to 1
@@ -761,6 +784,8 @@ class RankingEngine:
             norm_beta_streams_total = self.config.beta_streams_total / total_weight
             norm_beta_streams_daily = self.config.beta_streams_daily / total_weight
             norm_beta_artist = self.config.beta_artist / total_weight
+            norm_beta_artist_tags = beta_artist_tags / total_weight
+            norm_beta_artist_genres = beta_artist_genres / total_weight
 
             S_semantic = (norm_beta_track * S_track + 
                          norm_beta_genre * S_genre +
@@ -768,7 +793,9 @@ class RankingEngine:
                          norm_beta_artist_personal * S_artist_personal +
                          norm_beta_streams_total * S_streams_total +
                          norm_beta_streams_daily * S_streams_daily +
-                         norm_beta_artist * S_artist)
+                         norm_beta_artist * S_artist +
+                         norm_beta_artist_tags * S_artist_tags +
+                         norm_beta_artist_genres * S_artist_genres)
         else:
             # Fallback to track similarity only if all weights are zero
             logger.warning("All similarity weights are zero, falling back to track similarity only")
@@ -785,6 +812,8 @@ class RankingEngine:
                 'S_artist_pop': S_artist_pop, 
                 'S_artist_personal': S_artist_personal,
                 'S_artist': S_artist,
+                'S_artist_tags': S_artist_tags,
+                'S_artist_genres': S_artist_genres,
                 'S_streams_total': S_streams_total,
                 'S_streams_daily': S_streams_daily,
                 'final_score': S_semantic,
@@ -796,6 +825,8 @@ class RankingEngine:
                 'beta_streams_total': self.config.beta_streams_total,
                 'beta_streams_daily': self.config.beta_streams_daily,
                 'beta_artist': self.config.beta_artist,
+                'beta_artist_tags': beta_artist_tags,
+                'beta_artist_genres': beta_artist_genres,
                 # No score breakdown components for no-history case
             }
             return S_semantic, components
@@ -812,14 +843,22 @@ class RankingEngine:
             Q_t = 0.0
             h_t = 0.0
 
-        priors = self.track_priors[track_id]
-        P_t = priors['P_t']
-        C_t = priors['C_t']
-        B_t = priors['B_t']
-        C_t_hat = priors['C_t_hat']
-        E_t = priors['E_t']
-        E_t_hat = self.config.kappa_E * E_t
-        Fam_t = priors['Fam_t']
+        if track_id in self.track_priors:
+            priors = self.track_priors[track_id]
+            C_t = priors.get('C_t', 0.0)
+            B_t = priors.get('B_t', 0.0)
+            C_t_hat = priors.get('C_t_hat', 0.0)
+            E_t = priors.get('E_t', 0.0)
+            E_t_hat = self.config.kappa_E * E_t
+            Fam_t = priors.get('Fam_t', 0.0)
+        else:
+            # No priors for this track - use defaults
+            C_t = 0.0
+            B_t = 0.0
+            C_t_hat = 0.0
+            E_t = 0.0
+            E_t_hat = 0.0
+            Fam_t = 0.0
 
         # Core utility (V2.5 revised): keep principled Q_t vs E_t balance
         U_t = h_t * Q_t + (1 - h_t) * E_t_hat
@@ -840,6 +879,8 @@ class RankingEngine:
             'S_artist_pop': S_artist_pop, 
             'S_artist_personal': S_artist_personal,
             'S_artist': S_artist,
+            'S_artist_tags': S_artist_tags,
+            'S_artist_genres': S_artist_genres,
             'S_streams_total': S_streams_total,
             'S_streams_daily': S_streams_daily,
             'S_semantic': S_semantic,
@@ -854,6 +895,8 @@ class RankingEngine:
             'beta_streams_total': self.config.beta_streams_total,
             'beta_streams_daily': self.config.beta_streams_daily,
             'beta_artist': self.config.beta_artist,
+            'beta_artist_tags': beta_artist_tags,
+            'beta_artist_genres': beta_artist_genres,
             # Interpretable score breakdown (these sum to final_score)
             'raw_semantic': S_t,
             'raw_quality': Q_t,
@@ -862,7 +905,6 @@ class RankingEngine:
             'weighted_quality': weighted_quality,        # "aff" 
             'weighted_exploration': weighted_exploration, # "exp"
             # Prior components
-            'P_t': P_t,
             'C_t': C_t,
             'B_t': B_t,
             'C_t_hat': C_t_hat,

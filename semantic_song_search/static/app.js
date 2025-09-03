@@ -45,7 +45,8 @@ class SemanticSearchApp {
         this.currentNoHistoryWeights = {
             beta_track: 0.5,
             beta_genre: 0.3,
-            beta_artist_pop: 0.1,
+            beta_artist_tags: 0.05,
+            beta_artist_genres: 0.05,
             beta_streams_total: 0.05,
             beta_streams_daily: 0.05,
             beta_artist: 0.0
@@ -83,7 +84,8 @@ class SemanticSearchApp {
             noHistoryResetBtn: document.getElementById('no-history-reset-btn'),
             nhBetaTrack: document.getElementById('nh_beta_track'),
             nhBetaGenre: document.getElementById('nh_beta_genre'),
-            nhBetaArtistPop: document.getElementById('nh_beta_artist_pop'),
+            nhBetaArtistTags: document.getElementById('nh_beta_artist_tags'),
+            nhBetaArtistGenres: document.getElementById('nh_beta_artist_genres'),
             nhBetaStreamsTotal: document.getElementById('nh_beta_streams_total'),
             nhBetaStreamsDaily: document.getElementById('nh_beta_streams_daily'),
             nhBetaArtist: document.getElementById('nh_beta_artist')
@@ -115,7 +117,8 @@ class SemanticSearchApp {
         return {
             beta_track: parseFloat(this.domElements.nhBetaTrack?.value || 0.6),
             beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || 0.2),
-            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || 0.15),
+            beta_artist_tags: parseFloat(this.domElements.nhBetaArtistTags?.value || 0.05),
+            beta_artist_genres: parseFloat(this.domElements.nhBetaArtistGenres?.value || 0.05),
             beta_streams_total: parseFloat(this.domElements.nhBetaStreamsTotal?.value || 0.05),
             beta_streams_daily: parseFloat(this.domElements.nhBetaStreamsDaily?.value || 0.05),
             beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || 0.0)
@@ -321,7 +324,8 @@ class SemanticSearchApp {
         const weightInputs = [
             this.domElements.nhBetaTrack,
             this.domElements.nhBetaGenre,
-            this.domElements.nhBetaArtistPop,
+            this.domElements.nhBetaArtistTags,
+            this.domElements.nhBetaArtistGenres,
             this.domElements.nhBetaStreamsTotal,
             this.domElements.nhBetaStreamsDaily,
             this.domElements.nhBetaArtist
@@ -1251,9 +1255,13 @@ class SemanticSearchApp {
                             <span class="component-label">G:</span>
                             <span class="component-value">${(components.S_genre * 100 || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Artist vibe similarity">
-                            <span class="component-label">A:</span>
-                            <span class="component-value">${(components.S_artist_pop * 100 || 0).toFixed(1)}</span>
+                        <span class="scoring-component" title="Artist tags similarity">
+                            <span class="component-label">AT:</span>
+                            <span class="component-value">${(components.S_artist_tags * 100 || 0).toFixed(1)}</span>
+                        </span>
+                        <span class="scoring-component" title="Artist genres similarity">
+                            <span class="component-label">AG:</span>
+                            <span class="component-value">${(components.S_artist_genres * 100 || 0).toFixed(1)}</span>
                         </span>
                         <span class="scoring-component" title="Stream Total">
                             <span class="component-label">T:</span>
@@ -2663,8 +2671,11 @@ class SemanticSearchApp {
         if (this.domElements.nhBetaGenre && this.defaultNoHistoryWeights.beta_genre !== undefined) {
             this.domElements.nhBetaGenre.value = this.defaultNoHistoryWeights.beta_genre;
         }
-        if (this.domElements.nhBetaArtistPop && this.defaultNoHistoryWeights.beta_artist_pop !== undefined) {
-            this.domElements.nhBetaArtistPop.value = this.defaultNoHistoryWeights.beta_artist_pop;
+        if (this.domElements.nhBetaArtistTags && this.defaultNoHistoryWeights.beta_artist_tags !== undefined) {
+            this.domElements.nhBetaArtistTags.value = this.defaultNoHistoryWeights.beta_artist_tags;
+        }
+        if (this.domElements.nhBetaArtistGenres && this.defaultNoHistoryWeights.beta_artist_genres !== undefined) {
+            this.domElements.nhBetaArtistGenres.value = this.defaultNoHistoryWeights.beta_artist_genres;
         }
         if (this.domElements.nhBetaStreamsTotal && this.defaultNoHistoryWeights.beta_streams_total !== undefined) {
             this.domElements.nhBetaStreamsTotal.value = this.defaultNoHistoryWeights.beta_streams_total;
@@ -2680,7 +2691,8 @@ class SemanticSearchApp {
         this.currentNoHistoryWeights = {
             beta_track: parseFloat(this.domElements.nhBetaTrack?.value || this.defaultNoHistoryWeights.beta_track),
             beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || this.defaultNoHistoryWeights.beta_genre),
-            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || this.defaultNoHistoryWeights.beta_artist_pop),
+            beta_artist_tags: parseFloat(this.domElements.nhBetaArtistTags?.value || this.defaultNoHistoryWeights.beta_artist_tags),
+            beta_artist_genres: parseFloat(this.domElements.nhBetaArtistGenres?.value || this.defaultNoHistoryWeights.beta_artist_genres),
             beta_streams_total: parseFloat(this.domElements.nhBetaStreamsTotal?.value || this.defaultNoHistoryWeights.beta_streams_total),
             beta_streams_daily: parseFloat(this.domElements.nhBetaStreamsDaily?.value || this.defaultNoHistoryWeights.beta_streams_daily),
             beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || this.defaultNoHistoryWeights.beta_artist)

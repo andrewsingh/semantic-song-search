@@ -86,9 +86,15 @@ class MusicSearchEngine:
         
         # Similarity matrices for optimized search
         self.user_similarity_matrix = None  # For current user-selected embedding type
-        self.artist_similarity_matrix = None  # For artist similarity computations
+        self.artist_similarity_matrix = None  # V2 DEPRECATED: For song-song similarity (to be replaced by V3 A×A matrices)
         self.user_matrix_embed_type = None  # Track which embedding type user matrix uses
-        self.artist_matrix_embed_type = constants.DEFAULT_ARTIST_MATRIX_EMBED_TYPE  # Default embedding type for artist similarity
+        self.artist_matrix_embed_type = constants.DEFAULT_ARTIST_MATRIX_EMBED_TYPE  # V2 DEPRECATED: Default embedding type for artist similarity
+        
+        # V3 Artist similarity matrices (A×A where A = number of artists)
+        self.tags_artist_similarity_matrix = None    # A×A matrix for tags similarity
+        self.genre_artist_similarity_matrix = None   # A×A matrix for genre similarity
+        self.artist_index_mapping = {}               # artist_name -> index mapping for A×A matrices
+        self.v3_matrices_computed = False            # Track if V3 matrices have been computed
         
         # Performance optimization mappings
         self.track_id_to_index = {}  # track_id -> index mapping for O(1) lookups
@@ -427,8 +433,7 @@ class MusicSearchEngine:
                 self.artist_to_track_indices[artist] = np.array(track_indices)
                 self.artist_popularity_weights[artist] = np.array(popularity_weights)
         
-        # Initialize artist similarity cache
-        self.artist_similarity_cache = {}
+        # V2 DEPRECATED: Artist similarity cache removed for V3
         
         logger.info(f"Built artist auxiliary structures for {len(self.artist_to_track_indices)} artists")
     
@@ -469,6 +474,12 @@ class MusicSearchEngine:
         
         # Now build artist auxiliary structures with ranking engine available
         self._build_artist_auxiliary_structures()
+        
+        # Load precomputed V3 artist similarity matrices
+        logger.info("Loading V3 artist similarity matrices...")
+        v3_success = self.load_artist_similarity_v3_matrices()
+        if not v3_success:
+            logger.warning("V3 artist similarity matrices loading failed - continuing without V3")
     
     def get_text_embedding(self, text: str) -> np.ndarray:
         """Get OpenAI embedding for text query."""
@@ -640,6 +651,9 @@ class MusicSearchEngine:
     def compute_artist_similarity_v2(self, query_track_id: str, candidate_track_id: str, 
                                    query_embedding: np.ndarray = None) -> Tuple[float, float]:
         """
+        DEPRECATED: V2 artist similarity - replaced by V3 artist-level similarity matrices.
+        This function is preserved for reference but should not be called.
+        
         Compute artist similarity using score-then-average approach (V2) - OPTIMIZED with caching.
         
         Args:
@@ -650,134 +664,186 @@ class MusicSearchEngine:
         Returns:
             Tuple of (popularity_similarity, personal_similarity)
         """
-        # Get candidate artist from track_id
-        candidate_artist = self.get_artist_for_song(candidate_track_id)
-        if not candidate_artist:
-            return 0.0, 0.0
-        
-        # Create cache key
-        if query_track_id is not None:
-            # Song-to-song search
-            cache_key = (query_track_id, candidate_artist)
-        else:
-            # Text-to-song search: use hash of query embedding as key
-            if query_embedding is None:
-                logger.warning("query_embedding is None for text-to-song artist similarity")
-                return 0.0, 0.0
-            # Convert to bytes safely and hash the string representation for consistency
-            embedding_bytes = query_embedding.astype(np.float32).tobytes()
-            cache_key = (hash(embedding_bytes), candidate_artist)
-        
-        # Check cache first
-        if cache_key in self.artist_similarity_cache:
-            return self.artist_similarity_cache[cache_key]
-        
-        # Compute similarity if not in cache (pass None for all_artist_similarities since this is called from main loop)
-        result = self._compute_artist_similarity_v2_uncached(query_track_id, candidate_artist, query_embedding, None)
-        
-        # Store in cache
-        self.artist_similarity_cache[cache_key] = result
-        
-        return result
+        # DEPRECATED: V2 function should not be called - return 0.0 for both similarities
+        logger.warning("compute_artist_similarity_v2 called but V2 is deprecated - returning 0.0")
+        return 0.0, 0.0
     
     def _compute_artist_similarity_v2_uncached(self, query_track_id: str, candidate_artist: str, 
                                              query_embedding: np.ndarray = None, 
                                              all_artist_similarities: np.ndarray = None) -> Tuple[float, float]:
         """
+        DEPRECATED: V2 artist similarity - replaced by V3 artist-level similarity matrices.
+        This function is preserved for reference but should not be called.
+        
         Compute artist similarity using vectorized operations (uncached).
         """
-        # Ensure artist similarity matrix is available
-        if not self.ensure_artist_similarity_matrix():
-            logger.warning("Artist similarity matrix not available, falling back to zero similarities")
-            return 0.0, 0.0
+        # DEPRECATED: V2 function should not be called - return 0.0 for both similarities
+        logger.warning("_compute_artist_similarity_v2_uncached called but V2 is deprecated - returning 0.0")
+        return 0.0, 0.0
+    
+    def load_artist_similarity_v3_matrices(self, matrices_dir: str = None) -> bool:
+        """
+        Load precomputed V3 artist similarity matrices from .npz files.
         
-        # Use optimized artist-to-songs mapping for O(1) lookup
-        if candidate_artist not in self.artist_to_songs:
-            return 0.0, 0.0
-        
-        # Get track indices and weights for vectorized operations
-        if candidate_artist not in self.artist_to_track_indices:
-            return 0.0, 0.0
-        
-        track_indices = self.artist_to_track_indices[candidate_artist]
-        popularity_weights = self.artist_popularity_weights[candidate_artist]
-        
-        # Compute similarities using vectorized approach
-        similarities = []
-        
-        if query_track_id is not None:
-            # Song-to-song search: use precomputed matrix with vectorized indexing
-            query_idx = self.track_id_to_index.get(query_track_id)
-            if query_idx is None:
-                logger.warning(f"Query track_id {query_track_id} not found in index")
-                return 0.0, 0.0
+        Args:
+            matrices_dir: Directory containing V3 matrix files. If None, tries default locations.
             
-            # Get similarities for all artist's tracks at once using advanced indexing
-            # Note: artist_similarity_matrix uses song indices, not matrix indices
-            song_indices = [self.track_id_to_index.get(track_id, -1) 
-                           for track_id, _, _ in self.artist_to_songs[candidate_artist]]
-            valid_indices = [idx for idx in song_indices if idx >= 0]
+        Returns:
+            True if matrices were loaded successfully, False otherwise
+        """
+        logger.info("Loading precomputed V3 artist similarity matrices...")
+        
+        # Try to find matrices directory
+        if matrices_dir is None:
+            # Try common locations
+            possible_dirs = [
+                "./v3_matrices",
+                "../v3_matrices", 
+                "./data/v3_matrices",
+                os.path.join(os.path.dirname(self.songs_file), "v3_matrices") if self.songs_file else None
+            ]
             
-            if valid_indices:
-                similarities = self.artist_similarity_matrix[query_idx, valid_indices]
-            else:
-                return 0.0, 0.0
-        else:
-            # Text-to-song search: use precomputed similarities if available
-            if all_artist_similarities is not None and candidate_artist in self.artist_to_track_indices:
-                # Use precomputed similarities - just index into the array! O(1) operation
-                track_indices = self.artist_to_track_indices[candidate_artist]
-                if len(track_indices) > 0:
-                    similarities = all_artist_similarities[track_indices]
-                else:
-                    return 0.0, 0.0
-            elif (self.artist_embeddings_matrix is not None and 
-                  candidate_artist in self.artist_to_track_indices):
-                # Fallback to per-artist matrix multiplication 
-                track_indices = self.artist_to_track_indices[candidate_artist]
-                if len(track_indices) > 0:
-                    similarities = np.dot(query_embedding, self.artist_embeddings_matrix[:, track_indices])
-                else:
-                    return 0.0, 0.0
-            else:
-                # Final fallback to individual computations
-                artist_embed_type = getattr(self, 'artist_matrix_embed_type', 'full_profile')
-                if artist_embed_type in self.embedding_lookups:
-                    embedding_lookup = self.embedding_lookups[artist_embed_type]
-                    similarities = []
-                    
-                    for track_id, _, _ in self.artist_to_songs[candidate_artist]:
-                        if track_id in embedding_lookup:
-                            candidate_embedding = embedding_lookup[track_id]
-                            candidate_norm = self._safe_normalize(candidate_embedding)
-                            similarity = np.dot(query_embedding, candidate_norm)
-                            similarities.append(similarity)
-                        else:
-                            similarities.append(0.0)
-                    
-                    similarities = np.array(similarities)
-                else:
-                    return 0.0, 0.0
+            matrices_dir = None
+            for dir_path in possible_dirs:
+                if dir_path and os.path.exists(dir_path):
+                    matrices_dir = dir_path
+                    break
         
-        # Handle empty similarities
-        if len(similarities) == 0:
-            return 0.0, 0.0
+        if not matrices_dir or not os.path.exists(matrices_dir):
+            logger.warning(f"V3 matrices directory not found - V3 disabled. Tried: {possible_dirs}")
+            return False
         
-        # Normalize similarities to [0, 1]
-        similarities = np.clip((similarities + 1) / 2, 0, 1)
+        try:
+            matrices_path = Path(matrices_dir)
+            
+            # Load matrix files
+            tags_file = matrices_path / 'v3_artist_tags_similarity.npz'
+            genres_file = matrices_path / 'v3_artist_genres_similarity.npz'  
+            mapping_file = matrices_path / 'v3_artist_index_mapping.npz'
+            
+            # Check if all files exist
+            if not all(f.exists() for f in [tags_file, genres_file, mapping_file]):
+                logger.warning("V3 matrix files not found - V3 disabled")
+                return False
+            
+            # Load matrices
+            logger.info(f"Loading V3 matrices from {matrices_path}...")
+            
+            tags_data = np.load(tags_file)
+            self.tags_artist_similarity_matrix = tags_data['matrix']
+            
+            genres_data = np.load(genres_file)
+            self.genre_artist_similarity_matrix = genres_data['matrix']
+            
+            mapping_data = np.load(mapping_file)
+            artists = mapping_data['artists']
+            indices = mapping_data['indices']
+            self.artist_index_mapping = {str(artist): int(idx) for artist, idx in zip(artists, indices)}
+            
+            # Mark V3 as loaded
+            self.v3_matrices_computed = True
+            
+            # Log statistics
+            num_artists = len(self.artist_index_mapping)
+            tags_avg_sim = np.mean(self.tags_artist_similarity_matrix[~np.eye(num_artists, dtype=bool)])
+            genre_avg_sim = np.mean(self.genre_artist_similarity_matrix[~np.eye(num_artists, dtype=bool)])
+            
+            logger.info(f"✅ V3 artist similarity matrices loaded successfully:")
+            logger.info(f"  - Tags matrix: {num_artists}×{num_artists}, avg similarity: {tags_avg_sim:.3f}")
+            logger.info(f"  - Genre matrix: {num_artists}×{num_artists}, avg similarity: {genre_avg_sim:.3f}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error loading V3 artist similarity matrices: {e}")
+            return False
+    
+    def get_artist_tags_similarity_v3(self, artist_a: str, artist_b: str) -> float:
+        """
+        Get tags similarity between two artists from precomputed V3 matrix.
         
-        # Compute weighted averages
-        pop_total_weight = np.sum(popularity_weights)
-        if pop_total_weight > 1e-12:
-            artist_pop_similarity = np.average(similarities, weights=popularity_weights)
-        else:
-            artist_pop_similarity = np.mean(similarities)
+        Args:
+            artist_a: First artist name
+            artist_b: Second artist name
+            
+        Returns:
+            Tags similarity score [0, 1] or 0.0 if not available
+        """
+        if not self.v3_matrices_computed or self.tags_artist_similarity_matrix is None:
+            return 0.0
         
-        # For now, only computing artist_pop_similarity as requested
-        # artist_personal_similarity can be added back later if needed
-        artist_personal_similarity = 0.0
+        idx_a = self.artist_index_mapping.get(artist_a)
+        idx_b = self.artist_index_mapping.get(artist_b)
         
-        return float(artist_pop_similarity), float(artist_personal_similarity)
+        if idx_a is None or idx_b is None:
+            return 0.0
+        
+        return float(self.tags_artist_similarity_matrix[idx_a, idx_b])
+    
+    def get_artist_genre_similarity_v3(self, artist_a: str, artist_b: str) -> float:
+        """
+        Get genre similarity between two artists from precomputed V3 matrix.
+        
+        Args:
+            artist_a: First artist name
+            artist_b: Second artist name
+            
+        Returns:
+            Genre similarity score [0, 1] or 0.0 if not available
+        """
+        if not self.v3_matrices_computed or self.genre_artist_similarity_matrix is None:
+            return 0.0
+        
+        idx_a = self.artist_index_mapping.get(artist_a)
+        idx_b = self.artist_index_mapping.get(artist_b)
+        
+        if idx_a is None or idx_b is None:
+            return 0.0
+        
+        return float(self.genre_artist_similarity_matrix[idx_a, idx_b])
+    
+    def get_v3_artist_similarity_stats(self) -> Dict:
+        """
+        Get statistics about V3 artist similarity matrices.
+        
+        Returns:
+            Dictionary with V3 matrix statistics
+        """
+        if not self.v3_matrices_computed:
+            return {
+                'v3_computed': False,
+                'error': 'V3 matrices not computed'
+            }
+        
+        num_artists = len(self.artist_index_mapping)
+        
+        # Compute statistics (excluding diagonal)
+        mask = ~np.eye(num_artists, dtype=bool)
+        tags_stats = {
+            'mean': float(np.mean(self.tags_artist_similarity_matrix[mask])),
+            'std': float(np.std(self.tags_artist_similarity_matrix[mask])),
+            'min': float(np.min(self.tags_artist_similarity_matrix[mask])),
+            'max': float(np.max(self.tags_artist_similarity_matrix[mask]))
+        }
+        
+        genre_stats = {
+            'mean': float(np.mean(self.genre_artist_similarity_matrix[mask])),
+            'std': float(np.std(self.genre_artist_similarity_matrix[mask])),
+            'min': float(np.min(self.genre_artist_similarity_matrix[mask])),
+            'max': float(np.max(self.genre_artist_similarity_matrix[mask]))
+        }
+        
+        return {
+            'v3_computed': True,
+            'num_artists': num_artists,
+            'matrix_size': f"{num_artists}×{num_artists}",
+            'tags_similarity_stats': tags_stats,
+            'genre_similarity_stats': genre_stats,
+            'memory_usage_mb': {
+                'tags_matrix': float(self.tags_artist_similarity_matrix.nbytes / (1024 * 1024)),
+                'genre_matrix': float(self.genre_artist_similarity_matrix.nbytes / (1024 * 1024))
+            }
+        }
     
     def get_song_embedding(self, song_idx: int, embed_type: str = 'full_profile') -> np.ndarray:
         """
@@ -1138,19 +1204,26 @@ class MusicSearchEngine:
         
         t_final_scores_start = time.time()
         for candidate in candidates_data:
-            # Compute artist similarities for multi-dimensional search
+            # V3 Artist similarities (disabled for text-to-song as per design)
+            artist_tags_similarity = 0.0
+            artist_genre_similarity = 0.0
+            
+            if query_track_id is not None:  # Song-to-song search only
+                try:
+                    # Get query and candidate artists
+                    query_artist = self.get_artist_for_song(query_track_id)
+                    candidate_artist = self.get_artist_for_song(candidate['track_id'])
+                    
+                    if query_artist and candidate_artist:
+                        # Use V3 lookups for O(1) artist similarity
+                        artist_tags_similarity = self.get_artist_tags_similarity_v3(query_artist, candidate_artist)
+                        artist_genre_similarity = self.get_artist_genre_similarity_v3(query_artist, candidate_artist)
+                except Exception as e:
+                    logger.warning(f"Error computing V3 artist similarities for {candidate['track_id']}: {e}")
+            
+            # Keep legacy variables for backward compatibility (will be removed later)
             artist_pop_similarity = 0.0
             artist_personal_similarity = 0.0
-            
-            try:
-                # Use V2 score-then-average artist similarity method
-                artist_pop_similarity, artist_personal_similarity = self.compute_artist_similarity_v2(
-                    query_track_id, candidate['track_id'], query_embedding
-                )
-                
-            except Exception as e:
-                logger.warning(f"Error computing V2 artist similarities for {candidate['track_id']}: {e}")
-                # Keep default values of 0.0 for both similarities
                         
             # Compute genre similarity if genre query embedding is provided
             genre_similarity = None
@@ -1197,7 +1270,9 @@ class MusicSearchEngine:
                 artist_pop_similarity,
                 artist_personal_similarity,
                 genre_similarity,
-                artist_similarity
+                artist_similarity,
+                artist_tags_similarity,
+                artist_genre_similarity
             )
             
             # Get familiarity score for filtering
@@ -1368,7 +1443,7 @@ class MusicSearchEngine:
 # Initialize search engine
 search_engine = None
 
-def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None):
+def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None, v3_matrices_path: str = None):
     """Initialize the search engine with data files."""
     global search_engine
     if search_engine is None:
@@ -1378,20 +1453,24 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             embeddings_path = embeddings_file
             history_path_arg = history_path
             artist_embeddings_path = artist_embeddings_file
+            v3_matrices_path_arg = v3_matrices_path
         elif 'args' in globals() and args:
             songs_path = songs_file or args.songs
             embeddings_path = embeddings_file or args.embeddings
             history_path_arg = history_path or args.history
             artist_embeddings_path = artist_embeddings_file or getattr(args, 'artist_embeddings', constants.DEFAULT_ARTIST_EMBEDDINGS_PATH)
+            v3_matrices_path_arg = v3_matrices_path or getattr(args, 'v3_matrices', constants.DEFAULT_V3_MATRICES_PATH)
         else:
             # Fallback defaults
             default_songs = Path(__file__).parent.parent / constants.DEFAULT_SONGS_FILE
             default_embeddings = Path(__file__).parent.parent / constants.DEFAULT_EMBEDDINGS_PATH
             default_artist_embeddings = (Path(__file__).parent.parent / constants.DEFAULT_ARTIST_EMBEDDINGS_PATH) if constants.DEFAULT_ARTIST_EMBEDDINGS_PATH else None
+            default_v3_matrices = Path(__file__).parent.parent / constants.DEFAULT_V3_MATRICES_PATH
             songs_path = songs_file or str(default_songs)
             embeddings_path = embeddings_file or str(default_embeddings)
             history_path_arg = history_path
             artist_embeddings_path = artist_embeddings_file or (str(default_artist_embeddings) if default_artist_embeddings else None)
+            v3_matrices_path_arg = v3_matrices_path or str(default_v3_matrices)
         
         # Validate that files exist
         if not Path(songs_path).exists():
@@ -1440,8 +1519,24 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             logger.info(f"  Artist embeddings: None (artist similarity disabled)")
             artist_embeddings_path = None  # Don't pass invalid path to search engine
         
+        # Validate V3 matrices path if provided
+        if v3_matrices_path_arg and Path(v3_matrices_path_arg).exists():
+            logger.info(f"  V3 matrices path: {v3_matrices_path_arg}")
+        else:
+            logger.info(f"  V3 matrices path: None (V3 artist similarity will be computed if needed)")
+            v3_matrices_path_arg = None
+        
         # Create search engine
         search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg, artist_embeddings_path)
+        
+        # Load V3 matrices if path provided
+        if v3_matrices_path_arg:
+            logger.info("Loading precomputed V3 artist similarity matrices...")
+            success = search_engine.load_artist_similarity_v3_matrices(v3_matrices_path_arg)
+            if success:
+                logger.info("V3 matrices loaded successfully!")
+            else:
+                logger.warning("Failed to load V3 matrices, will compute if needed during runtime")
 
 
 # Flask routes (keep most of the existing routes, update search endpoint)
@@ -1502,7 +1597,7 @@ def search():
             'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
             'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
             'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_streams_total', 'beta_streams_daily'
+            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_streams_total', 'beta_streams_daily', 'beta_artist_tags', 'beta_artist_genres'
         }
         
         for param_name in valid_advanced_params:
@@ -2147,7 +2242,9 @@ def get_artist_similarity_config():
         config = {
             'artist_embed_type': search_engine.artist_matrix_embed_type,
             'available_types': list(search_engine.embedding_lookups.keys()),
-            'has_matrix': search_engine.artist_similarity_matrix is not None
+            'has_matrix': search_engine.artist_similarity_matrix is not None,
+            'v3_matrices_computed': search_engine.v3_matrices_computed,
+            'v3_stats': search_engine.get_v3_artist_similarity_stats() if search_engine.v3_matrices_computed else None
         }
         return jsonify(config)
     except Exception as e:
@@ -2176,13 +2273,29 @@ def set_artist_similarity_config():
         config = {
             'artist_embed_type': search_engine.artist_matrix_embed_type,
             'available_types': list(search_engine.embedding_lookups.keys()),
-            'has_matrix': search_engine.artist_similarity_matrix is not None
+            'has_matrix': search_engine.artist_similarity_matrix is not None,
+            'v3_matrices_computed': search_engine.v3_matrices_computed,
+            'v3_stats': search_engine.get_v3_artist_similarity_stats() if search_engine.v3_matrices_computed else None
         }
         return jsonify(config)
         
     except Exception as e:
         logger.error(f"Error setting artist similarity config: {e}")
         return jsonify({'error': 'Failed to set artist similarity configuration'}), 500
+
+@app.route('/api/artist_similarity_v3_stats', methods=['GET'])
+def get_artist_similarity_v3_stats():
+    """Get detailed V3 artist similarity statistics."""
+    try:
+        if search_engine is None:
+            return jsonify({'error': 'Search engine not initialized'}), 500
+        
+        stats = search_engine.get_v3_artist_similarity_stats()
+        return jsonify(stats)
+        
+    except Exception as e:
+        logger.error(f"Error getting V3 artist similarity stats: {e}")
+        return jsonify({'error': 'Failed to retrieve V3 artist similarity statistics'}), 500
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -2202,6 +2315,7 @@ Examples:
                        help=f'Path to embeddings file/directory (supports combined .npz file or directory with separate embedding files) (default: {constants.DEFAULT_EMBEDDINGS_PATH})')  
     parser.add_argument('--history', type=str, default=None, help='Path to Spotify Extended Streaming History directory (optional - enables personalized ranking)')
     parser.add_argument('--artist-embeddings', type=str, default=constants.DEFAULT_ARTIST_EMBEDDINGS_PATH, help=f'Path to artist embeddings directory (default: {constants.DEFAULT_ARTIST_EMBEDDINGS_PATH})')
+    parser.add_argument('--v3-matrices', type=str, default=constants.DEFAULT_V3_MATRICES_PATH, help=f'Path to precomputed V3 artist similarity matrices directory (default: {constants.DEFAULT_V3_MATRICES_PATH})')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--host', type=str, default=constants.DEFAULT_HOST, help='Host to run the server on (default: 127.0.0.1)')
     parser.add_argument('--port', type=int, default=constants.DEFAULT_PORT, help='Port to run the server on (default: 5000)')
@@ -2218,7 +2332,7 @@ if __name__ == '__main__':
     
     # Initialize search engine early to catch any data file issues
     try:
-        init_search_engine(args.songs, args.embeddings, args.history, getattr(args, 'artist_embeddings', None))
+        init_search_engine(args.songs, args.embeddings, args.history, getattr(args, 'artist_embeddings', None), getattr(args, 'v3_matrices', None))
         logger.info("Search engine initialized successfully!")
     except Exception as e:
         logger.error(f"Failed to initialize search engine: {e}")
