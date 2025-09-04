@@ -269,6 +269,20 @@ class MusicSearchEngine:
         self.track_id_to_index = {}
         self.artist_to_songs = {}
         
+        # Build mapping from track_ids to artists from embeddings data
+        track_id_to_main_artist = {}
+        if self.embedding_indices:
+            # Get the first available embedding type to use for artist mapping
+            embed_type = next(iter(self.embedding_indices.keys()), None)
+            if embed_type and 'track_ids' in self.embedding_indices[embed_type] and 'artists' in self.embedding_indices[embed_type]:
+                track_ids = self.embedding_indices[embed_type]['track_ids']
+                artists_array = self.embedding_indices[embed_type]['artists']
+                
+                # Build mapping from track_id to main artist (first artist)
+                for track_id, artist in zip(track_ids, artists_array):
+                    if artist:  # Only map if artist is not empty
+                        track_id_to_main_artist[track_id] = artist
+        
         for i, song in enumerate(self.songs):
             track_id = song.get('track_id') or song.get('id')
             if not track_id:
@@ -278,19 +292,19 @@ class MusicSearchEngine:
             # Build track_id to index mapping
             self.track_id_to_index[track_id] = i
             
-            # Build artist to songs mapping (handle multiple artists)
-            artists = []
-            if song.get('artists'):
-                # New format: multiple artists in array
-                artists = [artist['name'] for artist in song['artists']]
-            elif song.get('original_artist'):
-                # Backwards compatibility: single artist
-                artists = [song['original_artist']]
+            # Get main artist from embeddings data, fallback to metadata if not available
+            main_artist = track_id_to_main_artist.get(track_id)
+            if not main_artist:
+                # Fallback to metadata for backwards compatibility
+                if song.get('artists'):
+                    main_artist = song['artists'][0]['name']
+                elif song.get('original_artist'):
+                    main_artist = song['original_artist']
             
-            for artist in artists:
-                if artist not in self.artist_to_songs:
-                    self.artist_to_songs[artist] = []
-                self.artist_to_songs[artist].append((track_id, i, song))
+            if main_artist:
+                if main_artist not in self.artist_to_songs:
+                    self.artist_to_songs[main_artist] = []
+                self.artist_to_songs[main_artist].append((track_id, i, song))
         
         logger.info(f"Built mappings for {len(self.track_id_to_index)} songs and {len(self.artist_to_songs)} artists")
         
