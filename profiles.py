@@ -16,9 +16,10 @@ class SongProfile(BaseModel):
 class ArtistProfile(BaseModel):
     artist: str
     familiar: bool
-    genres: str | None
-    vocal_style: str | None
-    production_sound_design: str | None
-    lyrical_themes: str | None
-    mood_atmosphere: str | None
-    cultural_context_scene: str | None
+    lead_vocalist_gender: str | None
+    genres: List[str] | None
+    vocal_style: List[str] | None
+    production_sound_design: List[str] | None
+    lyrical_themes: List[str] | None
+    mood_atmosphere: List[str] | None
+    cultural_context_scene: List[str] | None

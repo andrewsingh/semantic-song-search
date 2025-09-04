@@ -3,11 +3,11 @@
 Generate text embeddings for artist profiles using OpenAI's text-embedding-3-large model.
 Creates 7 embeddings per artist: genres, vocal_style, production_sound_design, lyrical_themes, 
 mood_atmosphere, cultural_context_scene, and full_profile.
-Saves embeddings in separate files by type following the new embedding structure.
+Saves embeddings in separate files by type following the V6 schema embedding structure.
 
 Usage:
   # Save to directory (recommended)
-  python embed_artist_profiles.py -i selected_artists_v4_profiles.jsonl \
+  python embed_artist_profiles.py -i artist_profiles_v6.jsonl \
                                   -o artist_embeddings/ \
                                   -n 10  # optional, for testing
   
@@ -23,7 +23,7 @@ Usage:
   # - cultural_context_scene_artist_embeddings.npz
   # - full_profile_artist_embeddings.npz
 """
-import argparse, asyncio, json, time
+import argparse, asyncio, json, time, os
 from pathlib import Path
 from typing import List, Dict, Any
 import numpy as np
@@ -41,37 +41,43 @@ RETRY_BACKOFF_SEC = max(1, int(60 / RATE_LIMIT_RPM * 10))
 # ──────────────────────────────── OPENAI SETTINGS ─────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-large"
 
+# Check for OpenAI API key
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY environment variable is required but not set")
+
 def format_individual_sections(profile_data):
-    artist = profile_data['artist']
-    
-    genres_text = f"Genres of {artist}: {profile_data['genres']}"
-    vocal_style_text = f"Vocal style of {artist}: {profile_data['vocal_style']}"
-    production_sound_design_text = f"Production and sound design of {artist}: {profile_data['production_sound_design']}"
-    lyrical_themes_text = f"Lyrical themes of {artist}: {profile_data['lyrical_themes']}"
-    mood_atmosphere_text = f"Mood and atmosphere of {artist}'s music: {profile_data['mood_atmosphere']}"
-    cultural_context_scene_text = f"Cultural context and scene of {artist}: {profile_data['cultural_context_scene']}"
+    """Format individual sections as comma-separated strings of descriptors only."""
+    # Convert arrays to comma-separated strings (no prefixes) with safe field access
+    genres_text = ", ".join(profile_data.get('genres') or []) if profile_data.get('genres') else ""
+    vocal_style_text = ", ".join(profile_data.get('vocal_style') or []) if profile_data.get('vocal_style') else ""
+    production_sound_design_text = ", ".join(profile_data.get('production_sound_design') or []) if profile_data.get('production_sound_design') else ""
+    lyrical_themes_text = ", ".join(profile_data.get('lyrical_themes') or []) if profile_data.get('lyrical_themes') else ""
+    mood_atmosphere_text = ", ".join(profile_data.get('mood_atmosphere') or []) if profile_data.get('mood_atmosphere') else ""
+    cultural_context_scene_text = ", ".join(profile_data.get('cultural_context_scene') or []) if profile_data.get('cultural_context_scene') else ""
     
     return genres_text, vocal_style_text, production_sound_design_text, lyrical_themes_text, mood_atmosphere_text, cultural_context_scene_text
 
 
 def format_full_profile(profile_data):
-    artist = profile_data['artist']
+    """Format full profile as comma-separated concatenation of all descriptors."""
+    # Collect all non-empty descriptor arrays with safe field access
+    all_descriptors = []
     
-    full_profile_text = f"""Artist: {artist}
-
-Genres: {profile_data['genres']}
-
-Vocal Style: {profile_data['vocal_style']}
-
-Production & Sound Design: {profile_data['production_sound_design']}
-
-Lyrical Themes: {profile_data['lyrical_themes']}
-
-Mood & Atmosphere: {profile_data['mood_atmosphere']}
-
-Cultural Context & Scene: {profile_data['cultural_context_scene']}"""
+    if profile_data.get('genres'):
+        all_descriptors.extend(profile_data['genres'])
+    if profile_data.get('vocal_style'):
+        all_descriptors.extend(profile_data['vocal_style'])
+    if profile_data.get('production_sound_design'):
+        all_descriptors.extend(profile_data['production_sound_design'])
+    if profile_data.get('lyrical_themes'):
+        all_descriptors.extend(profile_data['lyrical_themes'])
+    if profile_data.get('mood_atmosphere'):
+        all_descriptors.extend(profile_data['mood_atmosphere'])
+    if profile_data.get('cultural_context_scene'):
+        all_descriptors.extend(profile_data['cultural_context_scene'])
     
-    return full_profile_text
+    # Return comma-separated string of all descriptors
+    return ", ".join(all_descriptors)
 
 def log_text_examples(profiles: List[Dict], num_examples: int = 3):
     """Log examples of formatted text for sanity checking."""
@@ -120,25 +126,29 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 async def get_embedding(text: str) -> List[float]:
     """Get embedding for a single text string with retry logic."""
+    # Handle empty strings - use a minimal placeholder to avoid API issues
+    if not text or text.strip() == "":
+        text = "unknown"
+    
     for attempt in range(1, MAX_RETRIES + 1):
-        async with sem:
-            try:
+        try:
+            async with sem:  # Move semaphore inside try block to ensure proper release
                 response = await client.embeddings.create(
                     model=EMBEDDING_MODEL,
                     input=text,
                     encoding_format="float"
                 )
                 return response.data[0].embedding
-            except (RateLimitError, APIError) as err:
-                if attempt == MAX_RETRIES:
-                    raise
-                wait = RETRY_BACKOFF_SEC * attempt
-                print(f"[retry {attempt}/{MAX_RETRIES}] {err} → sleeping {wait}s")
-                await asyncio.sleep(wait)
+        except (RateLimitError, APIError) as err:
+            if attempt == MAX_RETRIES:
+                raise
+            wait = RETRY_BACKOFF_SEC * attempt
+            print(f"[retry {attempt}/{MAX_RETRIES}] {err} → sleeping {wait}s")
+            await asyncio.sleep(wait)
 
 async def process_artist_profile(profile_data: Dict[str, Any]) -> Dict[str, Any]:
     """Process a single artist profile and generate all 7 embeddings."""
-    artist = profile_data['artist']
+    artist = profile_data.get('artist', 'Unknown Artist')
     
     # Get the formatted text strings using existing functions
     genres_text, vocal_style_text, production_sound_design_text, lyrical_themes_text, mood_atmosphere_text, cultural_context_scene_text = format_individual_sections(profile_data)
@@ -157,6 +167,7 @@ async def process_artist_profile(profile_data: Dict[str, Any]) -> Dict[str, Any]
     
     return {
         "artist": artist,
+        "lead_vocalist_gender": profile_data.get('lead_vocalist_gender', 'N/A'),  # Include lead_vocalist_gender with safe access
         "embeddings": {
             "genres": genres_embedding,
             "vocal_style": vocal_style_embedding,
@@ -193,11 +204,13 @@ def save_embeddings_numpy(results: List[Dict], output_path: str):
         embeddings = []
         artist_indices = []
         field_values = []
+        lead_vocalist_genders = []  # Add lead_vocalist_gender metadata
         
         for i, result in enumerate(results):
             artists.append(result['artist'])
             embeddings.append(result['embeddings'][embedding_type])
             artist_indices.append(i)
+            lead_vocalist_genders.append(result['lead_vocalist_gender'])
             
             # Get the original text that was embedded for this type
             field_values.append(result['original_texts'][embedding_type])
@@ -213,7 +226,8 @@ def save_embeddings_numpy(results: List[Dict], output_path: str):
             artists=np.array(artists),
             embeddings=embeddings_array,
             artist_indices=artist_indices_array,
-            field_values=np.array(field_values)
+            field_values=np.array(field_values),
+            lead_vocalist_genders=np.array(lead_vocalist_genders)  # Include lead_vocalist_gender
         )
         
         print(f"Saved {embedding_type} embeddings: {output_file}")
@@ -263,8 +277,18 @@ async def main(input_file: str, output_path: str, output_format: str = "numpy", 
     
     with tqdm(total=len(tasks), unit="artist") as pbar:
         for coro in asyncio.as_completed(tasks):
-            result = await coro
-            results.append(result)
+            try:
+                result = await coro
+                # Validate result structure before adding
+                if (result and isinstance(result, dict) and 
+                    'artist' in result and 'embeddings' in result and 
+                    'original_texts' in result and 'lead_vocalist_gender' in result):
+                    results.append(result)
+                else:
+                    print(f"Warning: Skipping malformed result for artist")
+            except Exception as e:
+                print(f"Error processing artist profile: {e}")
+                # Continue processing other artists instead of failing completely
             pbar.update(1)
     
     # Save embeddings in requested format
