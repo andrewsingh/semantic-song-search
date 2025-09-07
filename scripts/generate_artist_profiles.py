@@ -47,6 +47,8 @@ parser.add_argument("-l", "--log", default=None,
                     help="Path to raw API response log file (defaults to <output>.raw.jsonl)")
 parser.add_argument("-p", "--prompt", required=True,
                         help="Path to prompt template txt file (variable {{artist}} will be replaced)")
+parser.add_argument("-s", "--search_context_size", default="medium",
+                        help="Search context size (default: medium)")
 parser.add_argument("--perplexity-api-key", default=None,
                         help="Override the PERPLEXITY_API_KEY environment variable")
 
@@ -91,7 +93,7 @@ def parse_llm_payload(raw: str) -> dict:
             raise ValueError(f"Cannot decode payload: {e}")
 
 
-async def get_response(session: aiohttp.ClientSession, prompt: str):
+async def get_response(session: aiohttp.ClientSession, prompt: str, search_context_size: str = cli_args.search_context_size):
     """Async version of get_response using aiohttp"""
     url = "https://api.perplexity.ai/chat/completions"
     headers = {
@@ -106,7 +108,14 @@ async def get_response(session: aiohttp.ClientSession, prompt: str):
         ],
         "response_format": { 
             "type": "json_schema", 
-            "json_schema": {"schema": ArtistProfile.model_json_schema()} }
+            "json_schema": {"schema": ArtistProfile.model_json_schema()} 
+        },
+        "web_search_options": {
+            "search_context_size": search_context_size
+        },
+        "search_domain_filter": [
+            "-youtube.com",
+        ]
     }
 
     async with session.post(url, headers=headers, json=payload) as response:
