@@ -4,37 +4,13 @@ from typing import List
 
 class SongProfile(BaseModel):
     song: str
-    artist: str
+    artists: str
     familiar: bool
-    genres: List[str] | None
-    sound: str | None
-    meaning: str | None
-    mood: str | None
-    tags: List[str] | None
-
-
-class ArtistProfile(BaseModel):
-    artist: str
-    familiar: bool
-    lead_vocalist_gender: str | None
     genres: List[str] | None
     vocal_style: List[str] | None
     production_sound_design: List[str] | None
-    lyrical_themes: List[str] | None
+    lyrical_meaning: List[str] | None
     mood_atmosphere: List[str] | None
-    cultural_context_scene: List[str] | None
-
-
-class ArtistProfile(BaseModel):
-    artist: str
-    familiar: bool
-    lead_vocalist_gender: str | None
-    genres: List[str] | None
-    vocal_style: List[str] | None
-    production_sound_design: List[str] | None
-    lyrical_themes: List[str] | None
-    mood_atmosphere: List[str] | None
-    cultural_context_scene: List[str] | None
 
 
 class Genre(BaseModel):
@@ -42,7 +18,7 @@ class Genre(BaseModel):
     prominence: int
 
 
-class ArtistProfileV7(BaseModel):
+class ArtistProfile(BaseModel):
     artist: str
     familiar: bool
     lead_vocalist_gender: str | None
