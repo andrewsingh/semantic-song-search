@@ -30,10 +30,6 @@ RETRY_BACKOFF_SEC = max(1, int(60 / RATE_LIMIT_RPM * 2))  # Reduce from *10 to *
 
 print(f"Rate limit settings: {RATE_LIMIT_RPM} RPM, {MAX_CONCURRENCY} concurrent requests")
 
-API_KEY = os.getenv("PERPLEXITY_API_KEY")
-if not API_KEY:
-    raise Exception("PERPLEXITY_API_KEY environment variable not set")
-
 FENCE_RE = re.compile(r"^```(?:\w+)?\s*([\s\S]*?)\s*```$", re.DOTALL)
 
 # ──────────────────────────────── ARGPARSE ────────────────────────────────
@@ -50,8 +46,16 @@ parser.add_argument("-l", "--log", default=None,
                     help="Path to raw API response log file (defaults to <output>.raw.jsonl)")
 parser.add_argument("-p", "--prompt", required=True,
                         help="Path to prompt template txt file (variables {{song}}, {{artists}}, and {{main_artist}} will be replaced)")
+parser.add_argument("-s", "--search_context_size", default="medium",
+                        help="Search context size (default: medium)")
+parser.add_argument("--perplexity-api-key", default=None,
+                        help="Override the PERPLEXITY_API_KEY environment variable")
 
 cli_args = parser.parse_args()
+
+API_KEY = cli_args.perplexity_api_key or os.getenv("PERPLEXITY_API_KEY")
+if not API_KEY:
+    raise Exception("PERPLEXITY_API_KEY environment variable not set or empty")
 
 # ─────────────────────────────── PROMPT TEMPLATE ──────────────────────────────
 PROMPT_TEMPLATE = Path(cli_args.prompt).read_text(encoding="utf-8").strip()
@@ -88,7 +92,7 @@ def parse_llm_payload(raw: str) -> dict:
             raise ValueError(f"Cannot decode payload: {e}")
 
 
-async def get_response(session: aiohttp.ClientSession, prompt: str):
+async def get_response(session: aiohttp.ClientSession, prompt: str, search_context_size: str = cli_args.search_context_size):   
     """Async version of get_response using aiohttp"""
     url = "https://api.perplexity.ai/chat/completions"
     headers = {
@@ -103,7 +107,14 @@ async def get_response(session: aiohttp.ClientSession, prompt: str):
         ],
         "response_format": { 
             "type": "json_schema", 
-            "json_schema": {"schema": SongProfile.model_json_schema()} }
+            "json_schema": {"schema": SongProfile.model_json_schema()} 
+        },
+        "web_search_options": {
+            "search_context_size": search_context_size
+        },
+        "search_domain_filter": [
+            "-youtube.com",
+        ]
     }
 
     async with session.post(url, headers=headers, json=payload) as response:
@@ -324,6 +335,8 @@ async def main(args) -> None:
     print(f"{'='*60}")
     print(sample_prompt)
     print(f"{'='*60}\n")
+
+    print(f"SEARCH CONTEXT SIZE: {cli_args.search_context_size}")
     
     # Determine log file path
     log_path = Path(args.log) if args.log else Path(f"{args.output}.raw.jsonl")
