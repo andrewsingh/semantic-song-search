@@ -77,14 +77,27 @@ class RankingConfig:
         K_total: float = 1e7,
         K_daily: float = 1e4,
         
-        # V2.7: Similarity search weights (track, artist, genre, total streams, daily streams) - these weights should sum to 1
-        beta_track: float = 0.5,         # Weight for track-level similarity
-        beta_genre: float = 0.3,        # Weight for genre vs semantic similarity
-        beta_artist_pop: float = 0.1,    # Weight for artist popularity vibe similarity  
-        beta_artist_personal: float = 0.0, # Weight for artist personal vibe similarity (disabled for now)
-        beta_streams_total: float = 0.05,        # Weight for track total streams vs semantic similarity
-        beta_streams_daily: float = 0.05,        # Weight for track daily streams vs semantic similarity
-        beta_artist: float = 0.0,      # Weight for artist-artist similarity
+        # New descriptor-based similarity weights (9 total weights)
+        # Top-level weights (a_i) - should sum to 1.0
+        a0_song_sim: float = 0.5,        # Weight for song descriptor similarity
+        a1_artist_sim: float = 0.3,      # Weight for artist descriptor similarity
+        a2_total_streams: float = 0.1,   # Weight for total streams score
+        a3_daily_streams: float = 0.1,   # Weight for daily streams score
+        
+        # Song descriptor weights (b_i) - should sum to 1.0
+        b0_genres: float = 0.3,                    # Weight for song genres similarity
+        b1_vocal_style: float = 0.2,              # Weight for vocal style similarity
+        b2_production_sound_design: float = 0.2,  # Weight for production & sound design similarity
+        b3_lyrical_meaning: float = 0.15,         # Weight for lyrical meaning similarity
+        b4_mood_atmosphere: float = 0.15,         # Weight for mood & atmosphere similarity
+        
+        # Artist descriptor weights (c_i) - backend only, should sum to 1.0  
+        c0_artist_genres: float = 0.25,                     # Weight for artist genres similarity
+        c1_artist_vocal_style: float = 0.15,               # Weight for artist vocal style similarity
+        c2_artist_production_sound_design: float = 0.15,   # Weight for artist production similarity
+        c3_artist_lyrical_themes: float = 0.15,            # Weight for artist lyrical themes similarity
+        c4_artist_mood_atmosphere: float = 0.15,           # Weight for artist mood similarity
+        c5_artist_cultural_context_scene: float = 0.15,    # Weight for artist cultural context similarity
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c
@@ -122,13 +135,25 @@ class RankingConfig:
             self.min_plays = min_plays
             self.K_total = K_total
             self.K_daily = K_daily
-            self.beta_track = beta_track
-            self.beta_artist_pop = beta_artist_pop
-            self.beta_artist_personal = beta_artist_personal
-            self.beta_genre = beta_genre    
-            self.beta_artist = beta_artist
-            self.beta_streams_total = beta_streams_total
-            self.beta_streams_daily = beta_streams_daily
+            
+            # New descriptor-based weights
+            self.a0_song_sim = a0_song_sim
+            self.a1_artist_sim = a1_artist_sim
+            self.a2_total_streams = a2_total_streams
+            self.a3_daily_streams = a3_daily_streams
+            
+            self.b0_genres = b0_genres
+            self.b1_vocal_style = b1_vocal_style
+            self.b2_production_sound_design = b2_production_sound_design
+            self.b3_lyrical_meaning = b3_lyrical_meaning
+            self.b4_mood_atmosphere = b4_mood_atmosphere
+            
+            self.c0_artist_genres = c0_artist_genres
+            self.c1_artist_vocal_style = c1_artist_vocal_style
+            self.c2_artist_production_sound_design = c2_artist_production_sound_design
+            self.c3_artist_lyrical_themes = c3_artist_lyrical_themes
+            self.c4_artist_mood_atmosphere = c4_artist_mood_atmosphere
+            self.c5_artist_cultural_context_scene = c5_artist_cultural_context_scene
     
     def to_dict(self) -> Dict:
         """Convert config to dictionary format."""
@@ -168,13 +193,56 @@ class RankingConfig:
             'min_plays': self.min_plays,
             'K_total': self.K_total,
             'K_daily': self.K_daily,
-            'beta_track': self.beta_track,
-            'beta_artist_pop': self.beta_artist_pop,
-            'beta_artist_personal': self.beta_artist_personal,
-            'beta_genre': self.beta_genre,
-            'beta_artist': self.beta_artist,
-            'beta_streams_total': self.beta_streams_total,
-            'beta_streams_daily': self.beta_streams_daily,
+            
+            # New descriptor-based weights
+            'a0_song_sim': self.a0_song_sim,
+            'a1_artist_sim': self.a1_artist_sim,
+            'a2_total_streams': self.a2_total_streams,
+            'a3_daily_streams': self.a3_daily_streams,
+            
+            'b0_genres': self.b0_genres,
+            'b1_vocal_style': self.b1_vocal_style,
+            'b2_production_sound_design': self.b2_production_sound_design,
+            'b3_lyrical_meaning': self.b3_lyrical_meaning,
+            'b4_mood_atmosphere': self.b4_mood_atmosphere,
+            
+            'c0_artist_genres': self.c0_artist_genres,
+            'c1_artist_vocal_style': self.c1_artist_vocal_style,
+            'c2_artist_production_sound_design': self.c2_artist_production_sound_design,
+            'c3_artist_lyrical_themes': self.c3_artist_lyrical_themes,
+            'c4_artist_mood_atmosphere': self.c4_artist_mood_atmosphere,
+            'c5_artist_cultural_context_scene': self.c5_artist_cultural_context_scene,
+        }
+    
+    def get_song_weights(self) -> Dict[str, float]:
+        """Get song descriptor weights as a dictionary mapping descriptor types to weights."""
+        try:
+            from . import constants
+        except ImportError:
+            import constants
+        
+        return {
+            constants.SONG_EMBEDDING_TYPES[0]: self.b0_genres,  # 'genres'
+            constants.SONG_EMBEDDING_TYPES[1]: self.b1_vocal_style,  # 'vocal_style'
+            constants.SONG_EMBEDDING_TYPES[2]: self.b2_production_sound_design,  # 'production_sound_design'
+            constants.SONG_EMBEDDING_TYPES[3]: self.b3_lyrical_meaning,  # 'lyrical_meaning'
+            constants.SONG_EMBEDDING_TYPES[4]: self.b4_mood_atmosphere,  # 'mood_atmosphere'
+        }
+    
+    def get_artist_weights(self) -> Dict[str, float]:
+        """Get artist descriptor weights as a dictionary mapping descriptor types to weights."""
+        try:
+            from . import constants
+        except ImportError:
+            import constants
+        
+        return {
+            constants.ARTIST_EMBEDDING_TYPES[0]: self.c0_artist_genres,  # 'genres'
+            constants.ARTIST_EMBEDDING_TYPES[1]: self.c1_artist_vocal_style,  # 'vocal_style'
+            constants.ARTIST_EMBEDDING_TYPES[2]: self.c2_artist_production_sound_design,  # 'production_sound_design'
+            constants.ARTIST_EMBEDDING_TYPES[3]: self.c3_artist_lyrical_themes,  # 'lyrical_themes'
+            constants.ARTIST_EMBEDDING_TYPES[4]: self.c4_artist_mood_atmosphere,  # 'mood_atmosphere'
+            constants.ARTIST_EMBEDDING_TYPES[5]: self.c5_artist_cultural_context_scene,  # 'cultural_context_scene'
         }
     
     def update_weights(self, weights: Dict[str, float]):
@@ -187,10 +255,10 @@ class RankingConfig:
                         from . import constants
                     except ImportError:
                         import constants
-                    if value in constants.EMBEDDING_TYPES:
+                    if value in constants.SONG_EMBEDDING_TYPES:  # Updated to use new constants
                         self.knn_embed_type = value
                     else:
-                        logger.warning(f"knn_embed_type must be one of {constants.EMBEDDING_TYPES}, got {value}")
+                        logger.warning(f"knn_embed_type must be one of {constants.SONG_EMBEDDING_TYPES}, got {value}")
                     continue
                 
                 # Handle integer parameters
@@ -720,59 +788,43 @@ class RankingEngine:
         return quantile_map
     
 
-    def compute_v25_final_score(self, semantic_similarity: float, track_id: str, 
-                               artist_pop_similarity: float = 0.0, artist_personal_similarity: float = 0.0,
-                               genre_similarity: float = None, artist_similarity: float = 0.0) -> Tuple[float, Dict]:
+    def compute_v25_final_score(self, song_similarity: float, artist_similarity: float, track_id: str) -> Tuple[float, Dict]:
         """
-        Compute final V2.6 score for a track with multi-dimensional similarity.
-        
-        Note: Method name preserved as v25 for backward compatibility, but implements V2.6 algorithm.
+        Compute final score using new 4-component descriptor-based system.
         
         Args:
-            semantic_similarity: Query-track semantic similarity [0, 1]
+            song_similarity: Weighted song descriptor similarity [0, 1]
+            artist_similarity: Weighted artist descriptor similarity [0, 1] 
             track_id: Spotify track ID
-            artist_pop_similarity: Query-artist popularity vibe similarity [0, 1] (default: 0.0)
-            artist_personal_similarity: Query-artist personal vibe similarity [0, 1] (default: 0.0)
-            genre_similarity: Query-track genre similarity [0, 1] (default: None)
-            artist_similarity: Query-artist similarity [0, 1] (default: 0.0)
             
         Returns:
             Tuple of (final_score, component_breakdown)
         """
-        # Multi-dimensional similarity: combine track, artist similarities, and other components
+        # Get the 4 component scores
         # Handle NaN values by replacing with zero
-        S_track = 0.0 if np.isnan(semantic_similarity) else semantic_similarity
-        S_genre = 0.0 if genre_similarity is None or np.isnan(genre_similarity) else genre_similarity
-        S_artist_pop = 0.0 if np.isnan(artist_pop_similarity) else artist_pop_similarity
-        S_artist_personal = 0.0 if np.isnan(artist_personal_similarity) else artist_personal_similarity
+        S_song = 0.0 if np.isnan(song_similarity) else song_similarity
         S_artist = 0.0 if np.isnan(artist_similarity) else artist_similarity
         S_streams_total = self.track_priors[track_id]['S_total'] if track_id in self.track_priors else 0.0
         S_streams_daily = self.track_priors[track_id]['S_daily'] if track_id in self.track_priors else 0.0
         
-        # Compute weighted combined semantic similarity (track + artist + stream similarities)
-        total_weight = self.config.beta_track + self.config.beta_genre + self.config.beta_artist_pop + self.config.beta_artist_personal + self.config.beta_streams_total + self.config.beta_streams_daily + self.config.beta_artist
+        # Compute weighted combined semantic similarity using new 4-component weights
+        total_weight = self.config.a0_song_sim + self.config.a1_artist_sim + self.config.a2_total_streams + self.config.a3_daily_streams
 
         if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
             # Normalize weights to ensure they sum to 1
-            norm_beta_track = self.config.beta_track / total_weight
-            norm_beta_genre = self.config.beta_genre / total_weight
-            norm_beta_artist_pop = self.config.beta_artist_pop / total_weight
-            norm_beta_artist_personal = self.config.beta_artist_personal / total_weight
-            norm_beta_streams_total = self.config.beta_streams_total / total_weight
-            norm_beta_streams_daily = self.config.beta_streams_daily / total_weight
-            norm_beta_artist = self.config.beta_artist / total_weight
+            norm_a0 = self.config.a0_song_sim / total_weight
+            norm_a1 = self.config.a1_artist_sim / total_weight
+            norm_a2 = self.config.a2_total_streams / total_weight
+            norm_a3 = self.config.a3_daily_streams / total_weight
 
-            S_semantic = (norm_beta_track * S_track + 
-                         norm_beta_genre * S_genre +
-                         norm_beta_artist_pop * S_artist_pop + 
-                         norm_beta_artist_personal * S_artist_personal +
-                         norm_beta_streams_total * S_streams_total +
-                         norm_beta_streams_daily * S_streams_daily +
-                         norm_beta_artist * S_artist)
+            S_semantic = (norm_a0 * S_song + 
+                         norm_a1 * S_artist +
+                         norm_a2 * S_streams_total +
+                         norm_a3 * S_streams_daily)
         else:
-            # Fallback to track similarity only if all weights are zero
-            logger.warning("All similarity weights are zero, falling back to track similarity only")
-            S_semantic = S_track
+            # Fallback to song similarity only if all weights are zero
+            logger.warning("All similarity weights are zero, falling back to song similarity only")
+            S_semantic = S_song
         
         S_semantic = np.clip(S_semantic, 0, 1)
 
@@ -780,23 +832,22 @@ class RankingEngine:
         if not self.has_history:
             components = {
                 'semantic_similarity': S_semantic,
-                'S_track': S_track,
-                'S_genre': S_genre,
-                'S_artist_pop': S_artist_pop, 
-                'S_artist_personal': S_artist_personal,
+                'S_song': S_song,
                 'S_artist': S_artist,
                 'S_streams_total': S_streams_total,
                 'S_streams_daily': S_streams_daily,
                 'final_score': S_semantic,
                 'lambda': 1.0,
-                'beta_genre': self.config.beta_genre,
-                'beta_track': self.config.beta_track,
-                'beta_artist_pop': self.config.beta_artist_pop,
-                'beta_artist_personal': self.config.beta_artist_personal,
-                'beta_streams_total': self.config.beta_streams_total,
-                'beta_streams_daily': self.config.beta_streams_daily,
-                'beta_artist': self.config.beta_artist,
-                # No score breakdown components for no-history case
+                'a0_song_sim': self.config.a0_song_sim,
+                'a1_artist_sim': self.config.a1_artist_sim,
+                'a2_total_streams': self.config.a2_total_streams,
+                'a3_daily_streams': self.config.a3_daily_streams,
+                # Song descriptor weights (for debugging)
+                'b0_genres': self.config.b0_genres,
+                'b1_vocal_style': self.config.b1_vocal_style,
+                'b2_production_sound_design': self.config.b2_production_sound_design,
+                'b3_lyrical_meaning': self.config.b3_lyrical_meaning,
+                'b4_mood_atmosphere': self.config.b4_mood_atmosphere,
             }
             return S_semantic, components
         

@@ -42,14 +42,10 @@
                         </label>
                     </div>
                     
-                    <select id="embed-type" class="config-dropdown">
-                        <option value="tags_genres">Tags & Genres</option>
-                        <option value="tags">Tags</option>
-                        <option value="sound_aspect">Sound</option>
-                        <option value="meaning_aspect">Meaning</option>
-                        <option value="mood_aspect">Mood</option>
-                        <option value="full_profile">Full Profile</option>
-                    </select>
+                    <div class="descriptor-info">
+                        <span class="descriptor-label">All Descriptors Active</span>
+                        <span class="descriptor-hint">Genres • Vocal Style • Production • Lyrical • Mood</span>
+                    </div>
                     
                 </div>
                 
@@ -402,25 +398,50 @@
                         <h4 class="param-group-title">Score<br>Weights</h4>
                     </div>
                     <div class="weights-inputs">
-                        <div class="weight-input-group">
-                            <label for="nh_beta_track" class="weight-label">Vibe (V):</label>
-                            <input type="number" id="nh_beta_track" class="weight-input" value="{{ default_config.beta_track }}" step="0.05" min="0" max="1">
+                        <!-- Group 1: Final Score Components (4 weights) -->
+                        <div class="weight-group">
+                            <h5 class="weight-group-title">Final Score Components</h5>
+                            <div class="weight-input-group">
+                                <label for="nh_a0_song_sim" class="weight-label">Song Similarity:</label>
+                                <input type="number" id="nh_a0_song_sim" class="weight-input" value="{{ default_config.a0_song_sim }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_a1_artist_sim" class="weight-label">Artist Similarity:</label>
+                                <input type="number" id="nh_a1_artist_sim" class="weight-input" value="{{ default_config.a1_artist_sim }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_a2_total_streams" class="weight-label">Total Streams:</label>
+                                <input type="number" id="nh_a2_total_streams" class="weight-input" value="{{ default_config.a2_total_streams }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_a3_daily_streams" class="weight-label">Daily Streams:</label>
+                                <input type="number" id="nh_a3_daily_streams" class="weight-input" value="{{ default_config.a3_daily_streams }}" step="0.05" min="0" max="1">
+                            </div>
                         </div>
-                        <div class="weight-input-group">
-                            <label for="nh_beta_genre" class="weight-label">Genre (G):</label>
-                            <input type="number" id="nh_beta_genre" class="weight-input" value="{{ default_config.beta_genre }}" step="0.05" min="0" max="1">
-                        </div>
-                        <div class="weight-input-group">
-                            <label for="nh_beta_artist_pop" class="weight-label">Artist (A):</label>
-                            <input type="number" id="nh_beta_artist_pop" class="weight-input" value="{{ default_config.beta_artist_pop }}" step="0.05" min="0" max="1">
-                        </div>
-                        <div class="weight-input-group">
-                            <label for="nh_beta_streams_total" class="weight-label">Total Streams (T):</label>
-                            <input type="number" id="nh_beta_streams_total" class="weight-input" value="{{ default_config.beta_streams_total }}" step="0.05" min="0" max="1">
-                        </div>
-                        <div class="weight-input-group">
-                            <label for="nh_beta_streams_daily" class="weight-label">Daily Streams (D):</label>
-                            <input type="number" id="nh_beta_streams_daily" class="weight-input" value="{{ default_config.beta_streams_daily }}" step="0.05" min="0" max="1">
+                        
+                        <!-- Group 2: Song Descriptor Weights (5 weights) -->
+                        <div class="weight-group">
+                            <h5 class="weight-group-title">Song Descriptor Weights</h5>
+                            <div class="weight-input-group">
+                                <label for="nh_b0_genres" class="weight-label">Genres:</label>
+                                <input type="number" id="nh_b0_genres" class="weight-input" value="{{ default_config.b0_genres }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_b1_vocal_style" class="weight-label">Vocal Style:</label>
+                                <input type="number" id="nh_b1_vocal_style" class="weight-input" value="{{ default_config.b1_vocal_style }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_b2_production_sound_design" class="weight-label">Production & Sound Design:</label>
+                                <input type="number" id="nh_b2_production_sound_design" class="weight-input" value="{{ default_config.b2_production_sound_design }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_b3_lyrical_meaning" class="weight-label">Lyrical Meaning:</label>
+                                <input type="number" id="nh_b3_lyrical_meaning" class="weight-input" value="{{ default_config.b3_lyrical_meaning }}" step="0.05" min="0" max="1">
+                            </div>
+                            <div class="weight-input-group">
+                                <label for="nh_b4_mood_atmosphere" class="weight-label">Mood & Atmosphere:</label>
+                                <input type="number" id="nh_b4_mood_atmosphere" class="weight-input" value="{{ default_config.b4_mood_atmosphere }}" step="0.05" min="0" max="1">
+                            </div>
                         </div>
                     </div>
                     <div class="weights-buttons"> 
