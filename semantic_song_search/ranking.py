@@ -92,12 +92,12 @@ class RankingConfig:
         b4_mood_atmosphere: float = 0.15,         # Weight for mood & atmosphere similarity
         
         # Artist descriptor weights (c_i) - backend only, should sum to 1.0  
-        c0_artist_genres: float = 0.25,                     # Weight for artist genres similarity
+        c0_artist_genres: float = 0.375,                     # Weight for artist genres similarity
         c1_artist_vocal_style: float = 0.15,               # Weight for artist vocal style similarity
         c2_artist_production_sound_design: float = 0.15,   # Weight for artist production similarity
-        c3_artist_lyrical_themes: float = 0.15,            # Weight for artist lyrical themes similarity
-        c4_artist_mood_atmosphere: float = 0.15,           # Weight for artist mood similarity
-        c5_artist_cultural_context_scene: float = 0.15,    # Weight for artist cultural context similarity
+        c3_artist_lyrical_themes: float = 0.075,            # Weight for artist lyrical themes similarity
+        c4_artist_mood_atmosphere: float = 0.125,           # Weight for artist mood similarity
+        c5_artist_cultural_context_scene: float = 0.125,    # Weight for artist cultural context similarity
         ):       
             """Initialize with V2.6 hyperparameters (all configurable via keyword arguments)."""
             self.H_c = H_c

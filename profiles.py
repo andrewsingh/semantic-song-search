@@ -13,6 +13,18 @@ class SongProfile(BaseModel):
     mood_atmosphere: List[str] | None
 
 
+class SongProfileV42(BaseModel):
+    song: str
+    artists: str
+    familiar: bool
+    genres: List[str] | None
+    vocal_style: List[str] | None
+    production_sound_design: List[str] | None
+    lyrical_meaning: List[str] | None
+    mood_atmosphere: List[str] | None
+    tags: List[str] | None
+
+
 class Genre(BaseModel):
     name: str
     prominence: int
