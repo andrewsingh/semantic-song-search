@@ -1760,12 +1760,17 @@ def track_event(event_name, properties=None):
 def get_spotify_oauth():
     """Get Spotify OAuth object with dynamic redirect URI."""
     # Check if we're in production or local development
-    if os.getenv('RAILWAY_ENVIRONMENT') or request.host not in ['127.0.0.1:5000', 'localhost:5000']:
+    # Local development: host is localhost or 127.0.0.1 (any port)
+    host_without_port = request.host.split(':')[0]
+    is_local = host_without_port in ['127.0.0.1', 'localhost']
+    is_production = os.getenv('RAILWAY_ENVIRONMENT') or not is_local
+    
+    if is_production:
         # Production: use the current request host with HTTPS
         redirect_uri = f"https://{request.host}/callback"
     else:
-        # Local development: use localhost with HTTP
-        redirect_uri = f"http://{constants.DEFAULT_HOST}:{constants.DEFAULT_PORT}/callback"
+        # Local development: use current host with HTTP (preserves custom port)
+        redirect_uri = f"http://{request.host}/callback"
     
     logger.info(f"Using OAuth redirect URI: {redirect_uri}")
     
