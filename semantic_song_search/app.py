@@ -62,12 +62,13 @@ if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
 class MusicSearchEngine:
     """Music search engine with personalized ranking."""
     
-    def __init__(self, songs_file: str, embeddings_file: str, history_path: str = None, artist_embeddings_file: str = None, shared_genre_store_path: str = None):
+    def __init__(self, songs_file: str, embeddings_file: str, history_path: str = None, artist_embeddings_file: str = None, shared_genre_store_path: str = None, profiles_file: str = None):
         self.songs_file = songs_file
         self.embeddings_file = embeddings_file
         self.history_path = history_path
         self.artist_embeddings_file = artist_embeddings_file
         self.shared_genre_store_path = shared_genre_store_path
+        self.profiles_file = profiles_file
         
         # Data structures
         self.songs = []
@@ -75,6 +76,10 @@ class MusicSearchEngine:
         self.embedding_indices = {}
         self.embedding_lookup = {}  # track_id -> embedding
         self.fuzzy_search_index = None  # RapidFuzz search index
+
+        # Tags and genres lookups
+        self.tags_lookup = {}  # track_id -> tags list
+        self.genres_lookup = {}  # track_id -> genres list
         
         # Artist embeddings
         self.artist_embeddings_data = None
@@ -109,7 +114,10 @@ class MusicSearchEngine:
         # Load artist embeddings if provided
         if self.artist_embeddings_file:
             self._load_artist_data()
-        
+
+        # Load song profiles for tags and genres
+        self._load_song_profiles()
+
         # Build embedding lookups for all available song descriptor types
         self.embedding_lookups = {}
         try:
@@ -148,8 +156,55 @@ class MusicSearchEngine:
         except Exception as e:
             logger.error(f"Failed to load artist data: {e}")
             self.artist_data = None
-    
-    
+
+    def _load_song_profiles(self):
+        """Load song profiles JSONL and create tags/genres lookups."""
+        if not self.profiles_file:
+            logger.info("No profiles file specified, skipping tags/genres loading")
+            return
+
+        if not os.path.exists(self.profiles_file):
+            logger.warning(f"Profiles file not found: {self.profiles_file}")
+            return
+
+        logger.info(f"Loading song profiles from: {self.profiles_file}")
+
+        profile_count = 0
+        matched_count = 0
+
+        try:
+            with open(self.profiles_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        profile = json.loads(line)
+                        profile_count += 1
+
+                        uri = profile.get('uri', '')
+                        if uri and uri.startswith('spotify:track:'):
+                            # Extract track_id from spotify:track:abc123
+                            track_id = uri.split(":")[-1]
+
+                            # Store tags and genres
+                            self.tags_lookup[track_id] = profile.get('tags', [])
+                            self.genres_lookup[track_id] = profile.get('genres', [])
+                            matched_count += 1
+
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse profile line: {e}")
+                        continue
+
+            logger.info(f"Loaded {profile_count} profiles, matched {matched_count} with track IDs")
+            logger.info(f"Tags lookup contains {len(self.tags_lookup)} entries")
+            logger.info(f"Genres lookup contains {len(self.genres_lookup)} entries")
+
+        except Exception as e:
+            logger.error(f"Failed to load song profiles: {e}")
+
+
     # Legacy method removed - not used in new descriptor-based system
     
     def _build_embedding_matrices(self):
@@ -1225,6 +1280,9 @@ class MusicSearchEngine:
             album_images = song.get('album', {}).get('images', [])
             cover_url = album_images[-1]['url'] if album_images else ''  # Use smallest image (last in list)
             
+            # Get track_id for tags/genres lookup
+            track_id = song.get('track_id') or song.get('id')
+
             result = {
                 'index': candidate['index'],
                 'song_idx': candidate['index'],  # For consistency with suggestions
@@ -1234,15 +1292,17 @@ class MusicSearchEngine:
                 'all_artists': all_artists,  # For frontend compatibility
                 'album': song.get('album', {}).get('name', '') if song.get('album') else '',
                 'cover_url': cover_url,  # Cover art URL
-                'track_id': song.get('track_id') or song.get('id'),
-                'spotify_id': song.get('track_id') or song.get('id'),  # For Spotify playback
+                'track_id': track_id,
+                'spotify_id': track_id,  # For Spotify playback
                 'uri': song.get('uri', ''),
                 'popularity': song.get('popularity', 0),
                 'song_similarity': candidate['song_similarity'],
-                'artist_similarity': candidate['artist_similarity'], 
+                'artist_similarity': candidate['artist_similarity'],
                 'final_score': candidate['final_score'],
                 'components': candidate['components'],
-                'scoring_components': candidate['components']  # For frontend compatibility
+                'scoring_components': candidate['components'],  # For frontend compatibility
+                'tags': self.tags_lookup.get(track_id, []),  # Add tags from profiles
+                'genres': self.genres_lookup.get(track_id, [])  # Add genres from profiles
             }
             results.append(result)
         
@@ -1408,7 +1468,8 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             shared_genre_store_path = None  # Will use fallback loading
         
         # Create search engine
-        search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg, artist_embeddings_path, shared_genre_store_path)
+        profiles_path = getattr(constants, 'DEFAULT_PROFILES_FILE', None)
+        search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg, artist_embeddings_path, shared_genre_store_path, profiles_path)
 
 
 # Flask routes (keep most of the existing routes, update search endpoint)

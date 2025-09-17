@@ -21,11 +21,12 @@ FUZZY_SEARCH_CONSTANTS = {
     'FLOAT_EPSILON': 0.001
 }
 
-# Default File Paths  
+# Default File Paths
 DEFAULT_SONGS_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_metadata_with_streams.json"
 DEFAULT_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_embeddings"
 DEFAULT_ARTIST_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_artist_embeddings"
 DEFAULT_SHARED_GENRE_STORE_PATH = "/Users/andrew/dev/semantic-song-search/data/genre_embedding_store.npz"
+DEFAULT_PROFILES_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_profiles_v4.2.jsonl"
 
 # New Descriptor-Based Embedding Types  
 SONG_EMBEDDING_TYPES = ['genres', 'vocal_style', 'production_sound_design', 'lyrical_meaning', 'mood_atmosphere', 'tags']

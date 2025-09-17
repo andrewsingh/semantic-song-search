@@ -879,17 +879,7 @@ class SemanticSearchApp {
                 // embedType removed - using all descriptors
                 isSelected: this.selectedSongs.has(song.song_idx)
             });
-            
-                
-            // Add accordion toggle functionality
-            const accordionToggle = card.querySelector('.accordion-toggle');
-            if (accordionToggle) {
-                accordionToggle.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent song play when clicking accordion
-                    this.toggleAccordion(accordionToggle);
-                });
-            }
-            
+
             resultsGrid.appendChild(card);
         });
         
@@ -1164,18 +1154,47 @@ class SemanticSearchApp {
                     <path d="M8 5v14l11-7z"/>
                 </svg>
             </button>`;
-            
-            // Create container for play button (no tags in new format)
+
+            // Get tags and genres from song data
+            const { tags } = this.formatTagsGenresFromSong(song);
+
+            // Show first 3 tags
+            const visibleTags = tags.slice(0, 3);
+            const tagsElements = visibleTags.map(tag =>
+                `<span class="tag-item">${escapeHtml(tag)}</span>`
+            ).join('');
+
             tagsHTML = `
                 <div class="card-tags">
-                    <div class="tags-container"></div>
+                    <div class="tags-container">${tagsElements}</div>
                     ${playButtonHTML}
                 </div>
             `;
         }
         
-        // Remove accordion section - tags/genres no longer available in new format
+        // Restore accordion section for tags and genres
         let accordionHTML = '';
+        if (!isQuery) {
+            const tagsGenresObj = this.formatTagsGenresFromSong(song);
+            const accordionContent = this.formatTagsGenresForDisplay(tagsGenresObj);
+
+            // Only show accordion if there are tags or genres to display
+            if (tagsGenresObj.tags.length > 0 || tagsGenresObj.genres.length > 0) {
+                accordionHTML = `
+                    <div class="card-accordion">
+                        <button class="accordion-toggle" aria-expanded="false">
+                            <span class="accordion-title">Tags & Genres</span>
+                            <span class="accordion-icon">▼</span>
+                        </button>
+                        <div class="accordion-content">
+                            <div class="accordion-content-inner">
+                                ${accordionContent}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
         
         // Always include checkbox, CSS will control visibility
         let checkboxHTML = '';
@@ -1276,7 +1295,7 @@ class SemanticSearchApp {
         
         return { tags: uniqueTags, genres: uniqueGenres };
     }
-    
+
     formatTagsGenresForDisplay(tagsGenresObj) {
         /**
          * Format tags and genres with different styling
@@ -1285,15 +1304,15 @@ class SemanticSearchApp {
         if (!tagsGenresObj || (!tagsGenresObj.tags.length && !tagsGenresObj.genres.length)) {
             return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
         }
-        
-        const tagElements = tagsGenresObj.tags.map(tag => 
+
+        const tagElements = tagsGenresObj.tags.map(tag =>
             `<span class="tag-item">${escapeHtml(tag)}</span>`
         ).join('');
-        
-        const genreElements = tagsGenresObj.genres.map(genre => 
+
+        const genreElements = tagsGenresObj.genres.map(genre =>
             `<span class="genre-item">${escapeHtml(genre)}</span>`
         ).join('');
-        
+
         return `
             <div class="tags-genres-content">
                 ${tagElements}${genreElements}
@@ -1671,6 +1690,15 @@ class SemanticSearchApp {
                 checkbox.addEventListener('click', (e) => {
                     e.stopPropagation();
                     this.toggleSongSelection(song.song_idx, index);
+                });
+            }
+
+            // Handle accordion toggle clicks
+            const accordionToggle = card.querySelector('.accordion-toggle');
+            if (accordionToggle) {
+                accordionToggle.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent song play when clicking accordion
+                    this.toggleAccordion(accordionToggle);
                 });
             }
         }
