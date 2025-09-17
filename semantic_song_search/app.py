@@ -457,6 +457,24 @@ class MusicSearchEngine:
         # Clamp to [0, 1] range to handle any numerical issues
         return float(np.clip(normalized_similarity, 0.0, 1.0))
     
+    def get_artist_gender(self, artist_name: str) -> str:
+        """
+        Get the lead vocalist gender for an artist.
+
+        Args:
+            artist_name: Name of the artist
+
+        Returns:
+            Gender string ('male', 'female', etc.) or empty string if not found
+        """
+        if not self.artist_data or 'metadata' not in self.artist_data:
+            return ""
+
+        if artist_name in self.artist_data['metadata']:
+            return self.artist_data['metadata'][artist_name].get('lead_vocalist_gender', '')
+
+        return ""
+
     def compute_prominence_weighted_similarity(self, query_embedding: np.ndarray, artist_genres: List[Dict]) -> float:
         """
         Compute prominence-weighted average similarity for text-to-song artist genre matching.
@@ -591,17 +609,34 @@ class MusicSearchEngine:
                     similarity = np.dot(query_embedding, candidate_embedding)
                 else:
                     similarity = 0.0
-            
+
             # Accumulate weighted similarity
             total_similarity += weight * similarity
             total_weight += weight
-        
+
         # Normalize by total weight if any similarities were computed
         if total_weight > 0:
-            return total_similarity / total_weight
+            base_similarity = total_similarity / total_weight
+
+            # Apply gender similarity bonus if applicable
+            if search_type == 'song':
+                # For song-to-song search, apply gender bonus
+                query_artist = query_data  # Should be artist name
+                query_gender = self.get_artist_gender(query_artist)
+                candidate_gender = self.get_artist_gender(candidate_artist)
+
+                if (query_gender and candidate_gender and
+                    query_gender.strip() != '' and candidate_gender.strip() != '' and
+                    query_gender.lower().strip() == candidate_gender.lower().strip()):
+                    # Same gender - apply multiplicative bonus
+                    gender_bonus = self.ranking_engine.config.gender_similarity_bonus
+                    base_similarity *= gender_bonus
+
+            # Ensure similarity stays in [0, 1] range
+            return min(base_similarity, 1.0)
         else:
             return 0.0
-    
+
     def _initialize_ranking_engine(self):
         """Initialize ranking engine with history if available."""
         config = ranking.RankingConfig()
@@ -1145,7 +1180,7 @@ class MusicSearchEngine:
                 
                 # Compute final score using new 4-component system
                 final_score, components = self.ranking_engine.compute_v25_final_score(
-                    song_similarity, artist_similarity, track_id
+                    song_similarity, artist_similarity, track_id, query_artist, candidate_artist
                 )
                 
                 # Apply familiarity filtering (placeholder for now)

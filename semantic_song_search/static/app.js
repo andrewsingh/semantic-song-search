@@ -44,17 +44,18 @@ class SemanticSearchApp {
         // No-history weights tracking (new 9-weight system)
         this.currentNoHistoryWeights = {
             // Top-level weights (a_i)
-            a0_song_sim: 0.5,
+            a0_song_sim: 0.6,
             a1_artist_sim: 0.3,
-            a2_total_streams: 0.1,
-            a3_daily_streams: 0.1,
-            
+            a2_total_streams: 0.05,
+            a3_daily_streams: 0.05,
+
             // Song descriptor weights (b_i)
             b0_genres: 0.3,
             b1_vocal_style: 0.2,
             b2_production_sound_design: 0.2,
-            b3_lyrical_meaning: 0.15,
-            b4_mood_atmosphere: 0.15
+            b3_lyrical_meaning: 0.1,
+            b4_mood_atmosphere: 0.2,
+            b5_tags: 0.0
         };
         
         this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
@@ -97,7 +98,8 @@ class SemanticSearchApp {
             nhB1VocalStyle: document.getElementById('nh_b1_vocal_style'),
             nhB2ProductionSoundDesign: document.getElementById('nh_b2_production_sound_design'),
             nhB3LyricalMeaning: document.getElementById('nh_b3_lyrical_meaning'),
-            nhB4MoodAtmosphere: document.getElementById('nh_b4_mood_atmosphere')
+            nhB4MoodAtmosphere: document.getElementById('nh_b4_mood_atmosphere'),
+            nhB5Tags: document.getElementById('nh_b5_tags')
         };
         
         // Initialize default weights from server-rendered DOM values
@@ -131,11 +133,12 @@ class SemanticSearchApp {
             a3_daily_streams: parseFloat(this.domElements.nhA3DailyStreams?.value || 0.1),
             
             // Song descriptor weights (b_i)
-            b0_genres: parseFloat(this.domElements.nhB0Genres?.value || 0.3),
-            b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || 0.2),
-            b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || 0.2),
+            b0_genres: parseFloat(this.domElements.nhB0Genres?.value || 0.25),
+            b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || 0.15),
+            b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || 0.15),
             b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || 0.15),
-            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || 0.15)
+            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || 0.15),
+            b5_tags: parseFloat(this.domElements.nhB5Tags?.value || 0.15)
         };
     }
     
@@ -343,7 +346,8 @@ class SemanticSearchApp {
             this.domElements.nhB1VocalStyle,
             this.domElements.nhB2ProductionSoundDesign,
             this.domElements.nhB3LyricalMeaning,
-            this.domElements.nhB4MoodAtmosphere
+            this.domElements.nhB4MoodAtmosphere,
+            this.domElements.nhB5Tags
         ];
 
         weightInputs.forEach(input => {
@@ -2630,6 +2634,9 @@ class SemanticSearchApp {
         if (this.domElements.nhB4MoodAtmosphere && this.defaultNoHistoryWeights.b4_mood_atmosphere !== undefined) {
             this.domElements.nhB4MoodAtmosphere.value = this.defaultNoHistoryWeights.b4_mood_atmosphere;
         }
+        if (this.domElements.nhB5Tags && this.defaultNoHistoryWeights.b5_tags !== undefined) {
+            this.domElements.nhB5Tags.value = this.defaultNoHistoryWeights.b5_tags;
+        }
         
         // Sync currentNoHistoryWeights with the new DOM values
         this.currentNoHistoryWeights = {
@@ -2644,7 +2651,8 @@ class SemanticSearchApp {
             b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || this.defaultNoHistoryWeights.b1_vocal_style),
             b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || this.defaultNoHistoryWeights.b2_production_sound_design),
             b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || this.defaultNoHistoryWeights.b3_lyrical_meaning),
-            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || this.defaultNoHistoryWeights.b4_mood_atmosphere)
+            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || this.defaultNoHistoryWeights.b4_mood_atmosphere),
+            b5_tags: parseFloat(this.domElements.nhB5Tags?.value || this.defaultNoHistoryWeights.b5_tags)
         };
         
         // Update the rerun button state since values may have changed

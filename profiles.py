@@ -2,18 +2,8 @@ from pydantic import BaseModel
 from typing import List
 
 
+
 class SongProfile(BaseModel):
-    song: str
-    artists: str
-    familiar: bool
-    genres: List[str] | None
-    vocal_style: List[str] | None
-    production_sound_design: List[str] | None
-    lyrical_meaning: List[str] | None
-    mood_atmosphere: List[str] | None
-
-
-class SongProfileV42(BaseModel):
     song: str
     artists: str
     familiar: bool
