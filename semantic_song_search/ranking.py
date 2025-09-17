@@ -86,11 +86,11 @@ class RankingConfig:
         
         # Song descriptor weights (b_i) - should sum to 1.0
         b0_genres: float = 0.3,                   # Weight for song genres similarity
-        b1_vocal_style: float = 0.2,             # Weight for vocal style similarity
-        b2_production_sound_design: float = 0.2, # Weight for production & sound design similarity
+        b1_vocal_style: float = 0.15,             # Weight for vocal style similarity
+        b2_production_sound_design: float = 0.15, # Weight for production & sound design similarity
         b3_lyrical_meaning: float = 0.1,         # Weight for lyrical meaning similarity
         b4_mood_atmosphere: float = 0.2,         # Weight for mood & atmosphere similarity
-        b5_tags: float = 0.0,                    # Weight for tags similarity
+        b5_tags: float = 0.1,                    # Weight for tags similarity
         
         # Artist descriptor weights (c_i) - backend only, should sum to 1.0
         c0_artist_genres: float = 0.375,                     # Weight for artist genres similarity
@@ -802,7 +802,8 @@ class RankingEngine:
     
 
     def compute_v25_final_score(self, song_similarity: float, artist_similarity: float, track_id: str,
-                               query_artist: str = None, candidate_artist: str = None) -> Tuple[float, Dict]:
+                               query_artist: str = None, candidate_artist: str = None,
+                               artist_similarity_p95: float = None) -> Tuple[float, Dict]:
         """
         Compute final score using new 4-component descriptor-based system.
 
@@ -810,8 +811,9 @@ class RankingEngine:
             song_similarity: Weighted song descriptor similarity [0, 1]
             artist_similarity: Weighted artist descriptor similarity [0, 1]
             track_id: Spotify track ID
-            query_artist: Query artist name (for same-artist exclusion in song-to-song search)
-            candidate_artist: Candidate artist name (for same-artist exclusion in song-to-song search)
+            query_artist: Query artist name (for same-artist handling in song-to-song search)
+            candidate_artist: Candidate artist name (for same-artist handling in song-to-song search)
+            artist_similarity_p95: 95th percentile of all artist similarities for this query
 
         Returns:
             Tuple of (final_score, component_breakdown)
@@ -823,55 +825,46 @@ class RankingEngine:
         S_streams_total = self.track_priors[track_id]['S_total'] if track_id in self.track_priors else 0.0
         S_streams_daily = self.track_priors[track_id]['S_daily'] if track_id in self.track_priors else 0.0
 
-        # Check for same-artist exclusion in song-to-song search
-        exclude_artist_similarity = (query_artist is not None and
-                                   candidate_artist is not None and
-                                   query_artist.strip() != '' and
-                                   candidate_artist.strip() != '' and
-                                   query_artist.lower().strip() == candidate_artist.lower().strip())
+        # Check for same-artist candidates in song-to-song search
+        is_same_artist = (query_artist is not None and
+                         candidate_artist is not None and
+                         query_artist.strip() != '' and
+                         candidate_artist.strip() != '' and
+                         query_artist.lower().strip() == candidate_artist.lower().strip())
 
-        if exclude_artist_similarity:
-            # For same-artist candidates, exclude artist similarity and renormalize remaining weights
-            total_weight = self.config.a0_song_sim + self.config.a2_total_streams + self.config.a3_daily_streams
+        if is_same_artist and artist_similarity_p95 is not None:
+            # For same-artist candidates, use 95th percentile as placeholder
+            # Handle NaN values in percentile (fallback to 0.0)
+            S_artist_score = 0.0 if np.isnan(artist_similarity_p95) else artist_similarity_p95
+            S_artist_display = S_artist_score  # Display the value actually used for scoring
 
-            if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
-                # Normalize remaining weights to ensure they sum to 1
-                norm_a0 = self.config.a0_song_sim / total_weight
-                norm_a2 = self.config.a2_total_streams / total_weight
-                norm_a3 = self.config.a3_daily_streams / total_weight
-
-                S_semantic = (norm_a0 * S_song +
-                             norm_a2 * S_streams_total +
-                             norm_a3 * S_streams_daily)
+            if np.isnan(artist_similarity_p95):
+                logger.warning(f"Artist similarity 95th percentile is NaN, using 0.0 for same-artist candidate")
             else:
-                # Fallback to song similarity only if all remaining weights are zero
-                logger.warning("All non-artist similarity weights are zero for same-artist candidate, falling back to song similarity only")
-                S_semantic = S_song
-
-            # Set S_artist to -1 to indicate it was excluded from scoring
-            S_artist_display = None
+                logger.debug(f"Same-artist candidate: using 95th percentile {artist_similarity_p95:.4f} instead of {S_artist:.4f}")
         else:
-            # Normal 4-component scoring for different-artist candidates
-            total_weight = self.config.a0_song_sim + self.config.a1_artist_sim + self.config.a2_total_streams + self.config.a3_daily_streams
-
-            if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
-                # Normalize weights to ensure they sum to 1
-                norm_a0 = self.config.a0_song_sim / total_weight
-                norm_a1 = self.config.a1_artist_sim / total_weight
-                norm_a2 = self.config.a2_total_streams / total_weight
-                norm_a3 = self.config.a3_daily_streams / total_weight
-
-                S_semantic = (norm_a0 * S_song +
-                             norm_a1 * S_artist +
-                             norm_a2 * S_streams_total +
-                             norm_a3 * S_streams_daily)
-            else:
-                # Fallback to song similarity only if all weights are zero
-                logger.warning("All similarity weights are zero, falling back to song similarity only")
-                S_semantic = S_song
-
-            # Use actual artist similarity for display
+            # Use actual artist similarity
+            S_artist_score = S_artist
             S_artist_display = S_artist
+
+        # Normal 4-component scoring for all candidates
+        total_weight = self.config.a0_song_sim + self.config.a1_artist_sim + self.config.a2_total_streams + self.config.a3_daily_streams
+
+        if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
+            # Normalize weights to ensure they sum to 1
+            norm_a0 = self.config.a0_song_sim / total_weight
+            norm_a1 = self.config.a1_artist_sim / total_weight
+            norm_a2 = self.config.a2_total_streams / total_weight
+            norm_a3 = self.config.a3_daily_streams / total_weight
+
+            S_semantic = (norm_a0 * S_song +
+                         norm_a1 * S_artist_score +
+                         norm_a2 * S_streams_total +
+                         norm_a3 * S_streams_daily)
+        else:
+            # Fallback to song similarity only if all weights are zero
+            logger.warning("All similarity weights are zero, falling back to song similarity only")
+            S_semantic = S_song
         
         S_semantic = np.clip(S_semantic, 0, 1)
 
@@ -897,7 +890,7 @@ class RankingEngine:
                 'b4_mood_atmosphere': self.config.b4_mood_atmosphere,
                 'b5_tags': self.config.b5_tags,
                 # Additional debug info
-                'same_artist_excluded': exclude_artist_similarity,
+                'is_same_artist': is_same_artist,
             }
             return S_semantic, components
         
@@ -945,7 +938,7 @@ class RankingEngine:
             'S_streams_daily': S_streams_daily,
             'S_semantic': S_semantic,
             'S_genre': S_genre,
-            'same_artist_excluded': exclude_artist_similarity,  # Additional debug info
+            'is_same_artist': is_same_artist,  # Additional debug info
             'final_score': final_score,
             'lambda': lambda_val,
             'beta_genre': self.config.beta_genre,

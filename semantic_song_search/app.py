@@ -481,11 +481,22 @@ class MusicSearchEngine:
         Returns:
             Normalized genre similarity score (0-1), with identical artists = 1.0
         """
+        # Handle same-artist case when metadata is missing or incomplete
+        if artist_a == artist_b:
+            # Same artist should always have perfect genre similarity
+            if not self.artist_data or 'metadata' not in self.artist_data:
+                return 1.0  # Perfect similarity for same artist when metadata unavailable
+
+            artist_metadata = self.artist_data['metadata']
+            if artist_a not in artist_metadata:
+                return 1.0  # Perfect similarity for same artist when not found in metadata
+
+        # Different artists - check metadata availability
         if not self.artist_data or 'metadata' not in self.artist_data:
             return 0.0
-        
+
         artist_metadata = self.artist_data['metadata']
-        
+
         if artist_a not in artist_metadata or artist_b not in artist_metadata:
             return 0.0
         
@@ -1195,17 +1206,63 @@ class MusicSearchEngine:
                         query_artist = song.get('artists', [{}])[0].get('name', '') if song.get('artists') else ''
                         break
         
-        # Compute similarity scores for all candidate songs
+        # Compute similarity scores for all candidate songs with optimized artist similarity caching
         candidates_data = []
-        
+
         t_semantic_start = time.time()
-        
-        # Process each candidate song using new descriptor-based approach
+
+        # Phase 1: Collect unique artists from all candidate songs
+        unique_artists = set()
+        for song in self.songs:
+            track_id = song.get('track_id') or song.get('id')
+            if not track_id:
+                continue
+            candidate_artist = song.get('artists', [{}])[0].get('name', '') if song.get('artists') else ''
+            if candidate_artist:
+                unique_artists.add(candidate_artist)
+
+        logger.info(f"Found {len(unique_artists)} unique artists among {len(self.songs)} songs")
+
+        # Phase 2: Pre-compute artist similarities once per unique artist
+        artist_similarities = {}
+        t_artist_start = time.time()
+
+        for candidate_artist in unique_artists:
+            try:
+                if search_type == 'text':
+                    artist_similarity = self.compute_artist_descriptor_similarity(
+                        query_embedding, candidate_artist, artist_weights, 'text'
+                    )
+                else:
+                    artist_similarity = self.compute_artist_descriptor_similarity(
+                        query_artist, candidate_artist, artist_weights, 'song'
+                    )
+                artist_similarities[candidate_artist] = artist_similarity
+            except Exception as e:
+                logger.warning(f"Error computing artist similarity for {candidate_artist}: {e}")
+                artist_similarities[candidate_artist] = 0.0
+
+        t_artist_end = time.time()
+        logger.info(f"Computed artist similarities for {len(unique_artists)} unique artists in {t_artist_end - t_artist_start:.2f}s")
+
+        # Phase 3: Compute 95th percentile from unique artist similarities
+        unique_artist_similarities = list(artist_similarities.values())
+        # Filter out NaN values before percentile calculation
+        clean_similarities = [x for x in unique_artist_similarities if not np.isnan(x)]
+        artist_similarity_p95 = np.percentile(clean_similarities, 95) if clean_similarities else 0.0
+
+        if len(clean_similarities) < len(unique_artist_similarities):
+            nan_count = len(unique_artist_similarities) - len(clean_similarities)
+            logger.warning(f"Filtered out {nan_count} NaN artist similarities before percentile calculation")
+
+        logger.info(f"Artist similarity 95th percentile (from {len(clean_similarities)} valid unique artists): {artist_similarity_p95:.4f}")
+
+        # Phase 4: Process songs using cached artist similarities
         for i, song in enumerate(self.songs):
             track_id = song.get('track_id') or song.get('id')
             if not track_id:
                 continue
-            
+
             try:
                 # Compute song descriptor similarity
                 if search_type == 'text':
@@ -1216,45 +1273,56 @@ class MusicSearchEngine:
                     song_similarity = self.compute_song_descriptor_similarity(
                         query_song_embeddings, track_id, song_weights, 'song'
                     )
-                
-                # Get artist for this song
+
+                # Get artist and lookup pre-computed similarity
                 candidate_artist = song.get('artists', [{}])[0].get('name', '') if song.get('artists') else ''
-                
-                # Compute artist descriptor similarity
-                if candidate_artist:
-                    if search_type == 'text':
-                        artist_similarity = self.compute_artist_descriptor_similarity(
-                            query_embedding, candidate_artist, artist_weights, 'text'
-                        )
-                    else:
-                        artist_similarity = self.compute_artist_descriptor_similarity(
-                            query_artist, candidate_artist, artist_weights, 'song'
-                        )
-                else:
-                    artist_similarity = 0.0
-                
-                # Compute final score using new 4-component system
-                final_score, components = self.ranking_engine.compute_v25_final_score(
-                    song_similarity, artist_similarity, track_id, query_artist, candidate_artist
-                )
-                
-                # Apply familiarity filtering (placeholder for now)
-                familiarity = 1.0  # Default to familiar for no-history mode
-                if familiarity < familiarity_min or familiarity > familiarity_max:
-                    continue
-                
+                artist_similarity = artist_similarities.get(candidate_artist, 0.0)
+
+                # Store intermediate data for final score computation
                 candidates_data.append({
                     'song': song,
                     'song_similarity': song_similarity,
                     'artist_similarity': artist_similarity,
-                    'final_score': final_score,
-                    'components': components,
+                    'track_id': track_id,
+                    'candidate_artist': candidate_artist,
                     'index': i
                 })
-            
+
             except Exception as e:
                 logger.warning(f"Error processing song {track_id}: {e}")
                 continue
+
+        # Second pass: compute final scores with percentile value
+        final_candidates_data = []
+        for candidate in candidates_data:
+            try:
+                # Apply familiarity filtering (placeholder for now)
+                familiarity = 1.0  # Default to familiar for no-history mode
+                if familiarity < familiarity_min or familiarity > familiarity_max:
+                    continue
+
+                # Compute final score using new 4-component system with percentile
+                final_score, components = self.ranking_engine.compute_v25_final_score(
+                    candidate['song_similarity'], candidate['artist_similarity'],
+                    candidate['track_id'], query_artist, candidate['candidate_artist'],
+                    artist_similarity_p95=artist_similarity_p95
+                )
+
+                final_candidates_data.append({
+                    'song': candidate['song'],
+                    'song_similarity': candidate['song_similarity'],
+                    'artist_similarity': candidate['artist_similarity'],
+                    'final_score': final_score,
+                    'components': components,
+                    'index': candidate['index']
+                })
+
+            except Exception as e:
+                logger.warning(f"Error computing final score for song {candidate['track_id']}: {e}")
+                continue
+
+        # Use final candidates data for sorting
+        candidates_data = final_candidates_data
         
         t_semantic_end = time.time()
         logger.info(f"Computed similarities for {len(candidates_data)} candidates in {t_semantic_end - t_semantic_start:.2f}s")

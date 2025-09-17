@@ -51,11 +51,11 @@ class SemanticSearchApp {
 
             // Song descriptor weights (b_i)
             b0_genres: 0.3,
-            b1_vocal_style: 0.2,
-            b2_production_sound_design: 0.2,
+            b1_vocal_style: 0.15,
+            b2_production_sound_design: 0.15,
             b3_lyrical_meaning: 0.1,
             b4_mood_atmosphere: 0.2,
-            b5_tags: 0.0
+            b5_tags: 0.1
         };
         
         this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
