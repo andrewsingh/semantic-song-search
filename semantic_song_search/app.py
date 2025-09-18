@@ -918,7 +918,7 @@ class MusicSearchEngine:
 # Initialize search engine
 search_engine = None
 
-def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None, shared_genre_store_file: str = None):
+def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None, shared_genre_store_file: str = None, profiles_file: str = None):
     """Initialize the search engine with data files."""
     global search_engine
     if search_engine is None:
@@ -1001,7 +1001,7 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
             shared_genre_store_path = None  # Will use fallback loading
         
         # Create search engine
-        profiles_path = getattr(constants, 'DEFAULT_PROFILES_FILE', None)
+        profiles_path = profiles_file or getattr(constants, 'DEFAULT_PROFILES_FILE', None)
         search_engine = MusicSearchEngine(songs_path, embeddings_path, history_path_arg, artist_embeddings_path, shared_genre_store_path, profiles_path)
 
 
