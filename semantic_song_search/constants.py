@@ -21,16 +21,24 @@ FUZZY_SEARCH_CONSTANTS = {
     'FLOAT_EPSILON': 0.001
 }
 
-# Default File Paths  
-DEFAULT_SONGS_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_metadata_with_streams.json"
-DEFAULT_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v2.1/library_v2.1_embeddings"
-DEFAULT_ARTIST_EMBEDDINGS_PATH = None
+# Default File Paths
+DEFAULT_SONGS_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_metadata_with_streams.json"
+DEFAULT_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_embeddings"
+DEFAULT_ARTIST_EMBEDDINGS_PATH = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_artist_embeddings"
+DEFAULT_SHARED_GENRE_STORE_PATH = "/Users/andrew/dev/semantic-song-search/data/genre_embedding_store.npz"
+DEFAULT_PROFILES_FILE = "/Users/andrew/dev/semantic-song-search/data/library_v3.1/library_v3.1_profiles_v4.2.jsonl"
 
-# Embedding Types
-EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
-ARTIST_EMBEDDING_TYPES = ['musical_style', 'lyrical_themes', 'mood', 'full_profile']
-DEFAULT_ARTIST_MATRIX_EMBED_TYPE = 'tags'
-DEFAULT_ARTIST_EMBED_TYPE = 'musical_style'
+# New Descriptor-Based Embedding Types  
+SONG_EMBEDDING_TYPES = ['genres', 'vocal_style', 'production_sound_design', 'lyrical_meaning', 'mood_atmosphere', 'tags']
+ARTIST_EMBEDDING_TYPES = ['genres', 'vocal_style', 'production_sound_design', 'lyrical_themes', 'mood_atmosphere', 'cultural_context_scene']
+
+# Legacy embedding types (for backward compatibility during transition)
+LEGACY_EMBEDDING_TYPES = ['full_profile', 'sound_aspect', 'meaning_aspect', 'mood_aspect', 'tags_genres', 'tags', 'genres']
+LEGACY_ARTIST_EMBEDDING_TYPES = ['musical_style', 'lyrical_themes', 'mood', 'full_profile']
+
+# Remove these legacy constants (no longer needed with descriptor system)
+# DEFAULT_ARTIST_MATRIX_EMBED_TYPE = 'tags' 
+# DEFAULT_ARTIST_EMBED_TYPE = 'musical_style'
 
 # Flask Configuration
 DEFAULT_HOST = "127.0.0.1"

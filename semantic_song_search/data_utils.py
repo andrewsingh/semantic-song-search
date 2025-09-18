@@ -71,26 +71,28 @@ def load_song_metadata(songs_file: str) -> List[Dict]:
 
 def load_embeddings_data(embeddings_path: str) -> Dict[str, Dict]:
     """
-    Load embeddings data from npz files.
+    Load song embeddings data from npz files using new descriptor format.
     
     Args:
-        embeddings_path: Path to embeddings directory (new format with track_ids)
+        embeddings_path: Path to embeddings directory (new descriptor format)
         
     Returns:
-        Dictionary mapping embedding types to their data
+        Dictionary mapping song embedding types to their data
     """
     embeddings_path = Path(embeddings_path)
     embedding_indices = {}
     
     if embeddings_path.is_dir():
-        # New separate format with track_ids
-        logger.info(f"Loading embeddings from directory: {embeddings_path}")
+        # New descriptor format with separate files per descriptor type
+        logger.info(f"Loading song descriptor embeddings from directory: {embeddings_path}")
         
         try:
             from . import constants
         except ImportError:
             import constants
-        for embed_type in constants.EMBEDDING_TYPES:
+            
+        # Load each song descriptor type
+        for embed_type in constants.SONG_EMBEDDING_TYPES:
             embed_file = embeddings_path / f"{embed_type}_embeddings.npz"
             if embed_file.exists():
                 data = np.load(embed_file, allow_pickle=True)
@@ -98,66 +100,120 @@ def load_embeddings_data(embeddings_path: str) -> Dict[str, Dict]:
                     'embeddings': data['embeddings'],
                     'song_indices': data['song_indices'],
                     'field_values': data['field_values'],
-                    'track_ids': data['track_ids'],  # New field for track IDs
                     'songs': data.get('songs', np.array([])),
-                    'artists': data.get('artists', np.array([]))
+                    'artists': data.get('artists', np.array([])),
+                    'main_artists': data.get('main_artists', np.array([])),
+                    'uris': data.get('uris', np.array([]))
                 }
-                logger.info(f"Loaded {embed_type}: {len(data['embeddings'])} embeddings with track IDs")
+                logger.info(f"Loaded song {embed_type}: {len(data['embeddings'])} embeddings")
+            else:
+                logger.warning(f"Song embedding file not found: {embed_file}")
     else:
         raise FileNotFoundError(f"Embeddings path not found: {embeddings_path}. New format requires directory with separate embedding files.")
     
     return embedding_indices
 
 
-def load_artist_embeddings_data(artist_embeddings_path: str) -> Dict[str, Dict]:
+def load_artist_embeddings_data(artist_embeddings_path: str, shared_genre_store_path: str = None) -> Dict[str, Any]:
     """
-    Load artist embeddings data from npz files.
+    Load artist embeddings data from npz files using new descriptor format.
     
     Args:
         artist_embeddings_path: Path to artist embeddings directory
+        shared_genre_store_path: Path to shared genre embedding store file
         
     Returns:
-        Dictionary mapping embedding types to their artist data
+        Dictionary containing artist embeddings, metadata, and genre store
     """
     artist_embeddings_path = Path(artist_embeddings_path)
-    artist_embedding_indices = {}
+    artist_data = {}
     
     if not artist_embeddings_path.is_dir():
         raise FileNotFoundError(f"Artist embeddings path not found: {artist_embeddings_path}")
     
-    logger.info(f"Loading artist embeddings from directory: {artist_embeddings_path}")
+    logger.info(f"Loading artist descriptor embeddings from directory: {artist_embeddings_path}")
     
     try:
         from . import constants
     except ImportError:
         import constants
     
+    # Load each artist descriptor type (genres are special - fetched from shared store)
+    artist_embedding_indices = {}
     for embed_type in constants.ARTIST_EMBEDDING_TYPES:
+        if embed_type == 'genres':
+            # Genres are handled separately: embeddings fetched from shared genre store using keys from artist metadata
+            # Check if file exists and log the approach being used
+            genres_file = artist_embeddings_path / f"{embed_type}_artist_embeddings.npz"
+            if genres_file.exists():
+                data = np.load(genres_file, allow_pickle=True)
+                if 'metadata_note' in data:
+                    logger.info(f"Artist genres: {data['metadata_note']}")
+                else:
+                    logger.info(f"Artist genres: Found file but embeddings fetched from shared genre store using metadata keys")
+            else:
+                logger.info(f"Artist genres: No file found, embeddings fetched from shared genre store using metadata keys")
+            continue
+            
         embed_file = artist_embeddings_path / f"{embed_type}_artist_embeddings.npz"
         if embed_file.exists():
             data = np.load(embed_file, allow_pickle=True)
             artist_embedding_indices[embed_type] = {
                 'artists': data['artists'],
-                'embeddings': data['embeddings']
+                'embeddings': data['embeddings'],
+                'field_values': data.get('field_values', np.array([])),
+                'artist_indices': np.arange(len(data['artists']))  # Generate indices since files don't contain them
             }
+            logger.info(f"Loaded artist {embed_type}: {len(data['artists'])} embeddings")
+        else:
+            logger.warning(f"Artist embedding file not found: {embed_file}")
+    
+    artist_data['embeddings'] = artist_embedding_indices
+    
+    # Load artist metadata (for genre information with prominence scores)
+    metadata_file = artist_embeddings_path / "artist_metadata.json"
+    if metadata_file.exists():
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            artist_metadata = json.load(f)
+        artist_data['metadata'] = artist_metadata
+        logger.info(f"Loaded artist metadata for {len(artist_metadata)} artists")
+    else:
+        logger.warning(f"Artist metadata file not found: {metadata_file}")
+        artist_data['metadata'] = {}
+    
+    # Load shared genre embedding store
+    if shared_genre_store_path:
+        genre_store_file = Path(shared_genre_store_path)
+    else:
+        # Fallback to old location for backward compatibility
+        genre_store_file = artist_embeddings_path / "genre_embedding_store.npz"
+    
+    if genre_store_file.exists():
+        with np.load(genre_store_file, allow_pickle=True) as data:
+            genre_keys = data['genre_keys']
+            embeddings = data['embeddings']
             
-            # Include additional fields if available (for consistency with song embeddings)
-            if 'artist_indices' in data:
-                artist_embedding_indices[embed_type]['artist_indices'] = data['artist_indices']
-            if 'field_values' in data:
-                artist_embedding_indices[embed_type]['field_values'] = data['field_values']
-                logger.info(f"Loaded artist {embed_type}: {len(data['artists'])} artist embeddings with indices")
-            else:
-                logger.info(f"Loaded artist {embed_type}: {len(data['artists'])} artist embeddings")
+            # Convert to dictionary and normalize embeddings
+            genre_store = {}
+            for i, key in enumerate(genre_keys):
+                embedding = embeddings[i]
+                normalized_embedding = embedding / np.linalg.norm(embedding)
+                genre_store[key] = normalized_embedding
+            
+            artist_data['genre_store'] = genre_store
+            logger.info(f"Loaded genre store with {len(genre_store)} unique genres from {genre_store_file}")
+    else:
+        logger.warning(f"Genre store file not found: {genre_store_file}")
+        artist_data['genre_store'] = {}
     
-    if not artist_embedding_indices:
-        logger.warning(f"No artist embedding files found in {artist_embeddings_path}")
+    if not artist_embedding_indices and not artist_data['metadata']:
+        logger.warning(f"No artist data found in {artist_embeddings_path}")
     
-    return artist_embedding_indices
+    return artist_data
 
 
 def build_embedding_lookup(embedding_indices: Dict, songs_metadata: List[Dict], 
-                         embed_type: str = 'full_profile') -> Dict[str, np.ndarray]:
+                         embed_type: str = 'genres') -> Dict[str, np.ndarray]:
     """
     Build a lookup dictionary mapping track_id keys to embeddings, including linked_from IDs.
     
@@ -198,146 +254,276 @@ def build_embedding_lookup(embedding_indices: Dict, songs_metadata: List[Dict],
                 linked_from_id = linked_from['id']
                 embedding_to_song[linked_from_id] = song
     
-    # Build lookup dictionary from track_ids, using canonical IDs as keys to avoid duplication
-    embedding_lookup = {}
-    processed_canonical_ids = set()
-    
-    for i, embedding_track_id in enumerate(track_ids):
-        embedding = embeddings[i]
+    # For the new descriptor format, we need to use song_indices instead of track_ids
+    if 'song_indices' in indices:
+        song_indices = indices['song_indices']
         
-        # Validate embedding
-        if not isinstance(embedding, np.ndarray):
-            logger.warning(f"Invalid embedding type for track_id {embedding_track_id}: {type(embedding)}")
-            continue
+        # Build lookup dictionary using song indices to map to songs_metadata
+        embedding_lookup = {}
+        processed_canonical_ids = set()
         
-        # Normalize embedding
-        norm = np.linalg.norm(embedding)
-        if norm > 1e-6:  # Avoid division by very small numbers
-            embedding = embedding / norm
-        else:
-            logger.warning(f"Zero or near-zero norm embedding for track_id {embedding_track_id}")
-            continue
-        
-        # Find the canonical ID for this embedding
-        if embedding_track_id in embedding_to_song:
-            song = embedding_to_song[embedding_track_id]
+        for i, song_idx in enumerate(song_indices):
+            if song_idx >= len(songs_metadata):
+                logger.warning(f"Song index {song_idx} out of range for songs_metadata")
+                continue
+                
+            embedding = embeddings[i]
+            song = songs_metadata[song_idx]
+            
+            # Validate embedding
+            if not isinstance(embedding, np.ndarray):
+                logger.warning(f"Invalid embedding type for song index {song_idx}: {type(embedding)}")
+                continue
+            
+            # Normalize embedding
+            norm = np.linalg.norm(embedding)
+            if norm > 1e-6:  # Avoid division by very small numbers
+                embedding = embedding / norm
+            else:
+                logger.warning(f"Zero or near-zero norm embedding for song index {song_idx}")
+                continue
+            
+            # Get canonical ID
             canonical_id = song.get('track_id') or song.get('id')
             
             # Only add each unique song once using its canonical ID as the key
-            if canonical_id not in processed_canonical_ids:
+            if canonical_id and canonical_id not in processed_canonical_ids:
                 embedding_lookup[canonical_id] = embedding
                 processed_canonical_ids.add(canonical_id)
-        else:
-            # Skip embeddings that don't correspond to any song in the reconciled metadata
-            # This ensures the embedding lookup only contains songs that exist in filtered_songs
-            logger.debug(f"Skipping orphaned embedding track_id {embedding_track_id} (no corresponding song metadata)")
-    
-    logger.info(f"Built embedding lookup for {len(embedding_lookup)} songs using {embed_type}")
-    return embedding_lookup
+        
+        logger.info(f"Built embedding lookup for {len(embedding_lookup)} songs using {embed_type}")
+        return embedding_lookup
+    else:
+        # Legacy fallback for old format with track_ids
+        # Build lookup dictionary from track_ids, using canonical IDs as keys to avoid duplication
+        embedding_lookup = {}
+        processed_canonical_ids = set()
+        
+        for i, embedding_track_id in enumerate(track_ids):
+            embedding = embeddings[i]
+            
+            # Validate embedding
+            if not isinstance(embedding, np.ndarray):
+                logger.warning(f"Invalid embedding type for track_id {embedding_track_id}: {type(embedding)}")
+                continue
+            
+            # Normalize embedding
+            norm = np.linalg.norm(embedding)
+            if norm > 1e-6:  # Avoid division by very small numbers
+                embedding = embedding / norm
+            else:
+                logger.warning(f"Zero or near-zero norm embedding for track_id {embedding_track_id}")
+                continue
+            
+            # Find the canonical ID for this embedding
+            if embedding_track_id in embedding_to_song:
+                song = embedding_to_song[embedding_track_id]
+                canonical_id = song.get('track_id') or song.get('id')
+                
+                # Only add each unique song once using its canonical ID as the key
+                if canonical_id not in processed_canonical_ids:
+                    embedding_lookup[canonical_id] = embedding
+                    processed_canonical_ids.add(canonical_id)
+            else:
+                # Skip embeddings that don't correspond to any song in the reconciled metadata
+                logger.debug(f"Skipping orphaned embedding track_id {embedding_track_id} (no corresponding song metadata)")
+        
+        logger.info(f"Built embedding lookup for {len(embedding_lookup)} songs using {embed_type}")
+        return embedding_lookup
 
 
 def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) -> Tuple[List[Dict], Dict]:
     """
-    Reconcile song track IDs between embeddings and metadata, handling missing songs and linked_from IDs.
+    Reconcile songs between embeddings and metadata using URI-first matching with fallbacks.
+    
+    Matching strategy:
+    1. Primary: Match by Spotify URI
+    2. Fallback 1: Match by (song_name, all_artists_string)
+    3. Fallback 2: Match by (song_name, main_artist_name)
     
     Args:
-        embedding_indices: Dictionary of embedding data with track_ids
-        songs_metadata: List of song metadata with track_id fields
+        embedding_indices: Dictionary of embedding data with uris, songs, artists, main_artists
+        songs_metadata: List of song metadata with uri, name, artists fields
         
     Returns:
         Tuple of (filtered_songs, embedding_indices_updated)
     """
-    # Collect all track IDs that have embeddings
-    all_embedding_track_ids = set()
+    # Helper function to normalize names for matching
+    def normalize_name(name: str) -> str:
+        """Normalize name for matching (lowercase, strip whitespace)"""
+        return name.lower().strip() if name else ""
+    
+    def get_all_artists_string(song_metadata: Dict) -> str:
+        """Extract comma-separated string of all artists from metadata"""
+        artists = song_metadata.get('artists', [])
+        if isinstance(artists, list) and len(artists) > 0:
+            artist_names = [artist.get('name', '') for artist in artists if isinstance(artist, dict)]
+            return ', '.join(artist_names)
+        return ""
+    
+    def get_main_artist_name(song_metadata: Dict) -> str:
+        """Extract main (first) artist name from metadata"""
+        artists = song_metadata.get('artists', [])
+        if isinstance(artists, list) and len(artists) > 0 and isinstance(artists[0], dict):
+            return artists[0].get('name', '')
+        return ""
+    
+    # Build lookup dictionaries for metadata
+    # 1. URI-based lookup
+    uri_to_song = {}
+    # 2. (song_name, all_artists) lookup
+    song_all_artists_to_song = {}
+    # 3. (song_name, main_artist) lookup  
+    song_main_artist_to_song = {}
+    
+    for song in songs_metadata:
+        # URI lookup
+        uri = song.get('uri')
+        if uri:
+            uri_to_song[uri] = song
+        
+        # Name + artists lookups
+        song_name = normalize_name(song.get('name', ''))
+        if song_name:
+            # All artists lookup
+            all_artists_str = normalize_name(get_all_artists_string(song))
+            if all_artists_str:
+                key = (song_name, all_artists_str)
+                song_all_artists_to_song[key] = song
+            
+            # Main artist lookup
+            main_artist = normalize_name(get_main_artist_name(song))
+            if main_artist:
+                key = (song_name, main_artist)
+                song_main_artist_to_song[key] = song
+    
+    # Collect all embedding entries across all types to get unique songs
+    all_embedding_entries = []
+    embedding_to_indices = {}  # Maps (embed_type, embedding_idx) -> entry info
     
     for embed_type, indices in embedding_indices.items():
-        track_ids = indices.get('track_ids', np.array([]))
-        all_embedding_track_ids.update(track_ids)
+        uris = indices.get('uris', np.array([]))
+        songs = indices.get('songs', np.array([]))
+        artists = indices.get('artists', np.array([]))
+        main_artists = indices.get('main_artists', np.array([]))
+        
+        for i, (uri, song_name, artists_str, main_artist) in enumerate(zip(uris, songs, artists, main_artists)):
+            entry = {
+                'embed_type': embed_type,
+                'embed_idx': i,
+                'uri': uri,
+                'song_name': song_name,
+                'artists_str': artists_str,
+                'main_artist': main_artist
+            }
+            all_embedding_entries.append(entry)
+            embedding_to_indices[(embed_type, i)] = entry
     
-    # Create comprehensive track_id to song mapping for metadata
-    # This includes both canonical track IDs and linked_from track IDs
-    track_id_to_song = {}
-    for song in songs_metadata:
-        track_id = song.get('track_id') or song.get('id')
-        if track_id:
-            # Add canonical track ID mapping
-            track_id_to_song[track_id] = song
-            
-            # Add linked_from track ID mapping if it exists
-            linked_from = song.get('linked_from')
-            if linked_from and 'id' in linked_from:
-                linked_from_id = linked_from['id']
-                track_id_to_song[linked_from_id] = song
-                logger.debug(f"Added linked_from mapping: {linked_from_id} -> {track_id}")
+    # Match embedding entries to metadata songs
+    matched_songs = []
+    embedding_to_song_idx = {}  # Maps (embed_type, embedding_idx) -> song_idx in filtered list
+    matched_uris = set()  # Track unique songs by URI to avoid duplicates
     
-    # Filter songs to only include those with embeddings
-    filtered_songs = []
-    track_id_to_new_index = {}  # track_id -> new_index (includes both canonical and linked_from)
-    canonical_track_ids = set()  # Track unique songs by canonical ID
+    match_stats = {'uri_matches': 0, 'name_all_artists_matches': 0, 'name_main_artist_matches': 0, 'no_matches': 0}
     
-    for embedding_track_id in all_embedding_track_ids:
-        if embedding_track_id in track_id_to_song:
-            song = track_id_to_song[embedding_track_id]
-            canonical_track_id = song.get('track_id') or song.get('id')
-            
-            # Only add each unique song once (by canonical track ID)
-            if canonical_track_id not in canonical_track_ids:
-                new_idx = len(filtered_songs)
-                canonical_track_ids.add(canonical_track_id)
-                filtered_songs.append(song)
-                
-                # Map both the embedding track ID and canonical track ID to the same index
-                track_id_to_new_index[embedding_track_id] = new_idx
-                if embedding_track_id != canonical_track_id:
-                    track_id_to_new_index[canonical_track_id] = new_idx
+    for entry in all_embedding_entries:
+        embed_type = entry['embed_type']
+        embed_idx = entry['embed_idx']
+        uri = entry['uri']
+        song_name = normalize_name(entry['song_name'])
+        artists_str = normalize_name(entry['artists_str'])
+        main_artist = normalize_name(entry['main_artist'])
+        
+        matched_song = None
+        match_method = None
+        
+        # Strategy 1: Match by URI
+        if uri and uri in uri_to_song:
+            matched_song = uri_to_song[uri]
+            match_method = 'uri'
+            match_stats['uri_matches'] += 1
+        
+        # Strategy 2: Match by (song_name, all_artists)
+        elif song_name and artists_str:
+            key = (song_name, artists_str)
+            if key in song_all_artists_to_song:
+                matched_song = song_all_artists_to_song[key]
+                match_method = 'name_all_artists'
+                match_stats['name_all_artists_matches'] += 1
+        
+        # Strategy 3: Match by (song_name, main_artist)
+        elif song_name and main_artist:
+            key = (song_name, main_artist)
+            if key in song_main_artist_to_song:
+                matched_song = song_main_artist_to_song[key]
+                match_method = 'name_main_artist'
+                match_stats['name_main_artist_matches'] += 1
+        
+        if matched_song:
+            # Check if this song (by URI) has already been added
+            song_uri = matched_song.get('uri')
+            if song_uri not in matched_uris:
+                # New unique song
+                song_idx = len(matched_songs)
+                matched_songs.append(matched_song)
+                matched_uris.add(song_uri)
+                embedding_to_song_idx[(embed_type, embed_idx)] = song_idx
+                logger.debug(f"Matched via {match_method}: {entry['song_name']} -> {matched_song.get('name')}")
             else:
-                # Song already added, just add the mapping for this embedding track ID
-                existing_song_idx = next(
-                    i for i, s in enumerate(filtered_songs) 
-                    if (s.get('track_id') or s.get('id')) == canonical_track_id
-                )
-                track_id_to_new_index[embedding_track_id] = existing_song_idx
+                # Song already exists, find its index
+                song_idx = next(i for i, s in enumerate(matched_songs) if s.get('uri') == song_uri)
+                embedding_to_song_idx[(embed_type, embed_idx)] = song_idx
+        else:
+            match_stats['no_matches'] += 1
+            logger.debug(f"No match found for: {entry['song_name']} by {entry['artists_str']}")
     
-    logger.info(f"Reconciled track IDs: {len(filtered_songs)}/{len(songs_metadata)} songs have embeddings")
-    linked_count = sum(1 for song in songs_metadata if song.get('linked_from'))
-    logger.info(f"Found {linked_count} songs with linked_from metadata")
+    # Log matching statistics
+    total_embeddings = len(all_embedding_entries)
+    total_matched = sum(match_stats.values()) - match_stats['no_matches']
+    logger.info(f"Song reconciliation completed: {len(matched_songs)}/{len(songs_metadata)} metadata songs have embeddings")
+    logger.info(f"Embedding matching: {total_matched}/{total_embeddings} embeddings matched to metadata")
+    logger.info(f"Match methods: URI={match_stats['uri_matches']}, Name+AllArtists={match_stats['name_all_artists_matches']}, Name+MainArtist={match_stats['name_main_artist_matches']}, NoMatch={match_stats['no_matches']}")
     
-    # Update embedding indices (no need to change indices since track_ids directly reference songs)
+    # Update embedding indices to only include matched songs
     updated_indices = {}
     for embed_type, indices in embedding_indices.items():
-        track_ids = indices.get('track_ids', np.array([]))
+        # Find which embeddings have matches
+        valid_indices = []
+        new_song_indices = []
         
-        # Create mask for track IDs that exist in metadata
-        valid_mask = np.array([track_id in track_id_to_song for track_id in track_ids])
+        num_embeddings = len(indices.get('embeddings', []))
+        for embed_idx in range(num_embeddings):
+            if (embed_type, embed_idx) in embedding_to_song_idx:
+                valid_indices.append(embed_idx)
+                new_song_indices.append(embedding_to_song_idx[(embed_type, embed_idx)])
         
-        if valid_mask.any():
-            # Create new song_indices that map to position in filtered_songs
-            new_song_indices = np.array([
-                track_id_to_new_index[track_id] 
-                for track_id, is_valid in zip(track_ids, valid_mask) 
-                if is_valid
-            ])
+        if valid_indices:
+            valid_mask = np.array([i in valid_indices for i in range(num_embeddings)])
             
             updated_indices[embed_type] = {
                 'embeddings': indices['embeddings'][valid_mask],
-                'song_indices': new_song_indices,
-                'track_ids': track_ids[valid_mask],  # Keep filtered track_ids
+                'song_indices': np.array(new_song_indices),
                 'field_values': indices['field_values'][valid_mask] if 'field_values' in indices else np.array([]),
+                'track_ids': indices.get('uris', np.array([]))[valid_mask] if len(indices.get('uris', [])) > 0 else np.array([]),  # Keep track_ids for backward compatibility, populated with URIs
+                'uris': indices.get('uris', np.array([]))[valid_mask] if len(indices.get('uris', [])) > 0 else np.array([]),
                 'songs': indices.get('songs', np.array([]))[valid_mask] if len(indices.get('songs', [])) > 0 else np.array([]),
-                'artists': indices.get('artists', np.array([]))[valid_mask] if len(indices.get('artists', [])) > 0 else np.array([])
+                'artists': indices.get('artists', np.array([]))[valid_mask] if len(indices.get('artists', [])) > 0 else np.array([]),
+                'main_artists': indices.get('main_artists', np.array([]))[valid_mask] if len(indices.get('main_artists', [])) > 0 else np.array([])
             }
         else:
-            logger.warning(f"No valid embeddings found for {embed_type}")
+            logger.warning(f"No valid embeddings found for type: {embed_type}")
             updated_indices[embed_type] = {
                 'embeddings': np.array([]),
                 'song_indices': np.array([]),
-                'track_ids': np.array([]),
                 'field_values': np.array([]),
+                'track_ids': np.array([]),  # Add track_ids for compatibility
+                'uris': np.array([]),
                 'songs': np.array([]),
-                'artists': np.array([])
+                'artists': np.array([]),
+                'main_artists': np.array([])
             }
     
-    return filtered_songs, updated_indices
+    return matched_songs, updated_indices
 
 
 

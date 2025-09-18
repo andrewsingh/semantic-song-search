@@ -41,14 +41,21 @@ class SemanticSearchApp {
         this.currentFamiliarityMax = 1.0;
         this.hasPersonalizationHistory = false;
         
-        // No-history weights tracking
+        // No-history weights tracking (new 9-weight system)
         this.currentNoHistoryWeights = {
-            beta_track: 0.5,
-            beta_genre: 0.3,
-            beta_artist_pop: 0.1,
-            beta_streams_total: 0.05,
-            beta_streams_daily: 0.05,
-            beta_artist: 0.0
+            // Top-level weights (a_i)
+            a0_song_sim: 0.6,
+            a1_artist_sim: 0.3,
+            a2_total_streams: 0.05,
+            a3_daily_streams: 0.05,
+
+            // Song descriptor weights (b_i)
+            b0_genres: 0.3,
+            b1_vocal_style: 0.15,
+            b2_production_sound_design: 0.15,
+            b3_lyrical_meaning: 0.1,
+            b4_mood_atmosphere: 0.2,
+            b5_tags: 0.1
         };
         
         this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
@@ -68,7 +75,7 @@ class SemanticSearchApp {
             loadMoreContainer: document.getElementById('load-more-container'),
             exportStatus: document.getElementById('export-status'),
             exportBtn: document.getElementById('export-btn'),
-            embedType: document.getElementById('embed-type'),
+            // embedType: document.getElementById('embed-type'), // Removed - using all descriptors simultaneously
             resultsContainer: document.getElementById('results-container'),
             resultsCount: document.getElementById('results-count'),
             resultsHeader: document.getElementById('results-header'),
@@ -81,12 +88,18 @@ class SemanticSearchApp {
             noHistoryWeightsSection: document.getElementById('no-history-weights-section'),
             noHistoryRerunBtn: document.getElementById('no-history-rerun-btn'),
             noHistoryResetBtn: document.getElementById('no-history-reset-btn'),
-            nhBetaTrack: document.getElementById('nh_beta_track'),
-            nhBetaGenre: document.getElementById('nh_beta_genre'),
-            nhBetaArtistPop: document.getElementById('nh_beta_artist_pop'),
-            nhBetaStreamsTotal: document.getElementById('nh_beta_streams_total'),
-            nhBetaStreamsDaily: document.getElementById('nh_beta_streams_daily'),
-            nhBetaArtist: document.getElementById('nh_beta_artist')
+            // Top-level weight inputs (a_i)
+            nhA0SongSim: document.getElementById('nh_a0_song_sim'),
+            nhA1ArtistSim: document.getElementById('nh_a1_artist_sim'),
+            nhA2TotalStreams: document.getElementById('nh_a2_total_streams'),
+            nhA3DailyStreams: document.getElementById('nh_a3_daily_streams'),
+            // Song descriptor weight inputs (b_i)
+            nhB0Genres: document.getElementById('nh_b0_genres'),
+            nhB1VocalStyle: document.getElementById('nh_b1_vocal_style'),
+            nhB2ProductionSoundDesign: document.getElementById('nh_b2_production_sound_design'),
+            nhB3LyricalMeaning: document.getElementById('nh_b3_lyrical_meaning'),
+            nhB4MoodAtmosphere: document.getElementById('nh_b4_mood_atmosphere'),
+            nhB5Tags: document.getElementById('nh_b5_tags')
         };
         
         // Initialize default weights from server-rendered DOM values
@@ -113,12 +126,19 @@ class SemanticSearchApp {
     getDefaultWeightsFromDOM() {
         // Extract default values from the server-rendered DOM inputs
         return {
-            beta_track: parseFloat(this.domElements.nhBetaTrack?.value || 0.6),
-            beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || 0.2),
-            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || 0.15),
-            beta_streams_total: parseFloat(this.domElements.nhBetaStreamsTotal?.value || 0.05),
-            beta_streams_daily: parseFloat(this.domElements.nhBetaStreamsDaily?.value || 0.05),
-            beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || 0.0)
+            // Top-level weights (a_i)
+            a0_song_sim: parseFloat(this.domElements.nhA0SongSim?.value || 0.5),
+            a1_artist_sim: parseFloat(this.domElements.nhA1ArtistSim?.value || 0.3),
+            a2_total_streams: parseFloat(this.domElements.nhA2TotalStreams?.value || 0.1),
+            a3_daily_streams: parseFloat(this.domElements.nhA3DailyStreams?.value || 0.1),
+            
+            // Song descriptor weights (b_i)
+            b0_genres: parseFloat(this.domElements.nhB0Genres?.value || 0.25),
+            b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || 0.15),
+            b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || 0.15),
+            b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || 0.15),
+            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || 0.15),
+            b5_tags: parseFloat(this.domElements.nhB5Tags?.value || 0.15)
         };
     }
     
@@ -163,10 +183,7 @@ class SemanticSearchApp {
             console.warn('Search type radio buttons not found in DOM');
         }
         
-        // Embedding type change - auto-rerun search if results exist
-        this.domElements.embedType.addEventListener('change', (e) => {
-            this.handleEmbedTypeChange(e.target.value);
-        });
+        // Embedding type selection removed - using all descriptors simultaneously
         
         // Search input
         const searchInput = this.domElements.searchInput;
@@ -319,12 +336,18 @@ class SemanticSearchApp {
     bindNoHistoryWeightsEventListeners() {
         // No-history weights input changes
         const weightInputs = [
-            this.domElements.nhBetaTrack,
-            this.domElements.nhBetaGenre,
-            this.domElements.nhBetaArtistPop,
-            this.domElements.nhBetaStreamsTotal,
-            this.domElements.nhBetaStreamsDaily,
-            this.domElements.nhBetaArtist
+            // Top-level weights (a_i)
+            this.domElements.nhA0SongSim,
+            this.domElements.nhA1ArtistSim,
+            this.domElements.nhA2TotalStreams,
+            this.domElements.nhA3DailyStreams,
+            // Song descriptor weights (b_i)
+            this.domElements.nhB0Genres,
+            this.domElements.nhB1VocalStyle,
+            this.domElements.nhB2ProductionSoundDesign,
+            this.domElements.nhB3LyricalMeaning,
+            this.domElements.nhB4MoodAtmosphere,
+            this.domElements.nhB5Tags
         ];
 
         weightInputs.forEach(input => {
@@ -390,37 +413,7 @@ class SemanticSearchApp {
         }
     }
     
-    handleEmbedTypeChange(embedType) {
-        
-        // Track embed type change
-        this.analytics.trackEvent('Embed Type Changed', {
-            'new_embed_type': embedType,
-            'previous_embed_type': this.currentEmbedType || 'unknown',
-            'has_active_search': this.searchResults.length > 0
-        });
-        
-        this.currentEmbedType = embedType;
-        
-        // Don't auto-rerun if we're currently loading more results
-        if (this.isLoadingMore) {
-            return;
-        }
-        
-        // Check if we have existing search results and a query to re-run
-        const query = this.domElements.searchInput.value.trim();
-        const hasResults = this.searchResults.length > 0;
-        const hasQuery = query.length > 0;
-        
-        // For song-to-song searches, also check if we have a selected query song
-        const searchType = this.getSearchType();
-        const hasValidQuery = hasQuery || (searchType === 'song' && this.currentQuerySong);
-        
-        if (hasResults && hasValidQuery) {
-            // Auto-rerun the search with the new embedding type
-            this.handleSearch();
-        } else {
-        }
-    }
+    // handleEmbedTypeChange removed - using all descriptors simultaneously
     
     async handleSearchInput(query) {
         const searchType = this.getSearchType();
@@ -542,26 +535,26 @@ class SemanticSearchApp {
     
     extractSearchParameters() {
         const searchType = this.getSearchType();
-        const embedType = this.domElements.embedType.value;
+        // embedType removed - using all descriptors simultaneously
         const query = this.domElements.searchInput.value.trim();
         const topArtistsFilter = this.domElements.topArtistsFilter;
         const filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
         
-        return { searchType, embedType, query, filterTopArtists };
+        return { searchType, query, filterTopArtists };
     }
     
     trackSearchInitiation(searchParams) {
-        const { searchType, embedType, query, filterTopArtists } = searchParams;
+        const { searchType, query, filterTopArtists } = searchParams;
         
         const searchProperties = {
             'search_type': searchType,
-            'embed_type': embedType,
+            'descriptors': 'all', // Using all descriptors simultaneously
             'is_filtered': filterTopArtists,
             'is_manual_selection': this.isManualSelectionMode,
             'selected_songs_count': this.selectedSongs.size,
             'has_spotify_auth': this.isAuthenticated,
             'has_results': this.searchResults.length > 0,
-            'is_new_search': this.searchResultsId !== `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`
+            'is_new_search': this.searchResultsId !== `${searchType}:all:${query}:${this.currentQuerySong?.song_idx || ''}`
         };
         
         // Add query-specific information
@@ -591,10 +584,10 @@ class SemanticSearchApp {
     }
     
     prepareForNewSearch(searchParams) {
-        const { searchType, embedType, query } = searchParams;
+        const { searchType, query } = searchParams;
         
         // Create a search identifier based on actual search parameters
-        const newSearchId = `${searchType}:${embedType}:${query}:${this.currentQuerySong?.song_idx || ''}`;
+        const newSearchId = `${searchType}:all:${query}:${this.currentQuerySong?.song_idx || ''}`;
         const isNewSearch = this.searchResultsId !== newSearchId;
         
         // Reset pagination for new searches
@@ -625,7 +618,7 @@ class SemanticSearchApp {
     }
     
     buildSearchRequest(searchParams) {
-        const { searchType, embedType, query } = searchParams;
+        const { searchType, query } = searchParams;
         
         // Get advanced parameters
         const advancedParams = this.getActiveAdvancedParams();
@@ -633,7 +626,7 @@ class SemanticSearchApp {
         
         const requestData = {
             search_type: searchType,
-            embed_type: embedType,
+            // embed_type removed - using all descriptors simultaneously
             query: query,
             k: this.search_k,
             offset: 0,
@@ -704,7 +697,7 @@ class SemanticSearchApp {
             'current_results_count': this.searchResults.length,
             'current_offset': this.currentOffset,
             'search_type': this.currentSearchData.search_type,
-            'embed_type': this.currentSearchData.embed_type,
+            'descriptors': 'all', // Using all descriptors simultaneously
             'has_filter_active': this.domElements.topArtistsFilter.checked,
             'is_manual_selection_mode': this.isManualSelectionMode
         });
@@ -808,7 +801,7 @@ class SemanticSearchApp {
         this.updateResultsCount();
         
         // Create enhanced search info with ranking details
-        let searchInfoText = `${data.search_type} search • ${data.embed_type.replace('_', ' ')}`;
+        let searchInfoText = `${data.search_type} search • All Descriptors`;
         
         // Add ranking weights information if available
         // if (data.ranking_weights) {
@@ -883,20 +876,10 @@ class SemanticSearchApp {
                 rank: startIndex + index + 1, 
                 similarity: song.similarity,
                 fieldValue: song.field_value,
-                embedType: data.embed_type,
+                // embedType removed - using all descriptors
                 isSelected: this.selectedSongs.has(song.song_idx)
             });
-            
-                
-            // Add accordion toggle functionality
-            const accordionToggle = card.querySelector('.accordion-toggle');
-            if (accordionToggle) {
-                accordionToggle.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent song play when clicking accordion
-                    this.toggleAccordion(accordionToggle);
-                });
-            }
-            
+
             resultsGrid.appendChild(card);
         });
         
@@ -1135,7 +1118,7 @@ class SemanticSearchApp {
         const mockData = {
             results: this.searchResults,
             search_type: this.currentSearchData?.search_type || 'text',
-            embed_type: this.currentSearchData?.embed_type || 'tags_genres',
+            // embed_type removed - using all descriptors
             query: this.currentSearchData?.query || '',
             ranking_weights: {
                 ...newWeights,
@@ -1159,7 +1142,8 @@ class SemanticSearchApp {
     }
     
     createSongCardHTML(song, options = {}) {
-        const { rank, similarity, isQuery = false, fieldValue = null, embedType = null, isSelected = false } = options;
+        const { rank, similarity, isQuery = false, fieldValue = null, isSelected = false } = options;
+        // embedType removed - using all descriptors simultaneously
         
         
         let tagsHTML = '';
@@ -1170,60 +1154,46 @@ class SemanticSearchApp {
                     <path d="M8 5v14l11-7z"/>
                 </svg>
             </button>`;
-        }
-        
-        if (song.tags && song.tags.length > 0) {
-            const displayTags = song.tags.slice(0, 3);
+
+            // Get tags and genres from song data
+            const { tags } = this.formatTagsGenresFromSong(song);
+
+            // Show first 3 tags
+            const visibleTags = tags.slice(0, 3);
+            const tagsElements = visibleTags.map(tag =>
+                `<span class="tag-item">${escapeHtml(tag)}</span>`
+            ).join('');
+
             tagsHTML = `
                 <div class="card-tags">
-                    <div class="tags-container">
-                        ${displayTags.map(tag => `<span class="tag-item">${escapeHtml(tag)}</span>`).join('')}
-                    </div>
-                    ${playButtonHTML}
-                </div>
-            `;
-        } else if (playButtonHTML) {
-            // If no tags but we have a play button, still create the tags container
-            tagsHTML = `
-                <div class="card-tags">
-                    <div class="tags-container"></div>
+                    <div class="tags-container">${tagsElements}</div>
                     ${playButtonHTML}
                 </div>
             `;
         }
         
-        // Accordion content based on debug mode and embedding type
+        // Restore accordion section for tags and genres
         let accordionHTML = '';
         if (!isQuery) {
-            let accordionContent, accordionTitle;
-            
-            // In debug mode, show the field value for the search embedding type
-            // In production mode, always show tags + genres
-            const appContainer = document.querySelector('.app-container');
-            const debugMode = appContainer && appContainer.dataset.debugMode === 'true';
-            if (debugMode && fieldValue !== null && fieldValue !== undefined && embedType) {
-                accordionContent = this.formatFieldValueForDisplay(fieldValue, embedType);
-                accordionTitle = this.getAccordionTitle(embedType);
-            } else {
-                // Production mode - always show tags + genres
-                const tagsGenresObj = this.formatTagsGenresFromSong(song);
-                accordionContent = this.formatTagsGenresForDisplay(tagsGenresObj);
-                accordionTitle = this.getAccordionTitle('tags_genres');
-            }
-            
-            accordionHTML = `
-                <div class="card-accordion">
-                    <button class="accordion-toggle" aria-expanded="false">
-                        <span class="accordion-title">${accordionTitle}</span>
-                        <span class="accordion-icon">▼</span>
-                    </button>
-                    <div class="accordion-content">
-                        <div class="accordion-content-inner">
-                            ${accordionContent}
+            const tagsGenresObj = this.formatTagsGenresFromSong(song);
+            const accordionContent = this.formatTagsGenresForDisplay(tagsGenresObj);
+
+            // Only show accordion if there are tags or genres to display
+            if (tagsGenresObj.tags.length > 0 || tagsGenresObj.genres.length > 0) {
+                accordionHTML = `
+                    <div class="card-accordion">
+                        <button class="accordion-toggle" aria-expanded="false">
+                            <span class="accordion-title">Tags & Genres</span>
+                            <span class="accordion-icon">▼</span>
+                        </button>
+                        <div class="accordion-content">
+                            <div class="accordion-content-inner">
+                                ${accordionContent}
+                            </div>
                         </div>
                     </div>
-                </div>
-            `;
+                `;
+            }
         }
         
         // Always include checkbox, CSS will control visibility
@@ -1238,30 +1208,26 @@ class SemanticSearchApp {
             
             // Build scoring components for the middle section (only if we have meaningful breakdown)
             let scoringComponentsHTML = '';
-            if (song.scoring_components) {
-                const components = song.scoring_components;
+            if (song.components || song.scoring_components) {
+                const components = song.components || song.scoring_components;
                 
                 scoringComponentsHTML = `
                     <div class="scoring-components">
-                        <span class="scoring-component" title="Track-level similarity">
-                            <span class="component-label">V:</span>
-                            <span class="component-value">${((components.S_track * 100) || 0).toFixed(1)}</span>
+                        <span class="scoring-component" title="Song descriptor similarity">
+                            <span class="component-label">S:</span>
+                            <span class="component-value">${((components.S_song * 100) || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Genre similarity">
-                            <span class="component-label">G:</span>
-                            <span class="component-value">${(components.S_genre * 100 || 0).toFixed(1)}</span>
-                        </span>
-                        <span class="scoring-component" title="Artist vibe similarity">
+                        <span class="scoring-component" title="Artist descriptor similarity">
                             <span class="component-label">A:</span>
-                            <span class="component-value">${(components.S_artist_pop * 100 || 0).toFixed(1)}</span>
+                            <span class="component-value">${((components.S_artist * 100) || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Stream Total">
+                        <span class="scoring-component" title="Total streams score">
                             <span class="component-label">T:</span>
-                            <span class="component-value">${(components.S_streams_total * 100 || 0).toFixed(1)}</span>
+                            <span class="component-value">${((components.S_streams_total * 100) || 0).toFixed(1)}</span>
                         </span>
-                        <span class="scoring-component" title="Stream Daily">
+                        <span class="scoring-component" title="Daily streams score">
                             <span class="component-label">D:</span>
-                            <span class="component-value">${(components.S_streams_daily * 100 || 0).toFixed(1)}</span>
+                            <span class="component-value">${((components.S_streams_daily * 100) || 0).toFixed(1)}</span>
                         </span>
                     </div>
                 `;
@@ -1329,7 +1295,7 @@ class SemanticSearchApp {
         
         return { tags: uniqueTags, genres: uniqueGenres };
     }
-    
+
     formatTagsGenresForDisplay(tagsGenresObj) {
         /**
          * Format tags and genres with different styling
@@ -1338,15 +1304,15 @@ class SemanticSearchApp {
         if (!tagsGenresObj || (!tagsGenresObj.tags.length && !tagsGenresObj.genres.length)) {
             return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
         }
-        
-        const tagElements = tagsGenresObj.tags.map(tag => 
+
+        const tagElements = tagsGenresObj.tags.map(tag =>
             `<span class="tag-item">${escapeHtml(tag)}</span>`
         ).join('');
-        
-        const genreElements = tagsGenresObj.genres.map(genre => 
+
+        const genreElements = tagsGenresObj.genres.map(genre =>
             `<span class="genre-item">${escapeHtml(genre)}</span>`
         ).join('');
-        
+
         return `
             <div class="tags-genres-content">
                 ${tagElements}${genreElements}
@@ -1726,6 +1692,15 @@ class SemanticSearchApp {
                     this.toggleSongSelection(song.song_idx, index);
                 });
             }
+
+            // Handle accordion toggle clicks
+            const accordionToggle = card.querySelector('.accordion-toggle');
+            if (accordionToggle) {
+                accordionToggle.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent song play when clicking accordion
+                    this.toggleAccordion(accordionToggle);
+                });
+            }
         }
     }
     
@@ -1867,7 +1842,7 @@ class SemanticSearchApp {
         const mockData = {
             results: this.searchResults,
             search_type: this.currentSearchData?.search_type || 'text',
-            embed_type: this.currentSearchData?.embed_type || 'full_profile',
+            // embed_type removed - using all descriptors
             query: this.currentSearchData?.query || '',
             pagination: {
                 offset: 0,
@@ -2188,7 +2163,7 @@ class SemanticSearchApp {
     buildSearchContext() {
         const searchContext = {
             search_type: this.currentSearchType,
-            embed_type: this.currentEmbedType,
+            descriptors: 'all', // Using all descriptors simultaneously
             is_filtered: this.isFiltered,
             is_manual_selection: this.isManualSelectionMode,
             selected_songs_count: this.selectedSongs.size
@@ -2657,33 +2632,55 @@ class SemanticSearchApp {
     
     resetNoHistoryWeightsToDefaults() {
         // Reset all no-history weight inputs to their default values
-        if (this.domElements.nhBetaTrack && this.defaultNoHistoryWeights.beta_track !== undefined) {
-            this.domElements.nhBetaTrack.value = this.defaultNoHistoryWeights.beta_track;
+        // Top-level weights (a_i)
+        if (this.domElements.nhA0SongSim && this.defaultNoHistoryWeights.a0_song_sim !== undefined) {
+            this.domElements.nhA0SongSim.value = this.defaultNoHistoryWeights.a0_song_sim;
         }
-        if (this.domElements.nhBetaGenre && this.defaultNoHistoryWeights.beta_genre !== undefined) {
-            this.domElements.nhBetaGenre.value = this.defaultNoHistoryWeights.beta_genre;
+        if (this.domElements.nhA1ArtistSim && this.defaultNoHistoryWeights.a1_artist_sim !== undefined) {
+            this.domElements.nhA1ArtistSim.value = this.defaultNoHistoryWeights.a1_artist_sim;
         }
-        if (this.domElements.nhBetaArtistPop && this.defaultNoHistoryWeights.beta_artist_pop !== undefined) {
-            this.domElements.nhBetaArtistPop.value = this.defaultNoHistoryWeights.beta_artist_pop;
+        if (this.domElements.nhA2TotalStreams && this.defaultNoHistoryWeights.a2_total_streams !== undefined) {
+            this.domElements.nhA2TotalStreams.value = this.defaultNoHistoryWeights.a2_total_streams;
         }
-        if (this.domElements.nhBetaStreamsTotal && this.defaultNoHistoryWeights.beta_streams_total !== undefined) {
-            this.domElements.nhBetaStreamsTotal.value = this.defaultNoHistoryWeights.beta_streams_total;
+        if (this.domElements.nhA3DailyStreams && this.defaultNoHistoryWeights.a3_daily_streams !== undefined) {
+            this.domElements.nhA3DailyStreams.value = this.defaultNoHistoryWeights.a3_daily_streams;
         }
-        if (this.domElements.nhBetaStreamsDaily && this.defaultNoHistoryWeights.beta_streams_daily !== undefined) {
-            this.domElements.nhBetaStreamsDaily.value = this.defaultNoHistoryWeights.beta_streams_daily;
+        
+        // Song descriptor weights (b_i)
+        if (this.domElements.nhB0Genres && this.defaultNoHistoryWeights.b0_genres !== undefined) {
+            this.domElements.nhB0Genres.value = this.defaultNoHistoryWeights.b0_genres;
         }
-        if (this.domElements.nhBetaArtist && this.defaultNoHistoryWeights.beta_artist !== undefined) {
-            this.domElements.nhBetaArtist.value = this.defaultNoHistoryWeights.beta_artist;
+        if (this.domElements.nhB1VocalStyle && this.defaultNoHistoryWeights.b1_vocal_style !== undefined) {
+            this.domElements.nhB1VocalStyle.value = this.defaultNoHistoryWeights.b1_vocal_style;
+        }
+        if (this.domElements.nhB2ProductionSoundDesign && this.defaultNoHistoryWeights.b2_production_sound_design !== undefined) {
+            this.domElements.nhB2ProductionSoundDesign.value = this.defaultNoHistoryWeights.b2_production_sound_design;
+        }
+        if (this.domElements.nhB3LyricalMeaning && this.defaultNoHistoryWeights.b3_lyrical_meaning !== undefined) {
+            this.domElements.nhB3LyricalMeaning.value = this.defaultNoHistoryWeights.b3_lyrical_meaning;
+        }
+        if (this.domElements.nhB4MoodAtmosphere && this.defaultNoHistoryWeights.b4_mood_atmosphere !== undefined) {
+            this.domElements.nhB4MoodAtmosphere.value = this.defaultNoHistoryWeights.b4_mood_atmosphere;
+        }
+        if (this.domElements.nhB5Tags && this.defaultNoHistoryWeights.b5_tags !== undefined) {
+            this.domElements.nhB5Tags.value = this.defaultNoHistoryWeights.b5_tags;
         }
         
         // Sync currentNoHistoryWeights with the new DOM values
         this.currentNoHistoryWeights = {
-            beta_track: parseFloat(this.domElements.nhBetaTrack?.value || this.defaultNoHistoryWeights.beta_track),
-            beta_genre: parseFloat(this.domElements.nhBetaGenre?.value || this.defaultNoHistoryWeights.beta_genre),
-            beta_artist_pop: parseFloat(this.domElements.nhBetaArtistPop?.value || this.defaultNoHistoryWeights.beta_artist_pop),
-            beta_streams_total: parseFloat(this.domElements.nhBetaStreamsTotal?.value || this.defaultNoHistoryWeights.beta_streams_total),
-            beta_streams_daily: parseFloat(this.domElements.nhBetaStreamsDaily?.value || this.defaultNoHistoryWeights.beta_streams_daily),
-            beta_artist: parseFloat(this.domElements.nhBetaArtist?.value || this.defaultNoHistoryWeights.beta_artist)
+            // Top-level weights (a_i)
+            a0_song_sim: parseFloat(this.domElements.nhA0SongSim?.value || this.defaultNoHistoryWeights.a0_song_sim),
+            a1_artist_sim: parseFloat(this.domElements.nhA1ArtistSim?.value || this.defaultNoHistoryWeights.a1_artist_sim),
+            a2_total_streams: parseFloat(this.domElements.nhA2TotalStreams?.value || this.defaultNoHistoryWeights.a2_total_streams),
+            a3_daily_streams: parseFloat(this.domElements.nhA3DailyStreams?.value || this.defaultNoHistoryWeights.a3_daily_streams),
+            
+            // Song descriptor weights (b_i)
+            b0_genres: parseFloat(this.domElements.nhB0Genres?.value || this.defaultNoHistoryWeights.b0_genres),
+            b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || this.defaultNoHistoryWeights.b1_vocal_style),
+            b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || this.defaultNoHistoryWeights.b2_production_sound_design),
+            b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || this.defaultNoHistoryWeights.b3_lyrical_meaning),
+            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || this.defaultNoHistoryWeights.b4_mood_atmosphere),
+            b5_tags: parseFloat(this.domElements.nhB5Tags?.value || this.defaultNoHistoryWeights.b5_tags)
         };
         
         // Update the rerun button state since values may have changed
