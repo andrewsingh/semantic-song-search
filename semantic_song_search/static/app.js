@@ -163,7 +163,6 @@ class SemanticSearchApp {
         this.bindExportEventListeners();
         this.bindFilterEventListeners();
         this.bindPersonalizationEventListeners();
-        this.bindAdvancedSettingsEventListeners();
         this.bindNoHistoryWeightsEventListeners();
         this.bindSessionEventListeners();
     }
@@ -304,34 +303,6 @@ class SemanticSearchApp {
         }
     }
     
-    bindAdvancedSettingsEventListeners() {
-        // Advanced Settings Accordion
-        const advancedSettingsBtn = document.getElementById('advanced-settings-accordion-btn');
-        if (advancedSettingsBtn) {
-            advancedSettingsBtn.addEventListener('click', () => {
-                this.toggleAdvancedSettingsAccordion();
-            });
-        }
-
-        // Advanced Settings Parameter Changes
-        this.initAdvancedSettingsListeners();
-
-        // Advanced Settings Rerun Search Button
-        const advancedRerunBtn = this.domElements.advancedRerunSearchBtn;
-        if (advancedRerunBtn) {
-            advancedRerunBtn.addEventListener('click', () => {
-                this.rerunSearchWithAdvancedParameters();
-            });
-        }
-
-        // Reset Defaults Button
-        const resetDefaultsBtn = document.getElementById('reset-defaults-btn');
-        if (resetDefaultsBtn) {
-            resetDefaultsBtn.addEventListener('click', async () => {
-                await this.resetAdvancedParametersToDefaults();
-            });
-        }
-    }
     
     bindNoHistoryWeightsEventListeners() {
         // No-history weights input changes
@@ -619,39 +590,38 @@ class SemanticSearchApp {
     
     buildSearchRequest(searchParams) {
         const { searchType, query } = searchParams;
-        
-        // Get advanced parameters
-        const advancedParams = this.getActiveAdvancedParams();
+
+        // Get no-history weights
         const noHistoryWeights = this.getActiveNoHistoryWeights();
-        
+
         const requestData = {
             search_type: searchType,
             // embed_type removed - using all descriptors simultaneously
             query: query,
             k: this.search_k,
-            offset: 0,
-            // Personalization parameters  
-            lambda_val: this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5),
-            familiarity_min: this.activeFamiliarityMin !== undefined ? this.activeFamiliarityMin : (this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0),
-            familiarity_max: this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0),
-            // Advanced ranking parameters
-            ...advancedParams
+            offset: 0
         };
-        
+
+        // Add personalization parameters only in history mode
+        if (this.hasPersonalizationHistory) {
+            requestData.lambda_val = this.activeLambdaVal !== undefined ? this.activeLambdaVal : (this.currentLambdaVal !== undefined ? this.currentLambdaVal : 0.5);
+            requestData.familiarity_min = this.activeFamiliarityMin !== undefined ? this.activeFamiliarityMin : (this.currentFamiliarityMin !== undefined ? this.currentFamiliarityMin : 0.0);
+            requestData.familiarity_max = this.activeFamiliarityMax !== undefined ? this.activeFamiliarityMax : (this.currentFamiliarityMax !== undefined ? this.currentFamiliarityMax : 1.0);
+        }
+
         // Add no-history weights if we don't have personalization history
         if (!this.hasPersonalizationHistory && Object.keys(noHistoryWeights).length > 0) {
             Object.assign(requestData, noHistoryWeights);
         }
-        
-        
+
         if (searchType === 'song' && this.currentQuerySong) {
             requestData.song_idx = this.currentQuerySong.song_idx;
         }
-        
+
         // Store current search data for load more functionality and weight updates
         this.currentSearchData = { ...requestData };
         this.lastSearchRequestData = { ...requestData };
-        
+
         return requestData;
     }
     
@@ -2453,145 +2423,28 @@ class SemanticSearchApp {
             await this.handleSearch();
         }
     }
-    
-    // Advanced Settings Methods
-    toggleAdvancedSettingsAccordion() {
-        const accordion = document.querySelector('.advanced-settings-accordion');
-        const content = document.getElementById('advanced-settings-accordion-content');
-        
-        if (accordion && content) {
-            accordion.classList.toggle('expanded');
-            
-            // Initialize parameter values if opening for the first time
-            if (accordion.classList.contains('expanded') && !this.advancedSettingsInitialized) {
-                this.initializeAdvancedSettingsValues();
-                this.advancedSettingsInitialized = true;
-            }
-        }
-    }
-    
-    initAdvancedSettingsListeners() {
-        // Get all parameter input elements
-        const parameterIds = [
-            'H_c', 'H_E', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 'K_s',
-            'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
-            'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
-            'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays', 'beta_track', 'beta_artist_pop', 'beta_artist_personal', 'beta_genre', 'beta_streams_total', 'beta_streams_daily', 'beta_artist'
-        ];
-        
-        // Initialize current advanced parameters object
-        this.currentAdvancedParams = {};
-        this.activeAdvancedParams = {};
-        
-        // Add event listeners for each parameter
-        parameterIds.forEach(paramId => {
-            const element = document.getElementById(paramId);
-            if (element) {
-                element.addEventListener('input', (e) => {
-                    this.handleAdvancedParameterChange(paramId, e.target.value);
-                });
-            }
-        });
-    }
-    
-    handleAdvancedParameterChange(paramId, value) {
-        // Convert value to appropriate type
-        let convertedValue;
-        if (paramId === 'knn_embed_type') {
-            convertedValue = value;
-        } else if (paramId === 'k_neighbors' || paramId === 'min_plays') {
-            convertedValue = parseInt(value);
-        } else {
-            convertedValue = parseFloat(value);
-        }
-        
-        // Store the current value
-        this.currentAdvancedParams[paramId] = convertedValue;
-        
-        // Check if any parameters have changed from their active values
-        this.updateAdvancedRerunButtonState();
-    }
-    
-    updateAdvancedRerunButtonState() {
-        const rerunBtn = this.domElements.advancedRerunSearchBtn;
-        if (!rerunBtn) return;
-        
-        // Check if any parameter has changed from its active value
-        let hasChanges = false;
-        for (const [paramId, currentValue] of Object.entries(this.currentAdvancedParams)) {
-            const activeValue = this.activeAdvancedParams[paramId];
-            if (currentValue !== activeValue) {
-                hasChanges = true;
-                break;
-            }
-        }
-        
-        rerunBtn.disabled = !hasChanges;
-    }
-    
-    async rerunSearchWithAdvancedParameters() {
-        
-        // Save current values as the "active" values
-        this.activeAdvancedParams = { ...this.currentAdvancedParams };
-        
-        // Disable the rerun button
-        const rerunBtn = this.domElements.advancedRerunSearchBtn;
-        if (rerunBtn) {
-            rerunBtn.disabled = true;
-        }
-        
-        // Track parameter update
-        this.analytics.trackEvent('Advanced Parameters Updated', {
-            'parameters': this.activeAdvancedParams,
-            'has_active_search': this.searchResults.length > 0
-        });
-        
-        // Show confirmation that search was rerun
-        this.showAdvancedSettingsConfirmation();
-        
-        // Rerun the current search if we have one
-        if (this.lastSearchRequestData) {
-            await this.handleSearch();
-        }
-    }
-    
-    showAdvancedSettingsConfirmation() {
-        // Create a temporary confirmation message
-        const rerunBtn = this.domElements.advancedRerunSearchBtn;
-        if (rerunBtn) {
-            const originalText = rerunBtn.textContent;
-            rerunBtn.textContent = 'Search Updated!';
-            rerunBtn.style.background = 'rgba(29, 185, 84, 0.8)';
-            
-            setTimeout(() => {
-                rerunBtn.textContent = originalText;
-                rerunBtn.style.background = '';
-            }, 2000);
-        }
-    }
-    
+
     handleNoHistoryWeightChange(inputId, value) {
         // Convert input ID to weight key
         const weightKey = inputId.replace('nh_', '');
         const convertedValue = parseFloat(value);
-        
+
         // Validate the converted value
         if (isNaN(convertedValue)) {
             return; // Don't update if the value is invalid
         }
-        
+
         // Store the current value
         this.currentNoHistoryWeights[weightKey] = convertedValue;
-        
+
         // Check if any weights have changed from their active values
         this.updateNoHistoryRerunButtonState();
     }
-    
+
     updateNoHistoryRerunButtonState() {
         const rerunBtn = this.domElements.noHistoryRerunBtn;
         if (!rerunBtn) return;
-        
+
         // Check if any weight has changed from its active value
         let hasChanges = false;
         for (const [weightKey, currentValue] of Object.entries(this.currentNoHistoryWeights)) {
@@ -2601,35 +2454,35 @@ class SemanticSearchApp {
                 break;
             }
         }
-        
+
         rerunBtn.disabled = !hasChanges;
     }
-    
+
     async rerunSearchWithNoHistoryWeights() {
         // Save current values as the "active" values
         this.activeNoHistoryWeights = { ...this.currentNoHistoryWeights };
-        
+
         // Disable the rerun button
         const rerunBtn = this.domElements.noHistoryRerunBtn;
         if (rerunBtn) {
             rerunBtn.disabled = true;
         }
-        
+
         // Track weight update
         this.analytics.trackEvent('No-History Weights Updated', {
             'weights': this.activeNoHistoryWeights,
             'has_active_search': this.searchResults.length > 0
         });
-        
+
         // Show confirmation that search was rerun
         this.showNoHistoryWeightsConfirmation();
-        
+
         // Rerun the current search if we have one
         if (this.lastSearchRequestData) {
             await this.handleSearch();
         }
     }
-    
+
     resetNoHistoryWeightsToDefaults() {
         // Reset all no-history weight inputs to their default values
         // Top-level weights (a_i)
@@ -2645,7 +2498,7 @@ class SemanticSearchApp {
         if (this.domElements.nhA3DailyStreams && this.defaultNoHistoryWeights.a3_daily_streams !== undefined) {
             this.domElements.nhA3DailyStreams.value = this.defaultNoHistoryWeights.a3_daily_streams;
         }
-        
+
         // Song descriptor weights (b_i)
         if (this.domElements.nhB0Genres && this.defaultNoHistoryWeights.b0_genres !== undefined) {
             this.domElements.nhB0Genres.value = this.defaultNoHistoryWeights.b0_genres;
@@ -2662,10 +2515,7 @@ class SemanticSearchApp {
         if (this.domElements.nhB4MoodAtmosphere && this.defaultNoHistoryWeights.b4_mood_atmosphere !== undefined) {
             this.domElements.nhB4MoodAtmosphere.value = this.defaultNoHistoryWeights.b4_mood_atmosphere;
         }
-        if (this.domElements.nhB5Tags && this.defaultNoHistoryWeights.b5_tags !== undefined) {
-            this.domElements.nhB5Tags.value = this.defaultNoHistoryWeights.b5_tags;
-        }
-        
+
         // Sync currentNoHistoryWeights with the new DOM values
         this.currentNoHistoryWeights = {
             // Top-level weights (a_i)
@@ -2673,26 +2523,25 @@ class SemanticSearchApp {
             a1_artist_sim: parseFloat(this.domElements.nhA1ArtistSim?.value || this.defaultNoHistoryWeights.a1_artist_sim),
             a2_total_streams: parseFloat(this.domElements.nhA2TotalStreams?.value || this.defaultNoHistoryWeights.a2_total_streams),
             a3_daily_streams: parseFloat(this.domElements.nhA3DailyStreams?.value || this.defaultNoHistoryWeights.a3_daily_streams),
-            
+
             // Song descriptor weights (b_i)
             b0_genres: parseFloat(this.domElements.nhB0Genres?.value || this.defaultNoHistoryWeights.b0_genres),
             b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || this.defaultNoHistoryWeights.b1_vocal_style),
             b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || this.defaultNoHistoryWeights.b2_production_sound_design),
             b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || this.defaultNoHistoryWeights.b3_lyrical_meaning),
-            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || this.defaultNoHistoryWeights.b4_mood_atmosphere),
-            b5_tags: parseFloat(this.domElements.nhB5Tags?.value || this.defaultNoHistoryWeights.b5_tags)
+            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || this.defaultNoHistoryWeights.b4_mood_atmosphere)
         };
-        
+
         // Update the rerun button state since values may have changed
         this.updateNoHistoryRerunButtonState();
-        
+
         // Track the reset action
         this.analytics.trackEvent('No-History Weights Reset', {
             'reset_to_defaults': this.defaultNoHistoryWeights,
             'has_active_search': this.searchResults.length > 0
         });
     }
-    
+
     showNoHistoryWeightsConfirmation() {
         // Create a temporary confirmation message
         const rerunBtn = this.domElements.noHistoryRerunBtn;
@@ -2700,151 +2549,46 @@ class SemanticSearchApp {
             const originalText = rerunBtn.textContent;
             rerunBtn.textContent = 'Search Updated!';
             rerunBtn.style.background = 'rgba(29, 185, 84, 0.8)';
-            
+
             setTimeout(() => {
                 rerunBtn.textContent = originalText;
                 rerunBtn.style.background = '';
             }, 2000);
         }
     }
-    
-    async initializeAdvancedSettingsValues() {
-        // Fetch default parameters from backend
-        try {
-            const defaultParams = await this.api.get('/api/default_ranking_config');
-            this.populateAdvancedSettingsForm(defaultParams);
-            
-            // Set both current and active to defaults initially
-            this.currentAdvancedParams = { ...defaultParams };
-            this.activeAdvancedParams = { ...defaultParams };
-        } catch (error) {
-            console.error('Error fetching default ranking config:', error);
-            this.populateAdvancedSettingsFormWithDefaults();
-        }
-        
-        this.updateAdvancedRerunButtonState();
-    }
-    
-    populateAdvancedSettingsForm(params) {
-        for (const [paramId, value] of Object.entries(params)) {
-            const element = document.getElementById(paramId);
-            if (element) {
-                element.value = value;
-            }
-        }
-    }
-    
-    populateAdvancedSettingsFormWithDefaults() {
-        // Hardcoded fallback defaults matching RankingConfig
-        const defaults = {
-            'H_c': 30.0, 'H_E': 90.0, 'gamma_s': 1.2, 'gamma_f': 1.4, 'kappa': 1.5,
-            'alpha_0': 3.0, 'beta_0': 3.0, 'K_s': 3.0, 'K_E': 10.0, 'gamma_A': 1.0,
-            'eta': 1.2, 'tau': 0.7, 'beta_f': 1.5, 'K_life': 10.0, 'K_recent': 5.0,
-            'psi': 1.4, 'k_neighbors': 50, 'sigma': 10.0, 'knn_embed_type': 'full_profile',
-            'beta_p': 0.4, 'beta_s': 0.4, 'beta_a': 0.2, 'kappa_E': 0.25,
-            'theta_c': 0.95, 'tau_c': 0.02, 'K_c': 8.0, 'tau_K': 2, 'M_A': 5.0,
-            'K_fam': 9.0, 'R_min': 3.0, 'C_fam': 0.25, 'min_plays': 4,
-            'beta_track': 0.5, 'beta_artist_pop': 0.15, 'beta_artist_personal': 0.0,
-            'beta_genre': 0.2, 'beta_streams_total': 0.05, 'beta_streams_daily': 0.05, 'beta_artist': 0.0
-        };
-        
-        this.populateAdvancedSettingsForm(defaults);
-        this.currentAdvancedParams = { ...defaults };
-        this.activeAdvancedParams = { ...defaults };
-    }
-    
-    async resetAdvancedParametersToDefaults() {
-        
-        try {
-            // Fetch fresh defaults from API
-            const defaults = await this.api.get('/api/default_ranking_config');
-            
-            // Populate form with defaults
-            this.populateAdvancedSettingsForm(defaults);
-            
-            // Update current params but DON'T update active params 
-            // (so the button will detect changes)
-            this.currentAdvancedParams = { ...defaults };
-            
-            // Update button state - should enable the button if current != active
-            this.updateAdvancedRerunButtonState();
-        } catch (error) {
-            console.error('Error fetching defaults for reset:', error);
-            return;
-        }
-        
-        // Track reset action
-        this.analytics.trackEvent('Advanced Parameters Reset', {
-            'reset_to_defaults': true
-        });
-    }
-    
+
     getActiveNoHistoryWeights() {
         // If we don't have active weights but have current weights, use current weights
         let weightsToUse = this.activeNoHistoryWeights;
         if (!weightsToUse || Object.keys(weightsToUse).length === 0) {
             weightsToUse = this.currentNoHistoryWeights;
         }
-        
+
         return weightsToUse || {};
     }
-    
-    getActiveAdvancedParams() {
-        
-        // If we don't have active params but have current params, use current params
-        let paramsToUse = this.activeAdvancedParams;
-        if (!paramsToUse || Object.keys(paramsToUse).length === 0) {
-            paramsToUse = this.currentAdvancedParams;
-        }
-        
-        // Return empty object if still no parameters
-        if (!paramsToUse || Object.keys(paramsToUse).length === 0) {
-            return {};
-        }
-        
-        // Convert parameter names to match backend expectation
-        const backendParams = {};
-        for (const [key, value] of Object.entries(paramsToUse)) {
-            // Most parameters can be sent directly, but handle special cases if needed
-            backendParams[key] = value;
-        }
-        
-        return backendParams;
-    }
-    
+
     showPersonalizationControls(hasHistory) {
         const controls = document.getElementById('personalization-controls');
         const resultsRight = document.querySelector('.results-right');
         const topArtistsFilterOption = document.getElementById('top-artists-filter-option');
-        const advancedSettingsSection = document.getElementById('advanced-settings-section');
         const noHistoryWeightsSection = this.domElements.noHistoryWeightsSection;
-        
+
         if (controls && resultsRight) {
             this.hasPersonalizationHistory = hasHistory;
-            
+
             if (hasHistory) {
                 // Move personalization controls to results-right area
                 controls.style.display = 'flex';
                 resultsRight.appendChild(controls);
-                
+
                 // Initialize slider value positions
                 this.initializeSliderPositions();
-                
-                // Show advanced settings section in history mode
-                if (advancedSettingsSection) {
-                    advancedSettingsSection.style.display = 'block';
-                }
-                
+
                 // Hide no-history weights section in history mode
                 if (noHistoryWeightsSection) {
                     noHistoryWeightsSection.style.display = 'none';
                 }
-                
-                // Initialize advanced parameters with defaults if not already done
-                if (!this.currentAdvancedParams || Object.keys(this.currentAdvancedParams).length === 0) {
-                    this.populateAdvancedSettingsFormWithDefaults();
-                }
-                
+
                 // Hide top artists filter in history mode
                 if (topArtistsFilterOption) {
                     topArtistsFilterOption.style.display = 'none';
@@ -2852,17 +2596,12 @@ class SemanticSearchApp {
             } else {
                 // Hide personalization controls in no-history mode
                 controls.style.display = 'none';
-                
-                // Hide advanced settings section in no-history mode
-                if (advancedSettingsSection) {
-                    advancedSettingsSection.style.display = 'none';
-                }
-                
+
                 // Show no-history weights section in no-history mode
                 if (noHistoryWeightsSection) {
                     noHistoryWeightsSection.style.display = 'block';
                 }
-                
+
                 // Show top artists filter in no-history mode
                 if (topArtistsFilterOption) {
                     topArtistsFilterOption.style.display = 'block';

@@ -235,8 +235,6 @@ def search():
         song_idx = data.get('song_idx')
         
         # Personalization parameters
-        lambda_val = float(data.get('lambda_val', 0.5))  # Semantic vs personal weight
-        lambda_val = np.clip(lambda_val, 0.0, 1.0)  # Ensure valid range
         familiarity_min = float(data.get('familiarity_min', 0.0))  # Min familiarity
         familiarity_max = float(data.get('familiarity_max', 1.0))  # Max familiarity
         familiarity_min = np.clip(familiarity_min, 0.0, 1.0)
@@ -250,14 +248,12 @@ def search():
         advanced_params = {}
         # List of valid advanced parameter names (matching RankingConfig)
         valid_advanced_params = {
-            'H_c', 'H_E', 'gamma_s', 'gamma_f', 'kappa', 'alpha_0', 'beta_0', 'K_s',
-            'K_E', 'gamma_A', 'eta', 'tau', 'beta_f', 'K_life', 'K_recent', 'psi',
-            'k_neighbors', 'sigma', 'knn_embed_type', 'beta_p', 'beta_s', 'beta_a',
-            'kappa_E', 'theta_c', 'tau_c', 'K_c', 'tau_K', 'M_A', 'K_fam', 'R_min',
-            'C_fam', 'min_plays',
-            # New 9-weight system parameters
+            # Core personalization (history mode)
+            'lambda_val', 'familiarity_min', 'familiarity_max',
+            # Component weights (always)
             'a0_song_sim', 'a1_artist_sim', 'a2_total_streams', 'a3_daily_streams',
-            'b0_genres', 'b1_vocal_style', 'b2_production_sound_design', 'b3_lyrical_meaning', 'b4_mood_atmosphere'
+            # Descriptor weights (always)
+            'b0_genres', 'b1_vocal_style', 'b2_production_sound_design', 'b3_lyrical_meaning', 'b4_mood_atmosphere', 'b5_tags'
         }
         
         for param_name in valid_advanced_params:
@@ -265,7 +261,6 @@ def search():
                 advanced_params[param_name] = data[param_name]
         
         logger.info(f"🔧 Advanced parameters received: {advanced_params}")
-        logger.info(f"🔧 Lambda value: {lambda_val}")
         logger.info(f"🔧 Familiarity range: [{familiarity_min}, {familiarity_max}]")
         
         # Validate pagination parameters
@@ -283,7 +278,7 @@ def search():
             
             results, total_count = search_engine.similarity_search(
                 query_embedding, k=limit, offset=offset,
-                lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                familiarity_min=familiarity_min, familiarity_max=familiarity_max,
                 ranking_engine=ranking_engine,
                 **advanced_params
             )
@@ -322,7 +317,7 @@ def search():
                 logger.info(f"Starting similarity search with {len(search_engine.songs)} total songs")
                 results, total_count = search_engine.similarity_search(
                     query_embedding, k=limit, offset=offset,
-                    lambda_val=lambda_val, familiarity_min=familiarity_min, familiarity_max=familiarity_max,
+                    familiarity_min=familiarity_min, familiarity_max=familiarity_max,
                     query_track_id=track_id,  # Enable song-to-song artist similarities
                     ranking_engine=ranking_engine,
                     **advanced_params
@@ -349,7 +344,6 @@ def search():
             'search_duration_seconds': round(search_duration, 3),
             'is_paginated_search': offset > 0,
             'returned_count': len(results),
-            'lambda_val': lambda_val,
             'familiarity_min': familiarity_min,
             'familiarity_max': familiarity_max
         }
@@ -379,7 +373,6 @@ def search():
             'search_type': search_type,
             'descriptors': 'all',  # Using all descriptors simultaneously
             'query': query_text,
-            'search_weights': search_engine.get_search_weights(),
             'pagination': {
                 'offset': offset,
                 'limit': limit,
@@ -402,87 +395,6 @@ def search():
         logger.error(f"Search error: {e}")
         return jsonify({'error': 'Search failed'}), 500
 
-@app.route('/api/search_weights', methods=['GET'])
-def get_search_weights():
-    """Get current search weights and configuration."""
-    if search_engine is None:
-        return jsonify({'error': 'Search engine not initialized'}), 500
-
-    try:
-        weights = search_engine.get_search_weights()
-        return jsonify(weights)
-    except Exception as e:
-        logger.error(f"Failed to get search weights: {e}")
-        return jsonify({'error': 'Failed to retrieve search weights'}), 500
-
-@app.route('/api/search_weights', methods=['PUT'])
-def update_search_weights():
-    """Update search weights."""
-    if search_engine is None:
-        return jsonify({'error': 'Search engine not initialized'}), 500
-
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-
-        # Update the search engine config
-        search_engine.config.update_weights(data)
-
-        logger.info(f"Updated search weights: {data}")
-
-        # Return the updated weights
-        weights = search_engine.get_search_weights()
-        return jsonify(weights)
-
-    except Exception as e:
-        logger.error(f"Failed to update search weights: {e}")
-        return jsonify({'error': 'Failed to update search weights'}), 500
-
-# Keep ranking weights endpoints for backward compatibility (but with proper logic)
-@app.route('/api/ranking_weights', methods=['GET'])
-def get_ranking_weights():
-    """Get current ranking weights (legacy endpoint)."""
-    if ranking_engine is None:
-        # Return search weights as fallback
-        return get_search_weights()
-
-    try:
-        weights = ranking_engine.config.to_dict()
-        weights.update({
-            'version': '3.0',
-            'has_history': getattr(ranking_engine, 'has_history', False),
-            'ranking_config': True
-        })
-        return jsonify(weights)
-    except Exception as e:
-        logger.error(f"Failed to get ranking weights: {e}")
-        return jsonify({'error': 'Failed to retrieve ranking weights'}), 500
-
-@app.route('/api/ranking_weights', methods=['PUT'])
-def update_ranking_weights():
-    """Update ranking weights (legacy endpoint)."""
-    if ranking_engine is None:
-        # Fallback to search weights
-        return update_search_weights()
-
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-
-        # Update the ranking engine config
-        ranking_engine.config.update_weights(data)
-
-        logger.info(f"Updated ranking weights: {data}")
-
-        # Return the updated weights
-        weights = ranking_engine.config.to_dict()
-        return jsonify(weights)
-
-    except Exception as e:
-        logger.error(f"Failed to update ranking weights: {e}")
-        return jsonify({'error': 'Failed to update ranking weights'}), 500
 
 # Helper functions for routes
 
@@ -933,20 +845,6 @@ def get_default_search_config():
         logger.error(f"Error getting default search config: {e}")
         return jsonify({'error': 'Failed to retrieve default search configuration'}), 500
 
-@app.route('/api/default_ranking_config')
-def get_default_ranking_config():
-    """Get default ranking configuration parameters (legacy endpoint)."""
-    try:
-        # For backward compatibility, return search config if no ranking engine
-        if ranking_engine is None:
-            return get_default_search_config()
-
-        # Create a default RankingConfig instance and return its parameters
-        default_config = ranking.RankingConfig()
-        return jsonify(default_config.to_dict())
-    except Exception as e:
-        logger.error(f"Error getting default ranking config: {e}")
-        return jsonify({'error': 'Failed to retrieve default ranking configuration'}), 500
 
 
 

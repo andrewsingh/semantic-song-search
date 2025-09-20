@@ -827,7 +827,7 @@ class MusicSearchEngine:
     
 
     def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0,
-                         lambda_val: float = 0.5, familiarity_min: float = 0.0, familiarity_max: float = 1.0,
+                         familiarity_min: float = 0.0, familiarity_max: float = 1.0,
                          query_track_id: str = None, ranking_engine=None,
                          **advanced_params) -> Tuple[List[Dict], int]:
         """
@@ -837,22 +837,17 @@ class MusicSearchEngine:
             query_embedding: Normalized query embedding (or dict of embeddings for song-to-song)
             k: Number of results to return
             offset: Pagination offset
-            lambda_val: Weight for semantic vs personal utility (0=personal, 1=semantic)
             familiarity_min: Minimum familiarity score to include (0.0-1.0)
             familiarity_max: Maximum familiarity score to include (0.0-1.0)
             query_track_id: If provided, enables song-to-song search (artist extracted automatically)
             ranking_engine: Optional ranking engine for personalization
-            **advanced_params: Additional parameters for search configuration
+            **advanced_params: Additional parameters including lambda_val and other weights
         
         Returns:
             Tuple of (results, total_count)
         """
         t_similarity_search_start = time.time()
         
-        # Update lambda_val in config for scoring
-        self.config.lambda_val = lambda_val
-        logger.info(f"🔧 Updated lambda_val in search config: {lambda_val}")
-
         # Update advanced parameters if provided
         if advanced_params:
             logger.info(f"🔧 Updating search config with advanced params")
@@ -1091,12 +1086,3 @@ class MusicSearchEngine:
         else:
             return obj
 
-    def get_search_weights(self) -> Dict:
-        """Get current search weights for display."""
-        weights = self.config.to_dict()
-        weights.update({
-            'version': '3.0',  # Updated to reflect new clean separation
-            'has_history': False,  # Search engine doesn't track history
-            'search_config': True
-        })
-        return weights
