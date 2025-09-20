@@ -23,24 +23,28 @@ class SearchConfig:
     """Configuration class for search engine hyperparameters."""
 
     def __init__(self,
-        # Core semantic vs utility balance
+        # Top-level component weights (a_i) - should sum to 1.0 - USER CONFIGURABLE
+        a0_song_sim: float,        # Weight for song descriptor similarity
+        a1_artist_sim: float,      # Weight for artist descriptor similarity
+        a2_total_streams: float,   # Weight for total streams score
+        a3_daily_streams: float,   # Weight for daily streams score
+
+        # Song descriptor weights (b_i) - should sum to 1.0 - USER CONFIGURABLE
+        b0_genres: float,                   # Weight for song genres similarity
+        b1_vocal_style: float,             # Weight for vocal style similarity
+        b2_production_sound_design: float, # Weight for production & sound design similarity
+        b3_lyrical_meaning: float,         # Weight for lyrical meaning similarity
+        b4_mood_atmosphere: float,         # Weight for mood & atmosphere similarity
+        b5_tags: float,                    # Weight for tags similarity
+
+        # Core semantic vs utility balance - OPTIONAL (has default)
         lambda_val: float = 0.5,    # Relevance vs utility balance (λ in formula)
 
-        # Top-level component weights (a_i) - should sum to 1.0
-        a0_song_sim: float = 0.6,        # Weight for song descriptor similarity
-        a1_artist_sim: float = 0.3,      # Weight for artist descriptor similarity
-        a2_total_streams: float = 0.05,   # Weight for total streams score
-        a3_daily_streams: float = 0.05,   # Weight for daily streams score
+        # Familiarity filtering - OPTIONAL (has defaults)
+        familiarity_min: float = 0.0,  # Minimum familiarity threshold
+        familiarity_max: float = 1.0,  # Maximum familiarity threshold
 
-        # Song descriptor weights (b_i) - should sum to 1.0
-        b0_genres: float = 0.3,                   # Weight for song genres similarity
-        b1_vocal_style: float = 0.15,             # Weight for vocal style similarity
-        b2_production_sound_design: float = 0.15, # Weight for production & sound design similarity
-        b3_lyrical_meaning: float = 0.1,         # Weight for lyrical meaning similarity
-        b4_mood_atmosphere: float = 0.2,         # Weight for mood & atmosphere similarity
-        b5_tags: float = 0.1,                    # Weight for tags similarity
-
-        # Artist descriptor weights (c_i) - should sum to 1.0
+        # Artist descriptor weights (c_i) - should sum to 1.0 - INTERNAL (has defaults)
         c0_artist_genres: float = 0.375,                     # Weight for artist genres similarity
         c1_artist_vocal_style: float = 0.15,               # Weight for artist vocal style similarity
         c2_artist_production_sound_design: float = 0.15,   # Weight for artist production similarity
@@ -48,15 +52,17 @@ class SearchConfig:
         c4_artist_mood_atmosphere: float = 0.125,           # Weight for artist mood similarity
         c5_artist_cultural_context_scene: float = 0.125,    # Weight for artist cultural context similarity
 
-        # Stream-based popularity priors
+        # Stream-based popularity priors - INTERNAL (has defaults)
         K_total: float = 1e7,           # Total streams normalization constant
         K_daily: float = 1e4,           # Daily streams normalization constant
 
-        # Artist gender similarity bonus
+        # Artist gender similarity bonus - INTERNAL (has defaults)
         gender_similarity_bonus: float = 1.05,              # Multiplicative bonus for same-gender artists (1.0 = no bonus)
         ):
-            """Initialize search configuration with default values."""
+            """Initialize search configuration with provided values."""
             self.lambda_val = lambda_val
+            self.familiarity_min = familiarity_min
+            self.familiarity_max = familiarity_max
 
             # Top-level weights
             self.a0_song_sim = a0_song_sim
@@ -113,6 +119,8 @@ class SearchConfig:
         """Convert config to dictionary format."""
         return {
             'lambda': self.lambda_val,
+            'familiarity_min': self.familiarity_min,
+            'familiarity_max': self.familiarity_max,
             'a0_song_sim': self.a0_song_sim,
             'a1_artist_sim': self.a1_artist_sim,
             'a2_total_streams': self.a2_total_streams,
@@ -169,8 +177,8 @@ class MusicSearchEngine:
         self.shared_genre_store_path = shared_genre_store_path
         self.profiles_file = profiles_file
 
-        # Search configuration
-        self.config = config or SearchConfig()
+        # Search configuration (optional - can be set later)
+        self.config = config
 
         # Data structures
         self.songs = []
@@ -236,7 +244,7 @@ class MusicSearchEngine:
         # Build text search index
         self._build_text_search_index()
 
-        # Compute track streams for popularity scoring
+        # Compute track streams for popularity scoring using default normalization constants
         self._compute_track_streams()
 
         logger.info(f"Loaded {len(self.songs)} songs with embeddings")
@@ -661,7 +669,11 @@ class MusicSearchEngine:
             return 0.0
 
     def _compute_track_streams(self):
-        """Compute track stream scores for popularity scoring."""
+        """Compute track stream scores for popularity scoring using default normalization constants."""
+        # Use default normalization constants (these are internal and rarely need to change)
+        K_total_default = 1e7
+        K_daily_default = 1e4
+
         track_streams = {}
 
         for song in self.songs:
@@ -672,10 +684,10 @@ class MusicSearchEngine:
             # Compute stream-based scores
             streams_data = song.get('streams', {})
             streams_total = streams_data.get('streams_total', 0)
-            S_total = streams_total / (streams_total + self.config.K_total)
+            S_total = streams_total / (streams_total + K_total_default)
 
             streams_daily = streams_data.get('streams_daily', 0)
-            S_daily = streams_daily / (streams_daily + self.config.K_daily)
+            S_daily = streams_daily / (streams_daily + K_daily_default)
 
             track_streams[track_id] = {
                 'S_total': S_total,
@@ -826,8 +838,7 @@ class MusicSearchEngine:
         return embedding_lookup[track_id]
     
 
-    def similarity_search(self, query_embedding: np.ndarray, k: int = 20, offset: int = 0,
-                         familiarity_min: float = 0.0, familiarity_max: float = 1.0,
+    def similarity_search(self, query_embedding: np.ndarray, k: int, offset: int = 0,
                          query_track_id: str = None, ranking_engine=None,
                          **advanced_params) -> Tuple[List[Dict], int]:
         """
@@ -837,21 +848,21 @@ class MusicSearchEngine:
             query_embedding: Normalized query embedding (or dict of embeddings for song-to-song)
             k: Number of results to return
             offset: Pagination offset
-            familiarity_min: Minimum familiarity score to include (0.0-1.0)
-            familiarity_max: Maximum familiarity score to include (0.0-1.0)
             query_track_id: If provided, enables song-to-song search (artist extracted automatically)
             ranking_engine: Optional ranking engine for personalization
-            **advanced_params: Additional parameters including lambda_val and other weights
+            **advanced_params: Additional parameters including lambda_val, familiarity bounds, and other weights
         
         Returns:
             Tuple of (results, total_count)
         """
         t_similarity_search_start = time.time()
         
-        # Update advanced parameters if provided
-        if advanced_params:
-            logger.info(f"🔧 Updating search config with advanced params")
-            self.config.update_weights(advanced_params)
+        # Create search config from advanced parameters
+        if not advanced_params:
+            raise ValueError("Advanced parameters are required and must include all weight values")
+
+        logger.info(f"🔧 Creating search config from advanced params")
+        self.config = SearchConfig(**advanced_params)
 
         # Determine search type
         search_type = 'song' if query_track_id is not None else 'text'
@@ -971,7 +982,7 @@ class MusicSearchEngine:
             try:
                 # Apply familiarity filtering (placeholder for now)
                 familiarity = 1.0  # Default to familiar for no-history mode
-                if familiarity < familiarity_min or familiarity > familiarity_max:
+                if familiarity < self.config.familiarity_min or familiarity > self.config.familiarity_max:
                     continue
 
                 # Compute final score using new 4-component system with percentile

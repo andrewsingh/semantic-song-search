@@ -102,8 +102,8 @@ class SemanticSearchApp {
             nhB5Tags: document.getElementById('nh_b5_tags')
         };
         
-        // Initialize default weights from server-rendered DOM values
-        this.defaultNoHistoryWeights = this.getDefaultWeightsFromDOM();
+        // Store the original defaults for reset functionality
+        this.defaultNoHistoryWeights = { ...this.currentNoHistoryWeights };
         
         // Initialize Spotify Player
         this.player = new SpotifyPlayer(this);
@@ -112,35 +112,29 @@ class SemanticSearchApp {
     }
     
     init() {
+        this.initializeWeightInputs();
         this.bindEventListeners();
         this.checkAuthStatus();
-        
+
         // Ensure currentSearchType is synced with the initial HTML state
         this.currentSearchType = this.getSearchType();
-        
-        
+
+
         // Track initial page load
         this.analytics.trackPageLoad();
     }
-    
-    getDefaultWeightsFromDOM() {
-        // Extract default values from the server-rendered DOM inputs
-        return {
-            // Top-level weights (a_i)
-            a0_song_sim: parseFloat(this.domElements.nhA0SongSim?.value || 0.5),
-            a1_artist_sim: parseFloat(this.domElements.nhA1ArtistSim?.value || 0.3),
-            a2_total_streams: parseFloat(this.domElements.nhA2TotalStreams?.value || 0.1),
-            a3_daily_streams: parseFloat(this.domElements.nhA3DailyStreams?.value || 0.1),
-            
-            // Song descriptor weights (b_i)
-            b0_genres: parseFloat(this.domElements.nhB0Genres?.value || 0.25),
-            b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || 0.15),
-            b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || 0.15),
-            b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || 0.15),
-            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || 0.15),
-            b5_tags: parseFloat(this.domElements.nhB5Tags?.value || 0.15)
-        };
+
+    initializeWeightInputs() {
+        // Initialize input field values from JavaScript defaults
+        const weightInputs = document.querySelectorAll('input[data-weight-name]');
+        weightInputs.forEach(input => {
+            const weightName = input.getAttribute('data-weight-name');
+            if (weightName && this.currentNoHistoryWeights.hasOwnProperty(weightName)) {
+                input.value = this.currentNoHistoryWeights[weightName];
+            }
+        });
     }
+    
     
     
     // Helper function to get current search type from segmented control
@@ -2515,22 +2509,12 @@ class SemanticSearchApp {
         if (this.domElements.nhB4MoodAtmosphere && this.defaultNoHistoryWeights.b4_mood_atmosphere !== undefined) {
             this.domElements.nhB4MoodAtmosphere.value = this.defaultNoHistoryWeights.b4_mood_atmosphere;
         }
+        if (this.domElements.nhB5Tags && this.defaultNoHistoryWeights.b5_tags !== undefined) {
+            this.domElements.nhB5Tags.value = this.defaultNoHistoryWeights.b5_tags;
+        }
 
-        // Sync currentNoHistoryWeights with the new DOM values
-        this.currentNoHistoryWeights = {
-            // Top-level weights (a_i)
-            a0_song_sim: parseFloat(this.domElements.nhA0SongSim?.value || this.defaultNoHistoryWeights.a0_song_sim),
-            a1_artist_sim: parseFloat(this.domElements.nhA1ArtistSim?.value || this.defaultNoHistoryWeights.a1_artist_sim),
-            a2_total_streams: parseFloat(this.domElements.nhA2TotalStreams?.value || this.defaultNoHistoryWeights.a2_total_streams),
-            a3_daily_streams: parseFloat(this.domElements.nhA3DailyStreams?.value || this.defaultNoHistoryWeights.a3_daily_streams),
-
-            // Song descriptor weights (b_i)
-            b0_genres: parseFloat(this.domElements.nhB0Genres?.value || this.defaultNoHistoryWeights.b0_genres),
-            b1_vocal_style: parseFloat(this.domElements.nhB1VocalStyle?.value || this.defaultNoHistoryWeights.b1_vocal_style),
-            b2_production_sound_design: parseFloat(this.domElements.nhB2ProductionSoundDesign?.value || this.defaultNoHistoryWeights.b2_production_sound_design),
-            b3_lyrical_meaning: parseFloat(this.domElements.nhB3LyricalMeaning?.value || this.defaultNoHistoryWeights.b3_lyrical_meaning),
-            b4_mood_atmosphere: parseFloat(this.domElements.nhB4MoodAtmosphere?.value || this.defaultNoHistoryWeights.b4_mood_atmosphere)
-        };
+        // Sync currentNoHistoryWeights with the reset values
+        this.currentNoHistoryWeights = { ...this.defaultNoHistoryWeights };
 
         // Update the rerun button state since values may have changed
         this.updateNoHistoryRerunButtonState();

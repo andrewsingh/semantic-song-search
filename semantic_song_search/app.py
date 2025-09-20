@@ -149,8 +149,7 @@ def init_search_engine(songs_file: str = None, embeddings_file: str = None, hist
         
         # Create search engine (no history - clean separation)
         profiles_path = profiles_file or getattr(constants, 'DEFAULT_PROFILES_FILE', None)
-        search_config = SearchConfig()
-        search_engine = MusicSearchEngine(songs_path, embeddings_path, artist_embeddings_path, shared_genre_store_path, profiles_path, config=search_config)
+        search_engine = MusicSearchEngine(songs_path, embeddings_path, artist_embeddings_path, shared_genre_store_path, profiles_path)
 
         # Store history path for ranking engine initialization if needed
         search_engine._history_path = history_path_arg
@@ -212,10 +211,9 @@ def index():
             'is_new_session': True
         })
     
-    # Pass debug flag and default config values to template
+    # Pass debug flag to template
     debug_mode = getattr(args, 'debug', False) if 'args' in globals() and args else False
-    default_config = SearchConfig()
-    return render_template('index.html', debug_mode=debug_mode, default_config=default_config)
+    return render_template('index.html', debug_mode=debug_mode)
 
 @app.route('/api/search', methods=['POST'])
 def search():
@@ -230,7 +228,7 @@ def search():
         query_text = data.get('query', '').strip()
         search_type = data.get('search_type', data.get('type', 'text'))  # Accept both for compatibility
         # embed_type removed - using all descriptors simultaneously
-        limit = int(data.get('k', data.get('limit', 20)))  # Accept both 'k' and 'limit'
+        limit = int(data.get('k') or data.get('limit'))  # Accept both 'k' and 'limit', both required
         offset = int(data.get('offset', 0))
         song_idx = data.get('song_idx')
         
@@ -278,7 +276,6 @@ def search():
             
             results, total_count = search_engine.similarity_search(
                 query_embedding, k=limit, offset=offset,
-                familiarity_min=familiarity_min, familiarity_max=familiarity_max,
                 ranking_engine=ranking_engine,
                 **advanced_params
             )
@@ -317,7 +314,6 @@ def search():
                 logger.info(f"Starting similarity search with {len(search_engine.songs)} total songs")
                 results, total_count = search_engine.similarity_search(
                     query_embedding, k=limit, offset=offset,
-                    familiarity_min=familiarity_min, familiarity_max=familiarity_max,
                     query_track_id=track_id,  # Enable song-to-song artist similarities
                     ranking_engine=ranking_engine,
                     **advanced_params
@@ -833,17 +829,6 @@ def top_artists():
     except Exception as e:
         logger.error(f"Error getting top artists: {e}")
         return jsonify({'error': 'Failed to retrieve top artists'}), 500
-
-@app.route('/api/default_search_config')
-def get_default_search_config():
-    """Get default search configuration parameters."""
-    try:
-        # Create a default SearchConfig instance and return its parameters
-        default_config = SearchConfig()
-        return jsonify(default_config.to_dict())
-    except Exception as e:
-        logger.error(f"Error getting default search config: {e}")
-        return jsonify({'error': 'Failed to retrieve default search configuration'}), 500
 
 
 
