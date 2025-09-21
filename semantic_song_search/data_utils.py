@@ -48,18 +48,35 @@ def load_song_metadata(songs_file: str) -> List[Dict]:
             logger.warning(f"Invalid song metadata at index {i}: {song_metadata}")
             continue
             
-        if 'id' not in song_metadata:
+        # Extract ID from multiple possible locations
+        song_id = (song_metadata.get('id') or
+                   song_metadata.get('track_id') or
+                   song_metadata.get('metadata', {}).get('song_id'))
+
+        if not song_id:
             logger.warning(f"Song at index {i} missing 'id' field, skipping")
             continue
-            
-        # Create a song object with all Spotify metadata
-        song = dict(song_metadata)  # Copy all Spotify metadata
-        song['track_id'] = song['id']  # Ensure track_id is available as 'track_id' for clarity
+
+        # Create a song object with all metadata
+        song = dict(song_metadata)  # Copy all metadata
+        song['track_id'] = song_id  # Ensure track_id is available as 'track_id' for clarity
+        song['id'] = song_id  # Also ensure 'id' field is available
         
         # For backwards compatibility during transition, derive original_song and original_artist
-        song['original_song'] = song_metadata.get('name', '')
-        if song_metadata.get('artists') and len(song_metadata['artists']) > 0:
+        # Try multiple locations for the song name and artist
+        song['original_song'] = (song_metadata.get('original_song') or
+                                song_metadata.get('name') or
+                                song_metadata.get('metadata', {}).get('name', ''))
+
+        # Try multiple locations for the artist
+        if song_metadata.get('original_artist'):
+            song['original_artist'] = song_metadata['original_artist']
+        elif song_metadata.get('artists') and len(song_metadata['artists']) > 0:
             song['original_artist'] = song_metadata['artists'][0]['name']
+        elif song_metadata.get('metadata', {}).get('artists') and len(song_metadata['metadata']['artists']) > 0:
+            song['original_artist'] = song_metadata['metadata']['artists'][0]
+        elif song_metadata.get('metadata', {}).get('artist'):
+            song['original_artist'] = song_metadata['metadata']['artist']
         else:
             song['original_artist'] = ''
             
