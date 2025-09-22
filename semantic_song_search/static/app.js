@@ -75,7 +75,6 @@ class SemanticSearchApp {
             loadMoreContainer: document.getElementById('load-more-container'),
             exportStatus: document.getElementById('export-status'),
             exportBtn: document.getElementById('export-btn'),
-            // embedType: document.getElementById('embed-type'), // Removed - using all descriptors simultaneously
             resultsContainer: document.getElementById('results-container'),
             resultsCount: document.getElementById('results-count'),
             resultsHeader: document.getElementById('results-header'),
@@ -175,9 +174,7 @@ class SemanticSearchApp {
         } else {
             console.warn('Search type radio buttons not found in DOM');
         }
-        
-        // Embedding type selection removed - using all descriptors simultaneously
-        
+                
         // Search input
         const searchInput = this.domElements.searchInput;
         searchInput.addEventListener('input', (e) => {
@@ -378,7 +375,6 @@ class SemanticSearchApp {
         }
     }
     
-    // handleEmbedTypeChange removed - using all descriptors simultaneously
     
     async handleSearchInput(query) {
         const searchType = this.getSearchType();
@@ -500,7 +496,6 @@ class SemanticSearchApp {
     
     extractSearchParameters() {
         const searchType = this.getSearchType();
-        // embedType removed - using all descriptors simultaneously
         const query = this.domElements.searchInput.value.trim();
         const topArtistsFilter = this.domElements.topArtistsFilter;
         const filterTopArtists = topArtistsFilter.checked && !topArtistsFilter.disabled;
@@ -590,7 +585,6 @@ class SemanticSearchApp {
 
         const requestData = {
             search_type: searchType,
-            // embed_type removed - using all descriptors simultaneously
             query: query,
             k: this.search_k,
             offset: 0
@@ -840,7 +834,6 @@ class SemanticSearchApp {
                 rank: startIndex + index + 1, 
                 similarity: song.similarity,
                 fieldValue: song.field_value,
-                // embedType removed - using all descriptors
                 isSelected: this.selectedSongs.has(song.song_idx)
             });
 
@@ -1082,7 +1075,6 @@ class SemanticSearchApp {
         const mockData = {
             results: this.searchResults,
             search_type: this.currentSearchData?.search_type || 'text',
-            // embed_type removed - using all descriptors
             query: this.currentSearchData?.query || '',
             ranking_weights: {
                 ...newWeights,
@@ -1107,9 +1099,7 @@ class SemanticSearchApp {
     
     createSongCardHTML(song, options = {}) {
         const { rank, similarity, isQuery = false, fieldValue = null, isSelected = false } = options;
-        // embedType removed - using all descriptors simultaneously
-        
-        
+
         let tagsHTML = '';
         let playButtonHTML = '';
         if (!isQuery && song.spotify_id) {
@@ -1283,76 +1273,7 @@ class SemanticSearchApp {
             </div>
         `;
     }
-    
-    formatFieldValueForDisplay(fieldValue, embedType) {
-        /**
-         * Format field value content for accordion display based on embedding type
-         */
-        // Handle null/undefined values
-        if (fieldValue === null || fieldValue === undefined) {
-            return '<div class="generic-content"><em>No content available</em></div>';
-        }
-        
-        const escapedValue = escapeHtml(String(fieldValue)); // Ensure it's a string
-        
-        switch (embedType) {
-            case 'full_profile':
-                // Format the full profile with proper line breaks and structure
-                return `<div class="profile-content">${escapedValue.replace(/\n/g, '<br>')}</div>`;
-                
-            case 'sound_aspect':
-                return `<div class="aspect-content sound-aspect">${escapedValue}</div>`;
-                
-            case 'meaning_aspect':
-                return `<div class="aspect-content meaning-aspect">${escapedValue}</div>`;
-                
-            case 'mood_aspect':
-                return `<div class="aspect-content mood-aspect">${escapedValue}</div>`;
-                
-            case 'tags_genres':
-                // Display tags and genres as a nicely formatted list
-                // Handle empty or invalid strings gracefully
-                if (!fieldValue || typeof fieldValue !== 'string') {
-                    return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
-                }
-                
-                const items = String(fieldValue).split(',').map(item => item.trim()).filter(item => item);
-                
-                if (items.length === 0) {
-                    return '<div class="tags-genres-content"><em>No tags or genres available</em></div>';
-                }
-                
-                return `
-                    <div class="tags-genres-content">
-                        ${items.map(item => `<span class="tag-genre-item">${escapeHtml(item)}</span>`).join('')}
-                    </div>
-                `;
-                
-            default:
-                return `<div class="generic-content">${escapedValue}</div>`;
-        }
-    }
-    
-    getAccordionTitle(embedType) {
-        /**
-         * Get display title for accordion based on embedding type
-         */
-        switch (embedType) {
-            case 'full_profile':
-                return 'Full Profile';
-            case 'sound_aspect':
-                return 'Sound Description';
-            case 'meaning_aspect':
-                return 'Meaning & Lyrics';
-            case 'mood_aspect':
-                return 'Mood & Feeling';
-            case 'tags_genres':
-                return 'All Tags & Genres';
-            default:
-                return 'Details';
-        }
-    }
-    
+
     toggleAccordion(toggleButton) {
         /**
          * Toggle accordion open/closed state
@@ -1806,7 +1727,6 @@ class SemanticSearchApp {
         const mockData = {
             results: this.searchResults,
             search_type: this.currentSearchData?.search_type || 'text',
-            // embed_type removed - using all descriptors
             query: this.currentSearchData?.query || '',
             pagination: {
                 offset: 0,
@@ -2215,8 +2135,7 @@ class SemanticSearchApp {
         exportStatus.className = `export-status ${type}`;
         exportStatus.style.display = 'block';
         
-        // Success messages now persist until accordion is closed or refreshed
-        // (auto-hide removed to keep playlist creation success visible)
+        // Success messages persist until accordion is closed or refreshed
     }
     
     hideExportStatus() {
