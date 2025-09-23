@@ -1,0 +1,466 @@
+/* ==========================================================================
+   RESPONSIVE STYLES & ADDITIONAL COMPONENTS
+
+   Contains:
+   - Mobile & Tablet Responsive Breakpoints
+   - Load More Button Styling
+   - No Results Message Display
+   - Song Card Scoring Details
+   - Personalization Controls & Sliders
+   - Range Slider Components
+   - Mobile Attribution Adjustments
+   ========================================================================== */
+
+/* Load More Button */
+.load-more-container {
+    display: flex;
+    justify-content: center;
+    margin: var(--space-xl) 0;
+}
+
+.load-more-btn {
+    background: var(--color-primary-alpha-80);
+    border: none;
+    border-radius: var(--radius-lg);
+    padding: var(--space-md) var(--space-xl);
+    font-size: 1rem;
+    font-weight: 600;
+    color: white;
+    cursor: pointer;
+    transition: var(--transition-normal);
+    box-shadow: var(--shadow-md);
+}
+
+.load-more-btn:hover:not(:disabled) {
+    background: #5a5a5a;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(90, 90, 90, 0.4);
+}
+
+.load-more-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.load-more-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* No Results Message */
+.no-results-message {
+    text-align: center;
+    padding: var(--space-2xl);
+    color: var(--color-text-tertiary);
+}
+
+.no-results-message h3 {
+    font-size: 1.5rem;
+    margin-bottom: var(--space-md);
+    color: var(--color-text-muted);
+}
+
+.no-results-message p {
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+/* Song Card Scoring Details */
+.scoring-details {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    padding: 0.75rem;
+    margin: var(--space-sm) 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+}
+
+.scoring-component {
+    display: flex;
+    align-items: center;
+    font-size: 0.85rem;
+    position: relative;
+}
+
+.scoring-component.no-history {
+    opacity: 0.6;
+}
+
+.component-label {
+    color: var(--color-text-tertiary);
+}
+
+.component-value {
+    color: var(--color-primary);
+    font-weight: 500;
+    min-width: 35px;
+}
+
+.component-raw {
+    color: var(--color-text-tertiary);
+    font-size: 0.75rem;
+}
+
+.scoring-component .no-history-indicator {
+    color: #666;
+    font-size: 0.7rem;
+    margin-left: 2px;
+}
+
+/* Personalization Controls */
+.personalization-controls {
+    padding: var(--space-md);
+    margin: var(--space-md) 0;
+    transition: var(--transition-normal);
+}
+
+/* Personalization controls when moved to results area */
+.results-right .personalization-controls {
+    margin: 0;
+    padding: 0.75rem;
+}
+
+.results-right .control-group {
+    gap: var(--space-xl);
+}
+
+.results-right .slider-container {
+    min-width: 200px;
+}
+
+/* Slider value displays above knobs */
+.slider-with-value {
+    position: relative;
+    margin-bottom: var(--space-sm);
+    height: 20px; /* Consistent height for all sliders */
+}
+
+.slider-value-above {
+    position: absolute;
+    top: -25px;
+    left: 50%; /* Initial position, will be updated by JavaScript */
+}
+
+.range-slider-with-values {
+    position: relative;
+    margin-bottom: var(--space-sm);
+    height: 20px; /* Consistent height for all sliders */
+}
+
+.range-values-above {
+    position: absolute;
+    top: -25px;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.range-value-above {
+    position: absolute;
+}
+
+.slider-value-above,
+.range-value-above {
+    transform: translateX(-50%);
+    color: var(--color-primary);
+    padding: 2px 8px;
+    border-radius: var(--radius-lg);
+    font-size: 0.9rem;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.control-group {
+    display: flex;
+    gap: var(--space-xl);
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.slider-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    min-width: 200px;
+    align-items: stretch; /* Ensure consistent alignment */
+}
+
+.slider-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    text-align: center;
+}
+
+.control-slider {
+    width: 200px;
+    height: 6px;
+    background: var(--color-white-alpha-20);
+    outline: none;
+    border-radius: 3px;
+    appearance: none;
+    cursor: pointer;
+}
+
+.control-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    background: var(--color-primary);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.control-slider::-webkit-slider-thumb:hover {
+    background: var(--color-primary-bright);
+    transform: scale(1.1);
+}
+
+.control-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    background: var(--color-primary);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    border: none;
+    transition: var(--transition-fast);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.control-slider::-moz-range-thumb:hover {
+    background: var(--color-primary-bright);
+    transform: scale(1.1);
+}
+
+/* Range Slider Styles */
+.range-slider-container {
+    position: relative;
+    width: 200px;
+    height: 6px;
+    margin-top: 12px; /* Align with lambda slider track position */
+}
+
+.range-slider {
+    position: absolute;
+    width: 100%;
+    height: 6px;
+    background: transparent;
+    outline: none;
+    border-radius: 3px;
+    appearance: none;
+    cursor: pointer;
+    pointer-events: none;
+}
+
+.range-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    background: var(--color-primary);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    pointer-events: all;
+    transition: var(--transition-fast);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.range-slider::-webkit-slider-thumb:hover {
+    background: var(--color-primary-bright);
+    transform: scale(1.1);
+}
+
+.range-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    background: var(--color-primary);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    border: none;
+    pointer-events: all;
+    transition: var(--transition-fast);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.range-slider::-moz-range-thumb:hover {
+    background: var(--color-primary-bright);
+    transform: scale(1.1);
+}
+
+.range-slider-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--color-white-alpha-20);
+    border-radius: 3px;
+    z-index: -1;
+}
+
+.slider-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+    margin-top: var(--space-xs);
+    height: 18px; /* Consistent height for text labels */
+    align-items: center;
+}
+
+.rerun-search-btn {
+    background: var(--color-primary-alpha-20);
+    border: 2px solid var(--border-primary);
+    border-radius: var(--radius-lg);
+    padding: 0.75rem var(--space-lg);
+    color: var(--color-text-primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-normal);
+    min-width: 120px;
+}
+
+.rerun-search-btn:enabled {
+    background: var(--color-primary-alpha-30);
+    border-color: var(--color-primary);
+    color: #ffffff;
+}
+
+.rerun-search-btn:enabled:hover {
+    background: var(--color-primary-alpha-40);
+    border-color: var(--color-primary-bright);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px var(--color-primary-alpha-30);
+}
+
+.rerun-search-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .search-header {
+        padding: var(--space-md);
+    }
+
+    .header-content {
+        padding: 0;
+    }
+
+    .app-title {
+        font-size: 1.8rem;
+    }
+
+    .search-config {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .search-container {
+        flex-direction: column;
+    }
+
+    .main-content {
+        padding: var(--space-md);
+    }
+
+    .results-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .results-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .player-content {
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .progress-container {
+        order: -1;
+        max-width: none;
+    }
+
+    .auth-status {
+        justify-content: center;
+        margin-left: 0;
+        order: 1;
+    }
+
+    .player-footer {
+        padding: var(--space-md);
+    }
+
+    .app-container {
+        padding-bottom: 120px;
+    }
+
+    /* Mobile attribution adjustments */
+    .results-spotify-attribution {
+        margin-left: 0;
+        margin-top: var(--space-sm);
+        flex-basis: 100%;
+        justify-content: center;
+    }
+
+    .spotify-attribution {
+        position: static;
+        text-align: center;
+        margin-top: var(--space-sm);
+        padding: var(--space-sm);
+    }
+
+    .results-spotify-logo {
+        height: 18px;
+    }
+
+    .spotify-logo {
+        height: 22px;
+    }
+
+    /* Responsive adjustments for scoring details */
+    .scoring-details {
+        grid-template-columns: 1fr;
+        gap: var(--space-xs);
+    }
+
+    .component-label {
+        min-width: 55px;
+        font-size: 0.75rem;
+    }
+
+    .component-value {
+        min-width: 30px;
+        font-size: 0.75rem;
+    }
+
+    .component-raw {
+        font-size: 0.7rem;
+    }
+
+    /* Mobile slider adjustments */
+    .control-group {
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .slider-container {
+        min-width: 180px;
+    }
+
+    .control-slider,
+    .range-slider-container {
+        width: 180px;
+    }
+}
