@@ -1,0 +1,177 @@
+/* ==========================================================================
+   PLAYER STYLES
+
+   Contains:
+   - Player Footer Layout & Positioning
+   - Spotify Attribution & Branding
+   - Player Controls & Buttons
+   - Track Info Display
+   - Progress Bar & Time Display
+   - Player State Management
+   ========================================================================== */
+
+/* Player Footer */
+.player-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: rgba(18, 18, 23, 0.95);
+    border-top: 1px solid var(--border-light);
+    backdrop-filter: blur(20px);
+    padding: var(--space-md) var(--space-xl);
+}
+
+/* Spotify Attribution */
+.spotify-attribution {
+    position: absolute;
+    top: 8px;
+    right: 16px;
+    z-index: 1001;
+}
+
+.spotify-logo-link {
+    display: inline-block;
+    text-decoration: none;
+    opacity: 0.8;
+    transition: opacity var(--transition-fast);
+}
+
+.spotify-logo-link:hover {
+    opacity: 1;
+}
+
+.spotify-logo {
+    height: 24px;
+    width: auto;
+    transition: opacity var(--transition-fast);
+}
+
+.spotify-player {
+    max-width: var(--max-width-content);
+    margin: 0 auto;
+}
+
+.player-content {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xl);
+}
+
+.track-info {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    flex: 1;
+    min-width: 0;
+}
+
+.player-cover {
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: var(--color-white-alpha-10);
+}
+
+.track-details {
+    min-width: 0;
+    flex: 1;
+}
+
+.player-title {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: var(--space-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-artist {
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.control-btn {
+    background: none;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: var(--space-sm);
+    border-radius: var(--radius-full);
+    transition: var(--transition-fast);
+}
+
+.control-btn:hover {
+    color: #fff;
+    background: var(--color-white-alpha-10);
+}
+
+.play-btn {
+    background: var(--color-primary) !important;
+    color: white !important;
+    font-size: 1rem;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background-image: none !important;
+}
+
+.play-btn:hover {
+    background: var(--color-primary-bright) !important;
+}
+
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    flex: 1;
+    max-width: 300px;
+}
+
+.time-label {
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+    min-width: 40px;
+    text-align: center;
+}
+
+.progress-bar-container {
+    flex: 1;
+    height: 4px;
+    background: var(--color-white-alpha-20);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.progress-filled {
+    height: 100%;
+    background: var(--color-primary);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.1s ease;
+}

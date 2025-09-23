@@ -1,0 +1,504 @@
+/* ==========================================================================
+   RESULTS & SONG CARD STYLES
+
+   Contains:
+   - Results Section Layout & Controls
+   - Results Grid System
+   - Song Card Components & Interactions
+   - Card Accordion & Expansion
+   - Tags & Genres Display
+   - Manual Selection & Play Buttons
+   - Loading States & Animations
+   - Welcome Message Display
+   ========================================================================== */
+
+/* Main Content */
+.main-content {
+    flex: 1;
+    max-width: var(--max-width-content);
+    margin: 0 auto;
+    padding: var(--space-xl);
+    width: 100%;
+}
+
+/* Query Section */
+.query-section {
+    margin-bottom: var(--space-xl);
+}
+
+.section-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: var(--space-md);
+    color: #fff;
+}
+
+.query-card {
+    border: 2px solid var(--color-primary);
+    box-shadow: 0 4px 20px var(--color-primary-alpha-20);
+    padding-bottom: var(--space-md) !important;
+}
+
+/* Results Section */
+.results-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-xl);
+    flex-wrap: wrap;
+    gap: var(--space-md);
+}
+
+.results-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+}
+
+.results-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.results-info-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    border-top: 1px solid var(--border-light);
+    font-size: 0.9rem;
+    color: var(--color-text-muted);
+    gap: var(--space-md);
+}
+
+.results-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xl);
+}
+
+.results-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.results-info {
+    display: flex;
+    gap: var(--space-md);
+    font-size: 0.9rem;
+    color: var(--color-text-secondary);
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Results Spotify Attribution */
+.results-spotify-attribution {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    opacity: 0.8;
+}
+
+.results-spotify-logo-link {
+    display: inline-block;
+    text-decoration: none;
+    transition: opacity var(--transition-fast);
+}
+
+.results-spotify-logo-link:hover {
+    opacity: 1;
+}
+
+.results-spotify-logo {
+    height: 20px;
+    width: auto;
+    transition: opacity var(--transition-fast);
+}
+
+.results-container {
+    position: relative;
+}
+
+/* Welcome Message */
+.welcome-message {
+    text-align: center;
+    padding: 0.25rem var(--space-xl);
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--color-white-alpha-05);
+}
+
+.welcome-content h3 {
+    font-size: 1.75rem;
+    margin-bottom: var(--space-md);
+    color: #fff;
+}
+
+.welcome-content h4 {
+    text-align: left;
+    font-size: 1.4rem;
+    margin-top: var(--space-md);
+    margin-bottom: var(--space-sm);
+    color: #fff;
+    font-weight: 600;
+    max-width: 650px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.welcome-content p {
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-md);
+    font-size: 1.2rem;
+}
+
+.welcome-content ul {
+    text-align: left;
+    max-width: 650px;
+    margin: 0 auto var(--space-lg);
+    color: var(--color-text-muted);
+}
+
+.welcome-content ul li {
+    margin-bottom: var(--space-sm);
+}
+
+/* Results Grid */
+.results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--space-lg);
+}
+
+/* Song Card */
+.song-card {
+    background: var(--color-white-alpha-12);
+    border: 1px solid var(--border-lighter);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    padding-bottom: 0.6rem;
+    cursor: pointer;
+    transition: var(--transition-normal);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.song-card:hover {
+    background: var(--color-white-alpha-18);
+    border-color: var(--color-primary-alpha-80);
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-xl);
+}
+
+.song-card.playing {
+    border-color: var(--color-primary);
+    background: var(--color-primary-alpha-10);
+}
+
+/* Song Selection Styles */
+.song-card.selectable {
+    position: relative;
+}
+
+.song-card.selectable.selected {
+    border-color: var(--color-primary);
+    border-width: 2px;
+    box-shadow: 0 0 0 1px var(--color-primary-alpha-20);
+}
+
+.song-card-checkbox {
+    position: absolute;
+    top: var(--space-md);
+    left: var(--space-md);
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-primary);
+    cursor: pointer;
+    z-index: 10;
+    display: none; /* Hidden by default */
+}
+
+/* Show checkboxes only in manual selection mode */
+.results-container.manual-selection-mode .song-card-checkbox {
+    display: block;
+}
+
+/* Adjust card header spacing in manual selection mode */
+.results-container.manual-selection-mode .card-header {
+    margin-left: var(--space-lg); /* Balanced spacing: 1rem (left edge to checkbox) + 0.5rem gap = 1.5rem total */
+}
+
+.card-header {
+    display: flex;
+    gap: var(--space-md);
+    margin-bottom: 0;
+}
+
+.song-play-btn {
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--color-primary);
+    border-radius: var(--radius-full);
+    background: var(--color-white-alpha-10);
+    color: var(--color-primary);
+    display: none; /* Hidden by default, shown via manual selection mode */
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    flex-shrink: 0;
+}
+
+/* Show play button only in manual selection mode */
+.results-container.manual-selection-mode .song-play-btn {
+    display: flex;
+}
+
+.song-play-btn svg {
+    width: 12px;
+    height: 12px;
+    margin-left: 1px; /* Slight offset to visually center the triangle */
+}
+
+.song-play-btn:hover {
+    background: var(--color-primary-alpha-80);
+    color: white;
+    transform: scale(1.1);
+}
+
+.song-play-btn:active {
+    transform: scale(0.95);
+}
+
+.card-cover {
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-md);
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.4rem;
+    line-height: 1.3;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+}
+
+.card-artist {
+    color: var(--color-text-secondary);
+    margin-bottom: var(--space-xs);
+    font-size: 0.95rem;
+    line-height: 1.3;
+}
+
+.card-album {
+    color: var(--color-text-tertiary);
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-footer {
+    display: flex;
+    align-items: center;
+    padding-top: var(--space-sm);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border-light);
+    gap: 0.1rem;
+}
+
+.card-footer .card-rank {
+    flex: 0 0 auto;
+}
+
+.card-footer .scoring-components {
+    flex: 1 1 auto;
+    justify-content: center;
+    gap: var(--space-sm);
+}
+
+.card-footer .similarity-score {
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+
+.card-rank {
+    color: var(--color-text-primary);
+    font-weight: 500;
+    font-size: 1.05rem;
+    margin-right: var(--space-sm);
+}
+
+.similarity-score {
+    color: var(--color-warning);
+    padding: var(--space-xs) var(--space-sm);
+    font-weight: 500;
+    font-size: 1.05rem;
+}
+
+/* Scoring components in the middle of footer */
+.scoring-components {
+    display: flex;
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+}
+
+.scoring-component {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+
+.card-tags {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.75rem;
+    margin-bottom: 0.75rem;
+    gap: var(--space-sm);
+}
+
+.tags-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    flex: 1;
+    min-width: 0;
+}
+
+/* Accordion Styles */
+.card-accordion {
+    margin-top: auto;
+    border-top: 1px solid var(--border-light);
+}
+
+.accordion-toggle {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--color-text-primary);
+    padding: 0.75rem 0;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: var(--transition-normal);
+}
+
+.accordion-toggle:hover {
+    color: var(--color-primary);
+}
+
+.accordion-toggle.expanded {
+    color: var(--color-primary);
+}
+
+.accordion-title {
+    flex: 1;
+    text-align: left;
+}
+
+.accordion-icon {
+    font-size: 0.8rem;
+    transition: transform var(--transition-normal);
+    margin-left: var(--space-sm);
+}
+
+.accordion-toggle.expanded .accordion-icon {
+    transform: rotate(180deg);
+}
+
+.accordion-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height var(--transition-normal);
+}
+
+.accordion-content-inner {
+    padding: 0 0 var(--space-md) 0;
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.tags-genres-content {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+}
+
+.tag-item {
+    background: var(--color-primary-alpha-20);
+    color: var(--color-primary-bright);
+    padding: 0.3rem 0.6rem;
+    border-radius: 15px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.genre-item {
+    background: rgba(255, 193, 7, 0.2);
+    color: var(--color-warning);
+    padding: 0.3rem 0.6rem;
+    border-radius: 15px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+/* Loading */
+.loading {
+    text-align: center;
+    padding: 4rem var(--space-xl);
+}
+
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--color-primary-alpha-30);
+    border-top: 3px solid var(--color-primary);
+    border-radius: var(--radius-full);
+    animation: spin 1s linear infinite;
+    margin: 0 auto var(--space-md);
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+@keyframes spotify-pulse {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scale(1.1);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}

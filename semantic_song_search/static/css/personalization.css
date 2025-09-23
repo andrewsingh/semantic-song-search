@@ -1,0 +1,324 @@
+/* ==========================================================================
+   PERSONALIZATION & EXPORT STYLES
+
+   Contains:
+   - Export to Playlist Section & Accordion
+   - Export Form Fields & Controls
+   - Export Status Messages
+   - No-History Weights Section
+   - Weight Input Controls & Layout
+   - Reset Defaults Button
+   - Responsive Weight Adjustments
+   ========================================================================== */
+
+/* Export to Playlist Section */
+.export-section {
+    margin-bottom: var(--space-lg);
+}
+
+.export-accordion {
+    background: var(--color-white-alpha-12);
+    border: 2px solid var(--border-primary);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: var(--transition-normal);
+    box-shadow: 0 2px 8px var(--color-primary-alpha-10);
+}
+
+.export-accordion:hover {
+    border-color: var(--color-primary-alpha-60);
+    box-shadow: 0 4px 12px var(--color-primary-alpha-15);
+}
+
+.export-accordion-header {
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0.6rem var(--space-lg);
+    color: var(--color-text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    transition: var(--transition-normal);
+}
+
+.export-accordion-header:hover {
+    background: var(--color-primary-alpha-15);
+}
+
+.export-accordion-title {
+    color: var(--color-primary-bright);
+    font-weight: 600;
+    font-size: 1.1rem;
+    padding: var(--space-sm) 0;
+}
+
+.export-accordion-icon {
+    transition: transform var(--transition-normal);
+    font-size: 0.8rem;
+}
+
+.export-accordion.expanded .export-accordion-icon {
+    transform: rotate(180deg);
+}
+
+.export-accordion-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height var(--transition-normal);
+}
+
+.export-accordion.expanded .export-accordion-content {
+    max-height: 500px;
+}
+
+.export-form {
+    padding: var(--space-lg);
+    border-top: 1px solid var(--color-primary-alpha-20);
+}
+
+.export-field {
+    margin-bottom: var(--space-lg);
+}
+
+.export-label {
+    display: block;
+    margin-bottom: var(--space-sm);
+    font-weight: 500;
+    color: var(--color-text-primary);
+    font-size: 0.9rem;
+    padding-right: var(--space-md);
+}
+
+.export-input {
+    width: 100%;
+    background: var(--color-white-alpha-08);
+    border: 2px solid var(--color-primary-alpha-30);
+    border-radius: var(--radius-md);
+    padding: 0.75rem var(--space-md);
+    color: var(--color-text-primary);
+    font-size: 0.9rem;
+    transition: var(--transition-normal);
+}
+
+.export-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px var(--color-primary-alpha-20);
+}
+
+.export-info-text {
+    color: var(--color-primary);
+    font-weight: 500;
+    font-size: 0.9rem;
+    margin-left: var(--space-sm); /* Add space between label and count */
+}
+
+.export-button {
+    background: var(--color-primary); /* Proper Spotify green for Spotify-specific functionality */
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.75rem var(--space-lg);
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-normal);
+    position: relative;
+    min-width: 140px;
+}
+
+.export-button:hover:not(:disabled) {
+    background: var(--color-primary-bright); /* Brighter Spotify green on hover */
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px var(--color-primary-alpha-40);
+}
+
+.export-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.export-status {
+    margin-top: var(--space-md);
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.export-status.success {
+    background: var(--color-primary-alpha-20);
+    border: 1px solid var(--color-primary-alpha-40);
+    color: var(--color-primary-bright);
+}
+
+.export-status.error {
+    background: rgba(220, 38, 127, 0.2);
+    border: 1px solid rgba(220, 38, 127, 0.4);
+    color: var(--color-error);
+}
+
+.export-status.info {
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    color: var(--color-info);
+}
+
+.export-field-hint {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: var(--space-xs);
+    display: block;
+}
+
+/* No-History Weights Section */
+.no-history-weights-section {
+    max-width: var(--max-width-content);
+    margin: 0 auto var(--space-lg) auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.weights-container {
+    background: var(--color-white-alpha-05);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    padding: var(--space-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-xl);
+    margin-bottom: var(--space-md);
+}
+
+.weights-inputs {
+    display: flex;
+    align-items: center;
+    gap: 2.5rem;
+    flex: 1;
+}
+
+.weight-input-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.weights-buttons-container {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.weight-label {
+    font-size: 0.9rem;
+    color: var(--color-text-muted);
+    font-weight: 500;
+    min-width: auto;
+}
+
+.weight-input {
+    background: var(--color-white-alpha-10);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-sm);
+    color: var(--color-primary);
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.2rem 0.4rem;
+    width: 70px;
+    text-align: right;
+    transition: var(--transition-fast);
+}
+
+.weight-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+}
+
+.weight-input:hover {
+    border-color: var(--color-white-alpha-30);
+}
+
+.param-group-title {
+    color: var(--color-primary-bright);
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: var(--space-sm);
+}
+
+.weights-title > .param-group-title {
+    font-size: 1rem;
+}
+
+.weights-buttons {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.reset-defaults-btn {
+    background: rgba(106, 90, 205, 0.3);
+    border: 2px solid rgba(106, 90, 205);
+    border-radius: var(--radius-lg);
+    color: #B19CD9;
+    padding: 0.75rem 1.2rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    white-space: nowrap;
+}
+
+.reset-defaults-btn:hover {
+    background: rgba(106, 90, 205, 0.3);
+    border-color: rgba(106, 90, 205, 0.6);
+    color: #C8B5E8;
+    transform: translateY(-1px);
+}
+
+.reset-defaults-btn:active {
+    transform: translateY(0);
+}
+
+/* Responsive adjustments for weights section */
+@media (max-width: 768px) {
+    .weights-container {
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .weights-inputs {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: var(--space-md);
+    }
+
+    .weight-input-group {
+        flex-direction: column;
+        gap: var(--space-xs);
+        text-align: center;
+    }
+
+    .weights-buttons-container {
+        flex-direction: column;
+        gap: var(--space-sm);
+        width: 100%;
+    }
+
+    .reset-defaults-btn {
+        width: 100%;
+    }
+
+    .weight-label {
+        min-width: auto;
+        font-size: 0.8rem;
+    }
+}
