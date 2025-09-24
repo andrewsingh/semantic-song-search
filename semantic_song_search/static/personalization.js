@@ -233,6 +233,9 @@ class PersonalizationManager {
         if (this.app.domElements.nhA3DailyStreams && this.app.defaultNoHistoryWeights.a3_daily_streams !== undefined) {
             this.app.domElements.nhA3DailyStreams.value = this.app.defaultNoHistoryWeights.a3_daily_streams;
         }
+        if (this.app.domElements.nhA4ReleaseDate && this.app.defaultNoHistoryWeights.a4_release_date !== undefined) {
+            this.app.domElements.nhA4ReleaseDate.value = this.app.defaultNoHistoryWeights.a4_release_date;
+        }
 
         // Song descriptor weights (b_i)
         if (this.app.domElements.nhB0Genres && this.app.defaultNoHistoryWeights.b0_genres !== undefined) {

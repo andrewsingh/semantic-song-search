@@ -8,7 +8,8 @@ import numpy as np
 import json
 import os
 import time
-from typing import Dict, List, Tuple
+import math
+from typing import Dict, List, Tuple, Optional
 from pathlib import Path
 
 try:
@@ -28,6 +29,7 @@ class SearchConfig:
         a1_artist_sim: float,      # Weight for artist descriptor similarity
         a2_total_streams: float,   # Weight for total streams score
         a3_daily_streams: float,   # Weight for daily streams score
+        a4_release_date: float,    # Weight for release date similarity score
 
         # Song descriptor weights (b_i) - should sum to 1.0 - USER CONFIGURABLE
         b0_genres: float,                   # Weight for song genres similarity
@@ -58,6 +60,9 @@ class SearchConfig:
 
         # Artist gender similarity bonus - INTERNAL (has defaults)
         gender_similarity_bonus: float = 1.05,              # Multiplicative bonus for same-gender artists (1.0 = no bonus)
+
+        # Release date similarity configuration - INTERNAL (has defaults)
+        release_date_decay_constant: float = 10950,        # Decay constant for release date similarity (days)
         ):
             """Initialize search configuration with provided values."""
             self.lambda_val = lambda_val
@@ -69,6 +74,7 @@ class SearchConfig:
             self.a1_artist_sim = a1_artist_sim
             self.a2_total_streams = a2_total_streams
             self.a3_daily_streams = a3_daily_streams
+            self.a4_release_date = a4_release_date
 
             # Song descriptor weights
             self.b0_genres = b0_genres
@@ -92,6 +98,9 @@ class SearchConfig:
 
             # Artist gender bonus
             self.gender_similarity_bonus = gender_similarity_bonus
+
+            # Release date similarity configuration
+            self.release_date_decay_constant = release_date_decay_constant
 
     def get_song_weights(self) -> Dict[str, float]:
         """Get song descriptor weights as a dictionary mapping descriptor types to weights."""
@@ -125,6 +134,7 @@ class SearchConfig:
             'a1_artist_sim': self.a1_artist_sim,
             'a2_total_streams': self.a2_total_streams,
             'a3_daily_streams': self.a3_daily_streams,
+            'a4_release_date': self.a4_release_date,
             'b0_genres': self.b0_genres,
             'b1_vocal_style': self.b1_vocal_style,
             'b2_production_sound_design': self.b2_production_sound_design,
@@ -140,6 +150,7 @@ class SearchConfig:
             'K_total': self.K_total,
             'K_daily': self.K_daily,
             'gender_similarity_bonus': self.gender_similarity_bonus,
+            'release_date_decay_constant': self.release_date_decay_constant,
         }
 
     def update_weights(self, weights: Dict[str, float]):
@@ -155,9 +166,9 @@ class SearchConfig:
                         logger.warning(f"Lambda must be in [0,1], got {float_value}")
                 elif hasattr(self, key):
                     # Additional validation for specific parameters
-                    if key.startswith(('a0', 'a1', 'a2', 'a3', 'b', 'c')) and not 0.0 <= float_value <= 1.0:
+                    if key.startswith(('a0', 'a1', 'a2', 'a3', 'a4', 'b', 'c')) and not 0.0 <= float_value <= 1.0:
                         logger.warning(f"{key} should typically be in [0,1], got {float_value}")
-                    elif key in ['K_total', 'K_daily'] and float_value < 0.0:
+                    elif key in ['K_total', 'K_daily', 'release_date_decay_constant'] and float_value < 0.0:
                         logger.warning(f"{key} should be non-negative, got {float_value}")
                     setattr(self, key, float_value)
                 else:
@@ -668,6 +679,47 @@ class MusicSearchEngine:
         else:
             return 0.0
 
+    def compute_release_date_similarity(self, query_song: Dict, candidate_song: Dict) -> Optional[float]:
+        """
+        Compute release date similarity using exponential decay function.
+
+        Args:
+            query_song: Query song metadata dictionary
+            candidate_song: Candidate song metadata dictionary
+
+        Returns:
+            Release date similarity score (0.0 to 1.0), or None if computation failed
+        """
+        try:
+            from . import data_utils
+        except ImportError:
+            import data_utils
+
+        # Extract release date information from both songs
+        query_album = query_song.get('album', {})
+        candidate_album = candidate_song.get('album', {})
+
+        query_release_date = query_album.get('release_date')
+        query_precision = query_album.get('release_date_precision')
+        candidate_release_date = candidate_album.get('release_date')
+        candidate_precision = candidate_album.get('release_date_precision')
+
+        # Parse release dates
+        query_date = data_utils.parse_release_date(query_release_date, query_precision)
+        candidate_date = data_utils.parse_release_date(candidate_release_date, candidate_precision)
+
+        # If either date parsing failed, return None to indicate computation failure
+        if query_date is None or candidate_date is None:
+            return None
+
+        # Calculate days difference
+        days_diff = abs((candidate_date - query_date).days)
+
+        # Apply exponential decay: score = exp(-|days_diff| / decay_constant)
+        similarity_score = math.exp(-days_diff / self.config.release_date_decay_constant)
+
+        return float(similarity_score)
+
     def _compute_track_streams(self):
         """Compute track stream scores for popularity scoring using default normalization constants."""
         # Use default normalization constants (these are internal and rarely need to change)
@@ -699,7 +751,9 @@ class MusicSearchEngine:
 
     def compute_final_score(self, song_similarity: float, artist_similarity: float, track_id: str,
                            query_artist: str = None, candidate_artist: str = None,
-                           artist_similarity_p95: float = None, ranking_engine=None) -> Tuple[float, Dict]:
+                           artist_similarity_p95: float = None, ranking_engine=None,
+                           release_date_similarity: float = None, query_song: Dict = None,
+                           candidate_song: Dict = None, search_type: str = 'text') -> Tuple[float, Dict]:
         """
         Compute final score using descriptor-based system.
 
@@ -711,16 +765,44 @@ class MusicSearchEngine:
             candidate_artist: Candidate artist name (for same-artist handling in song-to-song search)
             artist_similarity_p95: 95th percentile of all artist similarities for this query
             ranking_engine: Optional ranking engine for personalization
+            release_date_similarity: Precomputed release date similarity (or None for auto-computation)
+            query_song: Query song metadata (for release date similarity computation)
+            candidate_song: Candidate song metadata (for release date similarity computation)
+            search_type: 'text' for text-to-song, 'song' for song-to-song
 
         Returns:
             Tuple of (final_score, component_breakdown)
         """
-        # Get the 4 component scores
+        # Get the 5 component scores
         # Handle NaN values by replacing with zero
         S_song = 0.0 if np.isnan(song_similarity) else song_similarity
         S_artist = 0.0 if np.isnan(artist_similarity) else artist_similarity
         S_streams_total = self.track_streams.get(track_id, {}).get('S_total', 0.0)
         S_streams_daily = self.track_streams.get(track_id, {}).get('S_daily', 0.0)
+
+        # Compute release date similarity
+        S_release_date = 0.0
+        use_release_date_component = False
+
+        if search_type == 'song':
+            # Only use release date similarity for song-to-song search
+            if release_date_similarity is not None:
+                S_release_date = release_date_similarity
+                use_release_date_component = True
+            elif query_song is not None and candidate_song is not None:
+                try:
+                    S_release_date_result = self.compute_release_date_similarity(query_song, candidate_song)
+                    if S_release_date_result is not None:
+                        S_release_date = S_release_date_result
+                        use_release_date_component = True
+                    else:
+                        # Date parsing failed, exclude release date component
+                        S_release_date = 0.0
+                        use_release_date_component = False
+                except Exception as e:
+                    logger.warning(f"Failed to compute release date similarity for track {track_id}: {e}")
+                    S_release_date = 0.0
+                    use_release_date_component = False
 
         # Check for same-artist candidates in song-to-song search
         is_same_artist = (query_artist is not None and
@@ -744,24 +826,54 @@ class MusicSearchEngine:
             S_artist_score = S_artist
             S_artist_display = S_artist
 
-        # Normal 4-component scoring for all candidates
-        total_weight = self.config.a0_song_sim + self.config.a1_artist_sim + self.config.a2_total_streams + self.config.a3_daily_streams
+        # Dynamic weight adjustment based on whether release date component is used
+        if use_release_date_component:
+            # Use all 5 components including release date
+            total_weight = (self.config.a0_song_sim + self.config.a1_artist_sim +
+                           self.config.a2_total_streams + self.config.a3_daily_streams +
+                           self.config.a4_release_date)
 
-        if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
-            # Normalize weights to ensure they sum to 1
-            norm_a0 = self.config.a0_song_sim / total_weight
-            norm_a1 = self.config.a1_artist_sim / total_weight
-            norm_a2 = self.config.a2_total_streams / total_weight
-            norm_a3 = self.config.a3_daily_streams / total_weight
+            if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
+                # Normalize weights to ensure they sum to 1
+                norm_a0 = self.config.a0_song_sim / total_weight
+                norm_a1 = self.config.a1_artist_sim / total_weight
+                norm_a2 = self.config.a2_total_streams / total_weight
+                norm_a3 = self.config.a3_daily_streams / total_weight
+                norm_a4 = self.config.a4_release_date / total_weight
 
-            S_semantic = (norm_a0 * S_song +
-                         norm_a1 * S_artist_score +
-                         norm_a2 * S_streams_total +
-                         norm_a3 * S_streams_daily)
+                S_semantic = (norm_a0 * S_song +
+                             norm_a1 * S_artist_score +
+                             norm_a2 * S_streams_total +
+                             norm_a3 * S_streams_daily +
+                             norm_a4 * S_release_date)
+
+                logger.debug(f"Using 5-component scoring with release date similarity: {S_release_date:.4f}")
+            else:
+                # Fallback to song similarity only if all weights are zero
+                logger.warning("All similarity weights are zero, falling back to song similarity only")
+                S_semantic = S_song
         else:
-            # Fallback to song similarity only if all weights are zero
-            logger.warning("All similarity weights are zero, falling back to song similarity only")
-            S_semantic = S_song
+            # Exclude release date component and renormalize remaining 4 weights
+            total_weight = (self.config.a0_song_sim + self.config.a1_artist_sim +
+                           self.config.a2_total_streams + self.config.a3_daily_streams)
+
+            if total_weight > 1e-8:  # Use small epsilon to handle floating point precision
+                # Normalize weights to ensure they sum to 1
+                norm_a0 = self.config.a0_song_sim / total_weight
+                norm_a1 = self.config.a1_artist_sim / total_weight
+                norm_a2 = self.config.a2_total_streams / total_weight
+                norm_a3 = self.config.a3_daily_streams / total_weight
+
+                S_semantic = (norm_a0 * S_song +
+                             norm_a1 * S_artist_score +
+                             norm_a2 * S_streams_total +
+                             norm_a3 * S_streams_daily)
+
+                logger.debug(f"Using 4-component scoring (release date excluded)")
+            else:
+                # Fallback to song similarity only if all weights are zero
+                logger.warning("All similarity weights are zero, falling back to song similarity only")
+                S_semantic = S_song
 
         S_semantic = np.clip(S_semantic, 0, 1)
 
@@ -772,11 +884,13 @@ class MusicSearchEngine:
             'S_artist': S_artist_display,
             'S_streams_total': S_streams_total,
             'S_streams_daily': S_streams_daily,
+            'S_release_date': S_release_date,
             'lambda': self.config.lambda_val,
             'a0_song_sim': self.config.a0_song_sim,
             'a1_artist_sim': self.config.a1_artist_sim,
             'a2_total_streams': self.config.a2_total_streams,
             'a3_daily_streams': self.config.a3_daily_streams,
+            'a4_release_date': self.config.a4_release_date,
             # Song descriptor weights (for debugging)
             'b0_genres': self.config.b0_genres,
             'b1_vocal_style': self.config.b1_vocal_style,
@@ -786,6 +900,8 @@ class MusicSearchEngine:
             'b5_tags': self.config.b5_tags,
             # Additional debug info
             'is_same_artist': is_same_artist,
+            'use_release_date_component': use_release_date_component,
+            'search_type': search_type,
         }
 
         # No-history case: return pure semantic similarity
@@ -872,9 +988,10 @@ class MusicSearchEngine:
         song_weights = self.config.get_song_weights()
         artist_weights = self.config.get_artist_weights()
         
-        # For song-to-song search, build query embeddings dict and get query artist
+        # For song-to-song search, build query embeddings dict and get query artist and song
         query_song_embeddings = None
         query_artist = None
+        query_song = None
         if search_type == 'song' and query_track_id:
             query_song_embeddings = {}
             for embed_type in song_weights.keys():
@@ -882,12 +999,13 @@ class MusicSearchEngine:
                     embedding = self.embedding_lookups[embed_type].get(query_track_id)
                     if embedding is not None:
                         query_song_embeddings[embed_type] = embedding
-            
-            # Get query artist from song data if not provided
+
+            # Get query artist and song from song data if not provided
             if not query_artist and query_track_id:
                 for song in self.songs:
                     if song.get('track_id') == query_track_id or song.get('id') == query_track_id:
                         query_artist = song.get('artists', [{}])[0].get('name', '') if song.get('artists') else ''
+                        query_song = song  # Store the full song object for release date similarity
                         break
         
         # Compute similarity scores for all candidate songs with optimized artist similarity caching
@@ -985,11 +1103,12 @@ class MusicSearchEngine:
                 if familiarity < self.config.familiarity_min or familiarity > self.config.familiarity_max:
                     continue
 
-                # Compute final score using new 4-component system with percentile
+                # Compute final score using new 5-component system with percentile
                 final_score, components = self.compute_final_score(
                     candidate['song_similarity'], candidate['artist_similarity'],
                     candidate['track_id'], query_artist, candidate['candidate_artist'],
-                    artist_similarity_p95=artist_similarity_p95, ranking_engine=ranking_engine
+                    artist_similarity_p95=artist_similarity_p95, ranking_engine=ranking_engine,
+                    query_song=query_song, candidate_song=candidate['song'], search_type=search_type
                 )
 
                 final_candidates_data.append({

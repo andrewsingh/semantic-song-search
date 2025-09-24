@@ -249,15 +249,17 @@ def search():
             # Core personalization (history mode)
             'lambda_val', 'familiarity_min', 'familiarity_max',
             # Component weights (always)
-            'a0_song_sim', 'a1_artist_sim', 'a2_total_streams', 'a3_daily_streams',
+            'a0_song_sim', 'a1_artist_sim', 'a2_total_streams', 'a3_daily_streams', 'a4_release_date',
             # Descriptor weights (always)
-            'b0_genres', 'b1_vocal_style', 'b2_production_sound_design', 'b3_lyrical_meaning', 'b4_mood_atmosphere', 'b5_tags'
+            'b0_genres', 'b1_vocal_style', 'b2_production_sound_design', 'b3_lyrical_meaning', 'b4_mood_atmosphere', 'b5_tags',
+            # Release date configuration
+            'release_date_decay_constant'
         }
         
         for param_name in valid_advanced_params:
             if param_name in data:
                 advanced_params[param_name] = data[param_name]
-        
+
         logger.info(f"🔧 Advanced parameters received: {advanced_params}")
         logger.info(f"🔧 Familiarity range: [{familiarity_min}, {familiarity_max}]")
         

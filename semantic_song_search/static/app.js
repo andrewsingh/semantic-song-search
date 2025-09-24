@@ -41,13 +41,14 @@ class SemanticSearchApp {
         this.currentFamiliarityMax = 1.0;
         this.hasPersonalizationHistory = false;
         
-        // No-history weights tracking (new 9-weight system)
+        // No-history weights tracking (new 10-weight system)
         this.currentNoHistoryWeights = {
             // Top-level weights (a_i)
             a0_song_sim: 0.6,
             a1_artist_sim: 0.3,
             a2_total_streams: 0.05,
             a3_daily_streams: 0.05,
+            a4_release_date: 0.0,
 
             // Song descriptor weights (b_i)
             b0_genres: 0.3,
@@ -92,6 +93,7 @@ class SemanticSearchApp {
             nhA1ArtistSim: document.getElementById('nh_a1_artist_sim'),
             nhA2TotalStreams: document.getElementById('nh_a2_total_streams'),
             nhA3DailyStreams: document.getElementById('nh_a3_daily_streams'),
+            nhA4ReleaseDate: document.getElementById('nh_a4_release_date'),
             // Song descriptor weight inputs (b_i)
             nhB0Genres: document.getElementById('nh_b0_genres'),
             nhB1VocalStyle: document.getElementById('nh_b1_vocal_style'),
@@ -285,6 +287,7 @@ class SemanticSearchApp {
             this.domElements.nhA1ArtistSim,
             this.domElements.nhA2TotalStreams,
             this.domElements.nhA3DailyStreams,
+            this.domElements.nhA4ReleaseDate,
             // Song descriptor weights (b_i)
             this.domElements.nhB0Genres,
             this.domElements.nhB1VocalStyle,

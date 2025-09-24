@@ -334,7 +334,7 @@
 .card-footer .scoring-components {
     flex: 1 1 auto;
     justify-content: center;
-    gap: var(--space-sm);
+    gap: 0rem;
 }
 
 .card-footer .similarity-score {

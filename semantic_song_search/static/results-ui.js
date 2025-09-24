@@ -91,6 +91,10 @@ class ResultsUIManager {
                             <span class="component-label">D:</span>
                             <span class="component-value">${((components.S_streams_daily * 100) || 0).toFixed(1)}</span>
                         </span>
+                        <span class="scoring-component" title="Release date similarity">
+                            <span class="component-label">R:</span>
+                            <span class="component-value">${((components.S_release_date * 100) || 0).toFixed(1)}</span>
+                        </span>
                     </div>
                 `;
             }
@@ -140,7 +144,7 @@ class ResultsUIManager {
         // Clean and filter tags
         const cleanTags = rawTags
             .filter(item => item != null) // Remove null/undefined
-            .map(item => String(item).trim()) // Convert to string and trim
+            .map(item => String(item).trim().toLowerCase()) // Convert to string and trim and lowercase
             .filter(item => item.length > 0); // Remove empty strings
         
         // Clean and filter genres
