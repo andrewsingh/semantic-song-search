@@ -220,6 +220,7 @@ class SearchManager {
         this.app.currentOffset = 0;
         this.app.searchResults = [];
         this.app.originalSearchResults = [];
+        this.app.baseSearchResults = []; // Reset base dataset
         
         // Reset manual selection for new searches
         this.app.isManualSelectionMode = false;
@@ -297,6 +298,7 @@ class SearchManager {
     processSearchResults(data) {
         this.app.searchResults = data.results;
         this.app.originalSearchResults = [...data.results]; // Store original unfiltered results for client-side filtering
+        this.app.baseSearchResults = [...data.results]; // Initialize base dataset (pre-artist-filter)
         this.app.currentOffset = data.pagination.offset + data.pagination.limit;
         this.app.totalResultsCount = data.pagination.total_count;
         this.app.hasMoreResults = data.pagination.has_more;
@@ -375,23 +377,37 @@ class SearchManager {
             this.app.originalSearchResults = [...this.app.originalSearchResults, ...data.results];
             this.app.currentOffset = data.pagination.offset + data.pagination.limit;
             this.app.hasMoreResults = data.pagination.has_more;
-            
+
             // Auto-select new songs if manual selection is enabled
             if (this.app.isManualSelectionMode) {
                 data.results.forEach(song => {
                     this.app.selectedSongs.add(song.song_idx);
                 });
             }
-            
+
             // Check if we have client-side filtering active
             const topArtistsFilter = this.app.domElements.topArtistsFilter;
-            if (topArtistsFilter.checked && !topArtistsFilter.disabled && this.app.topArtistsLoaded) {
+            const hasTopArtistsFilter = topArtistsFilter.checked && !topArtistsFilter.disabled && this.app.topArtistsLoaded;
+            const hasArtistFilter = this.app.artistFilterState.isActive;
+            const hasAnyFilter = hasTopArtistsFilter || hasArtistFilter;
+
+            // Update base dataset for non-filtered scenarios
+            if (!hasAnyFilter) {
+                // No filters active, base dataset = original results
+                this.app.baseSearchResults = [...this.app.originalSearchResults];
+            }
+
+            console.log(`🎵 Load More: topArtists=${hasTopArtistsFilter}, artistFilter=${hasArtistFilter}, newResults=${data.results.length}`);
+
+            if (hasAnyFilter) {
+                // Use unified filtering approach for any active filters
+                // This rebuilds searchResults from complete originalSearchResults and updates artist dropdown
                 this.applyClientSideFilter();
             } else {
                 // No filtering - just add new results and display
                 this.app.searchResults = [...this.app.searchResults, ...data.results];
                 this.displayResults(data, true);
-                
+
                 // Update manual selection state for newly loaded cards if needed
                 if (this.app.isManualSelectionMode) {
                     this.app.resultsUIManager.updateAllCardSelections();
@@ -410,7 +426,7 @@ class SearchManager {
         }
     }
     
-    displayResults(data, isLoadMore = false) {
+    displayResults(data, isLoadMore = false, rebuildArtistDropdown = true) {
         const resultsHeader = this.app.domElements.resultsHeader;
         const searchInfo = document.getElementById('search-info');
         const resultsGrid = this.app.domElements.resultsGrid;
@@ -464,7 +480,18 @@ class SearchManager {
             // Update the song count input placeholder to show available results
             this.app.resultsUIManager.updateSongCountHint();
         }
-        
+
+        // Build or update artist filter data (performance-optimized)
+        // Only rebuild dropdown if explicitly requested (not for filtered results display)
+        if (rebuildArtistDropdown) {
+            this.app.resultsUIManager.buildArtistDataMaps(this.app.baseSearchResults, isLoadMore);
+
+            // Populate or update artist filter dropdown
+            if (!isLoadMore || this.app.artistFilterState.artistTrackCounts.size > 0) {
+                this.app.resultsUIManager.populateArtistFilterDropdown();
+            }
+        }
+
         // Add new results to the grid  
         const startIndex = isLoadMore ? this.app.searchResults.length - data.results.length : 0;
         data.results.forEach((song, index) => {
@@ -520,17 +547,17 @@ class SearchManager {
         
         
         if (!filterEnabled || !this.app.topArtistsLoaded || !this.app.topArtists || this.app.topArtists.length === 0) {
-            // Show all original results
-            console.log(`🔍 Showing all ${this.app.originalSearchResults.length} original results (filter disabled or no top artists)`);
-            this.app.searchResults = this.app.originalSearchResults; // Reference, not copy
+            // Use all original results as base dataset
+            console.log(`🔍 Using all ${this.app.originalSearchResults.length} original results as base dataset (Top Artists disabled)`);
+            this.app.baseSearchResults = [...this.app.originalSearchResults];
             this.app.isFiltered = false;
         } else {
-            // Filter to only show songs by top artists
+            // Filter to only show songs by top artists and update base dataset
             const topArtistsSet = new Set(this.app.topArtists.map(artist => artist.name.toLowerCase()));
             console.log(`🔍 Filtering with top artists:`, Array.from(topArtistsSet).slice(0, 5), '...');
-            
+
             const filteredOut = [];
-            this.app.searchResults = this.app.originalSearchResults.filter(song => {
+            this.app.baseSearchResults = this.app.originalSearchResults.filter(song => {
                 const artistName = song.artist.toLowerCase().trim();
                 const isMatch = topArtistsSet.has(artistName);
                 if (!isMatch) {
@@ -538,12 +565,35 @@ class SearchManager {
                 }
                 return isMatch;
             });
-            
+
             if (filteredOut.length > 0) {
                 console.log(`🔍 Filtered out ${filteredOut.length} songs:`, filteredOut.slice(0, 3), filteredOut.length > 3 ? '...' : '');
             }
-            
+
             this.app.isFiltered = true;
+        }
+
+        // Apply artist filter on top of the base dataset (if active)
+        const artistFilter = this.app.artistFilterState;
+        if (artistFilter.isActive && artistFilter.selectedArtists.size > 0 &&
+            artistFilter.selectedArtists.size < artistFilter.artistTrackCounts.size) {
+            console.log(`🎯 Applying artist filter on top of base dataset`);
+
+            const selectedArtistsSet = new Set(artistFilter.selectedArtists);
+            this.app.searchResults = this.app.baseSearchResults.filter(song => {
+                const artists = song.all_artists && song.all_artists.length > 0
+                    ? song.all_artists
+                    : [song.artist].filter(artist => artist);
+
+                return artists.some(artist => {
+                    if (!artist || typeof artist !== 'string') return false;
+                    return selectedArtistsSet.has(artist.trim());
+                });
+            });
+            this.app.isFiltered = true;
+        } else {
+            // No artist filter active, use base dataset as final results
+            this.app.searchResults = [...this.app.baseSearchResults];
         }
         
         // If in manual selection mode, remove filtered-out songs from selection
@@ -564,7 +614,7 @@ class SearchManager {
                 console.log(`🎯 Removed ${removedCount} filtered-out songs from selection (${this.app.selectedSongs.size} songs still selected)`);
             }
         }
-        
+
         // Update the display with filtered results
         const mockData = {
             results: this.app.searchResults,
@@ -579,7 +629,7 @@ class SearchManager {
                 returned_count: this.app.searchResults.length
             }
         };
-        
+
         this.displayResults(mockData, false);
         
         // Sync manual selection state after filtering re-creates the cards
@@ -588,5 +638,120 @@ class SearchManager {
             this.app.playlistExport.updateExportFormDisplay(); // Update export form with current selection count
             this.app.resultsUIManager.updateResultsCount(); // Update results count display
         }
+    }
+
+    // Performance-optimized artist filter logic
+    applyArtistFilter() {
+        /**
+         * Apply artist filter using performance-optimized Set operations
+         * Caches filtered results to avoid re-filtering unchanged data
+         */
+        const artistFilter = this.app.artistFilterState;
+
+        // If no filter is active or no artists selected, show all base results
+        if (!artistFilter.isActive || artistFilter.selectedArtists.size === 0) {
+            this.app.searchResults = [...this.app.baseSearchResults];
+            this.app.isFiltered = false;
+            return;
+        }
+
+        // Check if we can use cached filtered results
+        if (artistFilter.filteredResults &&
+            this.setsAreEqual(artistFilter.selectedArtists, artistFilter.lastFilteredWith)) {
+            this.app.searchResults = artistFilter.filteredResults;
+            this.app.isFiltered = true;
+            return;
+        }
+
+        // Perform efficient filtering using Set for O(1) artist lookups
+        const selectedArtistsSet = new Set(artistFilter.selectedArtists);
+
+        const filteredResults = this.app.baseSearchResults.filter(song => {
+            // Get all artists for this song
+            const artists = song.all_artists && song.all_artists.length > 0
+                ? song.all_artists
+                : [song.artist].filter(artist => artist);
+
+            // Include song if ANY of its artists are selected (O(k) where k = artists per song)
+            return artists.some(artist => {
+                if (!artist || typeof artist !== 'string') return false;
+                return selectedArtistsSet.has(artist.trim());
+            });
+        });
+
+        // Cache the filtered results for performance
+        artistFilter.filteredResults = filteredResults;
+        artistFilter.lastFilteredWith = new Set(artistFilter.selectedArtists);
+
+        this.app.searchResults = filteredResults;
+        this.app.isFiltered = true;
+
+        console.log(`🎯 Artist filter applied: ${filteredResults.length}/${this.app.baseSearchResults.length} songs match ${selectedArtistsSet.size} selected artists`);
+    }
+
+    applyArtistFilterAndUpdate() {
+        /**
+         * Apply artist filter and update the display
+         * This is called when the "Apply" button is clicked
+         */
+        const artistFilter = this.app.artistFilterState;
+
+        // Update the active state
+        artistFilter.isActive = artistFilter.selectedArtists.size < artistFilter.artistTrackCounts.size;
+
+        // Apply the filter
+        this.applyArtistFilter();
+
+        // Update the display
+        this.updateDisplayAfterFilter();
+
+        // Update original selected state to reflect applied changes
+        artistFilter.originalSelectedArtists = new Set(artistFilter.selectedArtists);
+
+        // Update button states
+        this.app.resultsUIManager.updateApplyButtonState();
+        this.app.resultsUIManager.updateArtistFilterButtonText();
+    }
+
+    updateDisplayAfterFilter() {
+        /**
+         * Update the UI display after applying artist filter
+         * This is used for full filter application (not Load More)
+         */
+        // Create mock data structure for displayResults
+        const mockData = {
+            results: this.app.searchResults,
+            search_type: this.app.currentSearchData?.search_type || 'text',
+            query: this.app.currentSearchData?.query || '',
+            pagination: {
+                offset: 0,
+                limit: this.app.searchResults.length,
+                total_count: this.app.artistFilterState.isActive ? null : this.app.originalSearchResults.length,
+                has_more: false, // No more results when filtering from Apply button
+                is_filtered: this.app.isFiltered,
+                returned_count: this.app.searchResults.length
+            }
+        };
+
+        this.displayResults(mockData, false, false); // Don't rebuild artist dropdown
+
+        // Sync manual selection state if active
+        if (this.app.isManualSelectionMode) {
+            this.app.resultsUIManager.updateAllCardSelections();
+            this.app.playlistExport.updateExportFormDisplay();
+            this.app.resultsUIManager.updateResultsCount();
+        }
+    }
+
+    setsAreEqual(set1, set2) {
+        /**
+         * Efficiently compare two sets for equality
+         * Duplicated from ResultsUIManager for performance (avoid cross-class calls)
+         */
+        if (set1.size !== set2.size) return false;
+        for (const item of set1) {
+            if (!set2.has(item)) return false;
+        }
+        return true;
     }
 }

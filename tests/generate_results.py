@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     'a1_artist_sim': 0.3,      # Weight for artist descriptor similarity
     'a2_total_streams': 0.05,  # Weight for total streams score
     'a3_daily_streams': 0.05,  # Weight for daily streams score
+    'a4_release_date': 0.0,    # Weight for release date similarity
 
     # Song descriptor weights (b_i) - should sum to 1.0
     'b0_genres': 0.3,                   # Weight for song genres similarity
