@@ -596,24 +596,8 @@ class SearchManager {
             this.app.searchResults = [...this.app.baseSearchResults];
         }
         
-        // If in manual selection mode, remove filtered-out songs from selection
-        if (this.app.isManualSelectionMode && this.app.selectedSongs.size > 0) {
-            // Create a set of currently visible song indices for efficient lookup
-            const visibleSongIndices = new Set(this.app.searchResults.map(song => song.song_idx));
-            
-            // Remove any selected songs that are no longer visible
-            const originalSelectionSize = this.app.selectedSongs.size;
-            for (const songIdx of this.app.selectedSongs) {
-                if (!visibleSongIndices.has(songIdx)) {
-                    this.app.selectedSongs.delete(songIdx);
-                }
-            }
-            
-            const removedCount = originalSelectionSize - this.app.selectedSongs.size;
-            if (removedCount > 0) {
-                console.log(`🎯 Removed ${removedCount} filtered-out songs from selection (${this.app.selectedSongs.size} songs still selected)`);
-            }
-        }
+        // Remove filtered-out songs from manual selection
+        this.cleanupManualSelection();
 
         // Update the display with filtered results
         const mockData = {
@@ -652,6 +636,7 @@ class SearchManager {
         if (!artistFilter.isActive || artistFilter.selectedArtists.size === 0) {
             this.app.searchResults = [...this.app.baseSearchResults];
             this.app.isFiltered = false;
+            this.cleanupManualSelection();
             return;
         }
 
@@ -660,6 +645,7 @@ class SearchManager {
             this.setsAreEqual(artistFilter.selectedArtists, artistFilter.lastFilteredWith)) {
             this.app.searchResults = artistFilter.filteredResults;
             this.app.isFiltered = true;
+            this.cleanupManualSelection();
             return;
         }
 
@@ -685,6 +671,9 @@ class SearchManager {
 
         this.app.searchResults = filteredResults;
         this.app.isFiltered = true;
+
+        // Remove filtered-out songs from manual selection
+        this.cleanupManualSelection();
 
         console.log(`🎯 Artist filter applied: ${filteredResults.length}/${this.app.baseSearchResults.length} songs match ${selectedArtistsSet.size} selected artists`);
     }
@@ -740,6 +729,30 @@ class SearchManager {
             this.app.resultsUIManager.updateAllCardSelections();
             this.app.playlistExport.updateExportFormDisplay();
             this.app.resultsUIManager.updateResultsCount();
+        }
+    }
+
+    cleanupManualSelection() {
+        /**
+         * Remove filtered-out songs from manual selection to maintain consistency
+         * Only selected songs that are currently visible should remain selected
+         */
+        if (this.app.isManualSelectionMode && this.app.selectedSongs.size > 0) {
+            // Create a set of currently visible song indices for efficient lookup
+            const visibleSongIndices = new Set(this.app.searchResults.map(song => song.song_idx));
+
+            // Remove any selected songs that are no longer visible
+            const originalSelectionSize = this.app.selectedSongs.size;
+            for (const songIdx of this.app.selectedSongs) {
+                if (!visibleSongIndices.has(songIdx)) {
+                    this.app.selectedSongs.delete(songIdx);
+                }
+            }
+
+            const removedCount = originalSelectionSize - this.app.selectedSongs.size;
+            if (removedCount > 0) {
+                console.log(`🎯 Removed ${removedCount} filtered-out songs from selection (${this.app.selectedSongs.size} songs still selected)`);
+            }
         }
     }
 
