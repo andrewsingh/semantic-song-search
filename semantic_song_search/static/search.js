@@ -420,7 +420,7 @@ class SearchManager {
         this.app.resultsUIManager.updateResultsCount();
         
         // Create enhanced search info with ranking details
-        let searchInfoText = `${data.search_type} search • All Descriptors`;
+        let searchInfoText = `${data.search_type} search`;
         
         searchInfo.textContent = searchInfoText;
         resultsHeader.style.display = 'flex';

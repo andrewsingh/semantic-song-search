@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime
+from datetime import datetime, date
 
 import numpy as np
 import pandas as pd
@@ -961,3 +961,35 @@ def load_and_process_spotify_history(history_path: Path) -> Tuple[pd.DataFrame, 
     except Exception as e:
         logger.error(f"Error loading Spotify history: {e}")
         return pd.DataFrame(), False
+
+
+def parse_release_date(release_date_str: str, release_date_precision: str) -> Optional[date]:
+    """
+    Parse release date string with different precision formats.
+
+    Args:
+        release_date_str: Release date string (e.g., "2019-09-06", "1964-08", "2009")
+        release_date_precision: Precision type ("day", "month", or "year")
+
+    Returns:
+        Parsed date object, or None if parsing fails
+    """
+    if not release_date_str or not release_date_precision:
+        return None
+
+    try:
+        if release_date_precision == "day":
+            # Format: "2019-09-06"
+            return datetime.strptime(release_date_str, "%Y-%m-%d").date()
+        elif release_date_precision == "month":
+            # Format: "1964-08" -> use 15th day as midpoint
+            return datetime.strptime(f"{release_date_str}-15", "%Y-%m-%d").date()
+        elif release_date_precision == "year":
+            # Format: "2009" -> use July 2nd (day 183) as midpoint of year
+            return datetime.strptime(f"{release_date_str}-07-02", "%Y-%m-%d").date()
+        else:
+            logger.warning(f"Unknown release date precision: {release_date_precision}")
+            return None
+    except ValueError as e:
+        logger.warning(f"Failed to parse release date '{release_date_str}' with precision '{release_date_precision}': {e}")
+        return None
