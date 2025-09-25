@@ -230,7 +230,10 @@ class SearchManager {
             manualSelectionToggle.checked = false;
         }
         this.app.playlistExport.updateExportFormDisplay();
-        
+
+        // Reset artist filter for new searches (fixes rerun search dropdown state issue)
+        this.app.resultsUIManager.resetArtistFilter();
+
         // Reset queue when starting a new search
         if (isNewSearch) {
             this.app.searchResultsId = newSearchId;
