@@ -109,8 +109,9 @@ class TestResultGenerator:
                 logger.info(f"First result keys: {list(results[0].keys())}")
                 logger.info(f"First result: {results[0] if len(str(results[0])) < 500 else str(results[0])[:500] + '...'}")
 
-            # Extract track IDs from results
+            # Extract track IDs and scores from results for debugging
             track_ids = []
+            track_scores = []
             for i, result in enumerate(results):
                 # Debug: Check what type result is
                 if not isinstance(result, dict):
@@ -121,8 +122,16 @@ class TestResultGenerator:
                 track_id = result.get('track_id')
                 if track_id:
                     track_ids.append(track_id)
+                    # Also capture the final score for debugging
+                    final_score = result.get('final_score', 0.0)
+                    track_scores.append(final_score)
                 else:
                     logger.warning(f"No track_id found in result {i}: {list(result.keys())}")
+
+            # Log top results with scores for debugging
+            logger.info("Top 20 results with scores:")
+            for i, (track_id, score) in enumerate(zip(track_ids[:20], track_scores[:20])):
+                logger.info(f"  {i+1:2d}. {track_id} (score: {score:.8f})")
 
             return track_ids
 
@@ -166,8 +175,9 @@ class TestResultGenerator:
                 **search_config  # Pass all config parameters through the unified parameter system
             )
 
-            # Extract track IDs from results
+            # Extract track IDs and scores from results for debugging
             track_ids = []
+            track_scores = []
             for i, result in enumerate(results):
                 # Debug: Check what type result is
                 if not isinstance(result, dict):
@@ -178,8 +188,16 @@ class TestResultGenerator:
                 result_track_id = result.get('track_id')
                 if result_track_id:
                     track_ids.append(result_track_id)
+                    # Also capture the final score for debugging
+                    final_score = result.get('final_score', 0.0)
+                    track_scores.append(final_score)
                 else:
                     logger.warning(f"No track_id found in song query result {i}: {list(result.keys())}")
+
+            # Log top results with scores for debugging
+            logger.info("Top 20 song query results with scores:")
+            for i, (track_id, score) in enumerate(zip(track_ids[:20], track_scores[:20])):
+                logger.info(f"  {i+1:2d}. {track_id} (score: {score:.8f})")
 
             return track_ids
 
