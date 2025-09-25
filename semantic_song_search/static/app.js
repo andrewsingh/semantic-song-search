@@ -311,9 +311,19 @@ class SemanticSearchApp {
         if (this.domElements.artistFilterList) {
             this.domElements.artistFilterList.addEventListener('change', (e) => {
                 if (e.target.classList.contains('dropdown-checkbox')) {
-                    const artistName = e.target.dataset.artist;
-                    if (artistName) {
-                        this.resultsUIManager.handleArtistCheckboxChange(artistName, e.target.checked);
+                    // Handle master "Select All" checkbox
+                    if (e.target.dataset.action === 'select-all') {
+                        if (e.target.checked) {
+                            this.resultsUIManager.selectAllArtists();
+                        } else {
+                            this.resultsUIManager.unselectAllArtists();
+                        }
+                    } else {
+                        // Handle individual artist checkboxes
+                        const artistName = e.target.dataset.artist;
+                        if (artistName) {
+                            this.resultsUIManager.handleArtistCheckboxChange(artistName, e.target.checked);
+                        }
                     }
                 }
             });

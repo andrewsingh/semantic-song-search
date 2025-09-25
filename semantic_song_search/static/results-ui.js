@@ -673,6 +673,19 @@ class ResultsUIManager {
             return;
         }
 
+        // Add master "Select All" checkbox at the top
+        const masterCheckboxItem = document.createElement('div');
+        masterCheckboxItem.className = 'dropdown-filter-item';
+        masterCheckboxItem.innerHTML = `
+            <label class="dropdown-checkbox-label">
+                <input type="checkbox" class="dropdown-checkbox master-select-checkbox"
+                       data-action="select-all" checked>
+                <span class="dropdown-artist-name"><strong>Select All / None</strong></span>
+                <span class="dropdown-track-count">(${sortedArtists.length} artists)</span>
+            </label>
+        `;
+        dropdown.appendChild(masterCheckboxItem);
+
         // Create checkboxes for each artist
         sortedArtists.forEach(([artistName, trackCount]) => {
             const isSelected = artistFilter.selectedArtists.has(artistName);
@@ -789,5 +802,60 @@ class ResultsUIManager {
         } else {
             buttonText.textContent = 'Filter by Artist';
         }
+    }
+
+    selectAllArtists() {
+        /**
+         * Select all artists in the current dropdown
+         * Triggered by master "Select All" checkbox
+         */
+        const artistFilter = this.app.artistFilterState;
+
+        console.log('🎯 Select All: Adding all artists to selection');
+
+        // Add all current artists to selected set
+        artistFilter.artistTrackCounts.forEach((_, artistName) => {
+            artistFilter.selectedArtists.add(artistName);
+        });
+
+        // Update all individual checkboxes to checked state
+        this.updateAllArtistCheckboxes(true);
+
+        // Update Apply button state
+        this.updateApplyButtonState();
+    }
+
+    unselectAllArtists() {
+        /**
+         * Unselect all artists in the current dropdown
+         * Triggered by master "Select All" checkbox
+         */
+        const artistFilter = this.app.artistFilterState;
+
+        console.log('🎯 Unselect All: Clearing all artist selections');
+
+        // Clear all selected artists
+        artistFilter.selectedArtists.clear();
+
+        // Update all individual checkboxes to unchecked state
+        this.updateAllArtistCheckboxes(false);
+
+        // Update Apply button state
+        this.updateApplyButtonState();
+    }
+
+    updateAllArtistCheckboxes(checked) {
+        /**
+         * Update all individual artist checkboxes to specified checked state
+         * @param {boolean} checked - Whether checkboxes should be checked or unchecked
+         */
+        const dropdown = this.app.domElements.artistFilterList;
+        if (!dropdown) return;
+
+        // Update all individual artist checkboxes (not the master checkbox)
+        const artistCheckboxes = dropdown.querySelectorAll('.dropdown-checkbox:not(.master-select-checkbox)');
+        artistCheckboxes.forEach(checkbox => {
+            checkbox.checked = checked;
+        });
     }
 }
