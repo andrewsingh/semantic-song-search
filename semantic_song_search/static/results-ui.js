@@ -561,10 +561,15 @@ class ResultsUIManager {
             }
             
             songCountInput.title = `Currently ${availableText}`;
-            
+
             const label = document.querySelector('label[for="song-count"]');
             if (label) {
                 label.textContent = `Number of Songs (${availableText}):`;
+            }
+
+            // Update input value to match current filtered results count (only when not in manual selection mode)
+            if (!this.app.isManualSelectionMode && songCountInput.value !== this.app.searchResults.length.toString()) {
+                songCountInput.value = this.app.searchResults.length;
             }
         }
     }
@@ -664,9 +669,16 @@ class ResultsUIManager {
         // Clear existing content
         dropdown.innerHTML = '';
 
-        // Get sorted artists by track count (descending) for better UX
+        // Get sorted artists by track count (descending), then alphabetically for ties
         const sortedArtists = Array.from(artistFilter.artistTrackCounts.entries())
-            .sort((a, b) => b[1] - a[1]); // Sort by count descending
+            .sort((a, b) => {
+                // Primary sort: track count descending
+                if (b[1] !== a[1]) {
+                    return b[1] - a[1];
+                }
+                // Secondary sort: artist name ascending (alphabetical)
+                return a[0].localeCompare(b[0]);
+            });
 
         if (sortedArtists.length === 0) {
             dropdown.innerHTML = '<div class="dropdown-filter-empty">No artists found</div>';

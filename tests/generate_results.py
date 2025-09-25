@@ -250,7 +250,6 @@ def main():
     parser = argparse.ArgumentParser(description='Generate search results for regression testing')
     parser.add_argument('--input', type=str, help='Specific input file to process')
     parser.add_argument('--output-dir', type=str, required=True,
-                       choices=['labels', 'preds'],
                        help='Output directory (labels or preds)')
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
 
