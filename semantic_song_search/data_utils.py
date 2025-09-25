@@ -418,7 +418,7 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
     all_embedding_entries = []
     embedding_to_indices = {}  # Maps (embed_type, embedding_idx) -> entry info
     
-    for embed_type, indices in embedding_indices.items():
+    for embed_type, indices in sorted(embedding_indices.items()):
         uris = indices.get('uris', np.array([]))
         songs = indices.get('songs', np.array([]))
         artists = indices.get('artists', np.array([]))
@@ -503,7 +503,7 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
     
     # Update embedding indices to only include matched songs
     updated_indices = {}
-    for embed_type, indices in embedding_indices.items():
+    for embed_type, indices in sorted(embedding_indices.items()):
         # Find which embeddings have matches
         valid_indices = []
         new_song_indices = []

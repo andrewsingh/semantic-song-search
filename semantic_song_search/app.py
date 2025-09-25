@@ -811,7 +811,7 @@ def top_artists():
                 logger.warning(f"Failed to get {time_range} top artists: {e}")
         
         # Convert to list and sort by overall popularity/ranking
-        artists_list = list(all_artists.values())
+        artists_list = sorted(list(all_artists.values()), key=lambda x: x['id'])
         artists_list.sort(key=lambda x: (
             len(x['rankings']),  # Prefer artists who appear in multiple time ranges
             -x['popularity']      # Then by popularity

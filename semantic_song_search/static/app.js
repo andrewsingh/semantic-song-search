@@ -30,11 +30,24 @@ class SemanticSearchApp {
         this.topArtistsLoaded = false;
         this.isFiltered = false;
         this.originalSearchResults = []; // Store unfiltered results for client-side filtering
+        this.baseSearchResults = []; // Store pre-artist-filtered results (after other filters like Top Artists)
         
         // Manual song selection
         this.isManualSelectionMode = false;
         this.selectedSongs = new Set(); // Set of song indices that are selected
-        
+
+        // Artist filter state (performance-optimized with hashmaps)
+        this.artistFilterState = {
+            isDropdownOpen: false,
+            selectedArtists: new Set(), // Currently selected artists
+            originalSelectedArtists: new Set(), // Original state to track changes
+            artistTrackCounts: new Map(), // artist -> track count (O(1) lookups)
+            artistToTracks: new Map(), // artist -> Set of track indices (O(1) lookups)
+            isActive: false, // Whether artist filter is currently applied
+            filteredResults: null, // Cached filtered results to avoid re-filtering
+            lastFilteredWith: null // Set of artists used for last filtering (cache validation)
+        };
+
         // Personalization controls state
         this.currentLambdaVal = 0.5;
         this.currentFamiliarityMin = 0.0;
@@ -64,6 +77,10 @@ class SemanticSearchApp {
         // Cache frequently accessed DOM elements
         this.domElements = {
             topArtistsFilter: document.getElementById('top-artists-filter'),
+            artistFilterDropdownBtn: document.getElementById('artist-filter-dropdown-btn'),
+            artistFilterDropdown: document.getElementById('artist-filter-dropdown'),
+            artistFilterList: document.querySelector('#artist-filter-dropdown .dropdown-filter-list'),
+            artistFilterApplyBtn: document.getElementById('artist-filter-apply-btn'),
             resultsGrid: document.getElementById('results-grid'),
             searchInput: document.getElementById('search-input'),
             suggestions: document.getElementById('suggestions'),
@@ -239,11 +256,78 @@ class SemanticSearchApp {
                 await this.loadTopArtists();
             }
             
+            // Reset artist filter state when Top Artists filter changes (available artists change)
+            if (this.searchResults.length > 0) {
+                this.artistFilterState.isActive = false;
+                this.artistFilterState.selectedArtists.clear();
+                this.artistFilterState.originalSelectedArtists.clear();
+                this.artistFilterState.filteredResults = null;
+                this.artistFilterState.lastFilteredWith = null;
+            }
+
             // If we have existing search results, filter them client-side instead of re-running the search
             if (this.searchResults.length > 0) {
                 this.searchManager.applyClientSideFilter();
+
+                // Rebuild artist dropdown from the new base dataset
+                // This ensures dropdown shows artists that are available in the base dataset
+                this.resultsUIManager.buildArtistDataMaps(this.baseSearchResults, false);
+                this.resultsUIManager.populateArtistFilterDropdown();
             }
         });
+
+        // Artist filter dropdown button
+        if (this.domElements.artistFilterDropdownBtn) {
+            this.domElements.artistFilterDropdownBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleArtistFilterDropdown();
+            });
+        }
+
+        // Artist filter Apply button
+        if (this.domElements.artistFilterApplyBtn) {
+            this.domElements.artistFilterApplyBtn.addEventListener('click', () => {
+                this.searchManager.applyArtistFilterAndUpdate();
+                this.toggleArtistFilterDropdown(); // Close dropdown after applying
+
+                // Track artist filter usage
+                this.analytics.trackEvent('Artist Filter Applied', {
+                    'selected_artists_count': this.artistFilterState.selectedArtists.size,
+                    'total_artists_count': this.artistFilterState.artistTrackCounts.size,
+                    'filtered_results_count': this.searchResults.length,
+                    'original_results_count': this.originalSearchResults.length
+                });
+            });
+        }
+
+        // Close artist filter dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#artist-filter-option') && this.artistFilterState.isDropdownOpen) {
+                this.toggleArtistFilterDropdown();
+            }
+        });
+
+        // Handle artist checkbox changes (event delegation for performance)
+        if (this.domElements.artistFilterList) {
+            this.domElements.artistFilterList.addEventListener('change', (e) => {
+                if (e.target.classList.contains('dropdown-checkbox')) {
+                    // Handle master "Select All" checkbox
+                    if (e.target.dataset.action === 'select-all') {
+                        if (e.target.checked) {
+                            this.resultsUIManager.selectAllArtists();
+                        } else {
+                            this.resultsUIManager.unselectAllArtists();
+                        }
+                    } else {
+                        // Handle individual artist checkboxes
+                        const artistName = e.target.dataset.artist;
+                        if (artistName) {
+                            this.resultsUIManager.handleArtistCheckboxChange(artistName, e.target.checked);
+                        }
+                    }
+                }
+            });
+        }
     }
     
     bindPersonalizationEventListeners() {
@@ -428,6 +512,27 @@ class SemanticSearchApp {
         } catch (error) {
             console.error('Error loading top artists:', error);
             topArtistsText.textContent = 'Only My Top Artists';
+        }
+    }
+
+    toggleArtistFilterDropdown() {
+        /**
+         * Toggle the artist filter dropdown open/closed
+         */
+        const artistFilter = this.artistFilterState;
+        const dropdown = this.domElements.artistFilterDropdown;
+        const arrow = this.domElements.artistFilterDropdownBtn?.querySelector('.dropdown-filter-arrow');
+
+        if (!dropdown) return;
+
+        artistFilter.isDropdownOpen = !artistFilter.isDropdownOpen;
+
+        if (artistFilter.isDropdownOpen) {
+            dropdown.style.display = 'block';
+            if (arrow) arrow.textContent = '▲';
+        } else {
+            dropdown.style.display = 'none';
+            if (arrow) arrow.textContent = '▼';
         }
     }
 }

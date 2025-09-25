@@ -155,7 +155,7 @@ class SearchConfig:
 
     def update_weights(self, weights: Dict[str, float]):
         """Update weights from dictionary with validation."""
-        for key, value in weights.items():
+        for key, value in sorted(weights.items()):
             try:
                 float_value = float(value)
 
@@ -939,7 +939,7 @@ class MusicSearchEngine:
             raise IndexError(f"Song index {song_idx} out of range (0-{len(self.songs)-1})")
         
         if embed_type not in self.embedding_lookups:
-            available_types = list(self.embedding_lookups.keys())
+            available_types = sorted(list(self.embedding_lookups.keys()))
             raise ValueError(f"Embedding type '{embed_type}' not available. Available types: {available_types}")
         
         song = self.songs[song_idx]
@@ -994,7 +994,7 @@ class MusicSearchEngine:
         query_song = None
         if search_type == 'song' and query_track_id:
             query_song_embeddings = {}
-            for embed_type in song_weights.keys():
+            for embed_type in sorted(song_weights.keys()):
                 if embed_type in self.embedding_lookups:
                     embedding = self.embedding_lookups[embed_type].get(query_track_id)
                     if embedding is not None:
@@ -1029,7 +1029,7 @@ class MusicSearchEngine:
         artist_similarities = {}
         t_artist_start = time.time()
 
-        for candidate_artist in unique_artists:
+        for candidate_artist in sorted(unique_artists):
             try:
                 if search_type == 'text':
                     artist_similarity = self.compute_artist_descriptor_similarity(
@@ -1048,7 +1048,7 @@ class MusicSearchEngine:
         logger.info(f"Computed artist similarities for {len(unique_artists)} unique artists in {t_artist_end - t_artist_start:.2f}s")
 
         # Phase 3: Compute 95th percentile from unique artist similarities
-        unique_artist_similarities = list(artist_similarities.values())
+        unique_artist_similarities = sorted(artist_similarities.values())
         # Filter out NaN values before percentile calculation
         clean_similarities = [x for x in unique_artist_similarities if not np.isnan(x)]
         artist_similarity_p95 = np.percentile(clean_similarities, 95) if clean_similarities else 0.0
@@ -1130,8 +1130,8 @@ class MusicSearchEngine:
         t_semantic_end = time.time()
         logger.info(f"Computed similarities for {len(candidates_data)} candidates in {t_semantic_end - t_semantic_start:.2f}s")
         
-        # Sort by final score
-        candidates_data.sort(key=lambda x: x['final_score'], reverse=True)
+        # Sort by final score with stable tie-breaking using index
+        candidates_data.sort(key=lambda x: (-x['final_score'], x['index']))
         
         # Apply pagination
         total_count = len(candidates_data)
@@ -1202,7 +1202,7 @@ class MusicSearchEngine:
             Object with numpy values converted to native Python types
         """
         if isinstance(obj, dict):
-            return {key: self._convert_numpy_to_python(value) for key, value in obj.items()}
+            return {key: self._convert_numpy_to_python(value) for key, value in sorted(obj.items())}
         elif isinstance(obj, list):
             return [self._convert_numpy_to_python(item) for item in obj]
         elif isinstance(obj, np.ndarray):

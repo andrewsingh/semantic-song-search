@@ -157,7 +157,7 @@ class RankingConfig:
     
     def update_weights(self, weights: Dict[str, float]):
         """Update weights from dictionary with validation."""
-        for key, value in weights.items():
+        for key, value in sorted(weights.items()):
             try:
                 # Handle string parameters that don't need float conversion
                 if key == 'knn_embed_type':
@@ -517,7 +517,7 @@ class RankingEngine:
         # This requires access to songs metadata to map track_id -> artist
         # For now, track_stats keys are track_ids, so we need another approach
         # We'll store artist info in track_stats during computation
-        for track_id, stats in self.track_stats.items():
+        for track_id, stats in sorted(self.track_stats.items()):
             # Get artist from stored artist info in stats (we'll need to add this)
             artist = stats.get('artist', 'Unknown')  # We'll need to add this during track stats computation
             if artist not in artist_data:
@@ -528,7 +528,7 @@ class RankingEngine:
                     
         artist_affinities = {}
         artist_familiarities = {}
-        for artist, data in artist_data.items():
+        for artist, data in sorted(artist_data.items()):
             artist_affinities[artist] = data['E_A'] / (data['E_A'] + (self.config.K_E ** self.config.gamma_A))
             artist_familiarities[artist] = data['F_A'] / (data['F_A'] + self.config.M_A)
 
