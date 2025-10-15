@@ -386,7 +386,7 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
         return ""
     
     # Build lookup dictionaries for metadata
-    # 1. URI-based lookup
+    # 1. URI-based lookup (with source type for stats)
     uri_to_song = {}
     # 2. (song_name, all_artists) lookup
     song_all_artists_to_song = {}
@@ -397,7 +397,13 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
         # URI lookup
         uri = song.get('uri')
         if uri:
-            uri_to_song[uri] = song
+            uri_to_song[uri] = {'song': song, 'source': 'primary'}
+
+        linked_from = song.get('linked_from')
+        if linked_from and isinstance(linked_from, dict):
+            linked_uri = linked_from.get('uri')
+            if linked_uri and linked_uri not in uri_to_song:
+                uri_to_song[linked_uri] = {'song': song, 'source': 'linked_from'}
         
         # Name + artists lookups
         song_name = normalize_name(song.get('name', ''))
@@ -441,7 +447,13 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
     embedding_to_song_idx = {}  # Maps (embed_type, embedding_idx) -> song_idx in filtered list
     matched_uris = set()  # Track unique songs by URI to avoid duplicates
     
-    match_stats = {'uri_matches': 0, 'name_all_artists_matches': 0, 'name_main_artist_matches': 0, 'no_matches': 0}
+    match_stats = {
+        'uri_primary_matches': 0,
+        'uri_linked_from_matches': 0,
+        'name_all_artists_matches': 0,
+        'name_main_artist_matches': 0,
+        'no_matches': 0
+    }
     
     for entry in all_embedding_entries:
         embed_type = entry['embed_type']
@@ -456,9 +468,13 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
         
         # Strategy 1: Match by URI
         if uri and uri in uri_to_song:
-            matched_song = uri_to_song[uri]
-            match_method = 'uri'
-            match_stats['uri_matches'] += 1
+            uri_entry = uri_to_song[uri]
+            matched_song = uri_entry['song']
+            match_method = 'uri_primary' if uri_entry['source'] == 'primary' else 'uri_linked_from'
+            if uri_entry['source'] == 'primary':
+                match_stats['uri_primary_matches'] += 1
+            else:
+                match_stats['uri_linked_from_matches'] += 1
         
         # Strategy 2: Match by (song_name, all_artists)
         elif song_name and artists_str:
@@ -499,7 +515,14 @@ def reconcile_song_indices(embedding_indices: Dict, songs_metadata: List[Dict]) 
     total_matched = sum(match_stats.values()) - match_stats['no_matches']
     logger.info(f"Song reconciliation completed: {len(matched_songs)}/{len(songs_metadata)} metadata songs have embeddings")
     logger.info(f"Embedding matching: {total_matched}/{total_embeddings} embeddings matched to metadata")
-    logger.info(f"Match methods: URI={match_stats['uri_matches']}, Name+AllArtists={match_stats['name_all_artists_matches']}, Name+MainArtist={match_stats['name_main_artist_matches']}, NoMatch={match_stats['no_matches']}")
+    logger.info(
+        "Match methods: URI(primary)=%d, URI(linked_from)=%d, Name+AllArtists=%d, Name+MainArtist=%d, NoMatch=%d",
+        match_stats['uri_primary_matches'],
+        match_stats['uri_linked_from_matches'],
+        match_stats['name_all_artists_matches'],
+        match_stats['name_main_artist_matches'],
+        match_stats['no_matches']
+    )
     
     # Update embedding indices to only include matched songs
     updated_indices = {}
