@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'semantic_song_search'))
 from app import app, init_search_engine
 
 RAILWAY_VOLUME_MOUNT_PATH = os.getenv('RAILWAY_VOLUME_MOUNT_PATH', '/data')
-DATASET_NAME = os.getenv('DATASET_NAME', 'library_v3.1')
+DATASET_NAME = os.getenv('DATASET_NAME', 'library_v4')
 
 def main():
     """Initialize the app with production data files and start the server."""

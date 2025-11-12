@@ -2,6 +2,11 @@ prompts/*
 notebooks/*
 data/*
 design_docs/*
+tests/*
+docs/*
+evals/*
+prompts_to_chat/*
+web_scraping/*
 *__pycache__*
 .cache
 .DS_Store
@@ -11,3 +16,4 @@ flask_session/*
 *.pdf
 *.ipynb
 *.png
+*.log

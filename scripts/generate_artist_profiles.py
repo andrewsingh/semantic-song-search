@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from profiles import ArtistProfile
 
 # ──────────────────────────────── RATE-LIMIT SETTINGS ─────────────────────────
-RATE_LIMIT_RPM   = 500                  # <-- edit this if your quota changes
+RATE_LIMIT_RPM   = 800                  # <-- edit this if your quota changes
 SAFETY_FACTOR    = 0.75                 # 25 % head-room
 RPS              = RATE_LIMIT_RPM / 60  # requests per second
 
