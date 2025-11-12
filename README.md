@@ -1,10 +1,12 @@
 # Semantic Song Search
 
-Text-based Music Similarity Search
+A music similarity search engine built entirely from internet text data.
 
 **Try the app here**: https://songmatch.up.railway.app
 
 **Read the blog post**: https://andrewsingh.github.io/posts/text-not-tracks/
+
+<img width="1000" alt="songmatch_screenshot" src="https://github.com/user-attachments/assets/a0c67fea-6798-4944-b259-3416becab8cc" />
 
 ## Overview
 
