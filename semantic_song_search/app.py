@@ -24,7 +24,9 @@ from datetime import datetime, timedelta, timezone
 import mixpanel
 import pandas as pd
 import time
+import threading
 from search import MusicSearchEngine, SearchConfig
+import session_model
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -64,6 +66,35 @@ if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
 # Initialize search engine and optional ranking engine
 search_engine = None
 ranking_engine = None
+
+# Playlist-builder session model scorer (lazy) + experiment-log lock
+session_scorer = None
+_playlist_log_lock = threading.Lock()
+
+
+def get_session_scorer():
+    """Lazily build the playlist session-model scorer on top of the search engine."""
+    global session_scorer
+    if session_scorer is None and search_engine is not None:
+        session_scorer = session_model.PlaylistSessionScorer(search_engine)
+    return session_scorer
+
+
+def _playlist_log_path():
+    default = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'playlist_experiments.jsonl')
+    return os.environ.get('PLAYLIST_LOG_PATH', default)
+
+
+def log_playlist_event(record: dict):
+    """Append one JSON line per suggest call (the experiment record / data-lake seed)."""
+    path = _playlist_log_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with _playlist_log_lock:
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record, default=str) + '\n')
+    except Exception as e:
+        logger.warning(f"Failed to write playlist experiment log: {e}")
 
 def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None, shared_genre_store_file: str = None, profiles_file: str = None):
     """Initialize the search engine with data files."""
@@ -214,6 +245,14 @@ def index():
     # Pass debug flag to template
     debug_mode = getattr(args, 'debug', False) if 'args' in globals() and args else False
     return render_template('index.html', debug_mode=debug_mode)
+
+@app.route('/playlist')
+def playlist_builder():
+    """Playlist-builder testbed page (session model v2)."""
+    init_search_engine()
+    debug_mode = getattr(args, 'debug', False) if 'args' in globals() and args else False
+    return render_template('playlist.html', debug_mode=debug_mode,
+                           session_defaults=constants.SESSION_DEFAULTS)
 
 @app.route('/api/search', methods=['POST'])
 def search():
@@ -519,8 +558,79 @@ def search_suggestions():
             'spotify_id': track_id,
             'score': float(score)  # Convert numpy.float64 to native Python float
         })
-    
+
     return jsonify(suggestions)
+
+@app.route('/api/playlist/suggest', methods=['POST'])
+def playlist_suggest():
+    """Session-model suggestions for the playlist builder (stateless: the full set S is posted)."""
+    scorer = get_session_scorer()
+    if scorer is None:
+        return jsonify({'error': 'Search engine not initialized'}), 500
+
+    data = request.get_json(silent=True) or {}
+    raw_playlist = data.get('playlist', [])
+    if not isinstance(raw_playlist, list) or len(raw_playlist) == 0:
+        return jsonify({'error': 'Playlist is empty; add a seed song first.'}), 400
+
+    SD = constants.SESSION_DEFAULTS
+
+    # Parse + validate (track_id, weight); reject bad weights; dedupe last-wins.
+    deduped, order = {}, []
+    for item in raw_playlist:
+        try:
+            track_id = item['track_id']
+            weight = float(item.get('weight', SD['normal_weight']))
+        except (TypeError, KeyError, ValueError):
+            return jsonify({'error': 'Invalid playlist entry (need track_id + numeric weight).'}), 400
+        if not track_id or not np.isfinite(weight) or weight <= 0:
+            return jsonify({'error': 'Track weights must be positive numbers.'}), 400
+        if track_id not in deduped:
+            order.append(track_id)
+        deduped[track_id] = weight  # last occurrence wins
+    playlist = [(tid, deduped[tid]) for tid in order]
+
+    exclude = set(data.get('exclude', []) or [])
+    hp_in = data.get('hyperparams', {}) or {}
+    max_per_artist = hp_in.get('max_per_artist', SD['max_per_artist'])
+    hp = {
+        'kappa': float(hp_in.get('kappa', SD['kappa'])),
+        'tau': float(hp_in.get('tau', SD['tau'])),
+        'k_pool': int(hp_in.get('k_pool', SD['k_pool'])),
+        'n': int(data.get('n', hp_in.get('n', SD['n']))),
+        'max_per_artist': int(max_per_artist) if max_per_artist else None,
+        'release_date_decay_constant': float(
+            hp_in.get('release_date_decay_constant', SD['release_date_decay_constant'])),
+    }
+
+    rng = np.random.default_rng(hp_in.get('seed'))
+
+    try:
+        result = scorer.suggest(playlist, exclude, hp, rng)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    slate_id = uuid.uuid4().hex
+    result['slate_id'] = slate_id
+
+    log_playlist_event({
+        'ts': datetime.now(timezone.utc).isoformat(),
+        'slate_id': slate_id,
+        'prev_slate_id': data.get('prev_slate_id'),
+        'trigger': data.get('trigger'),
+        'changed_track_ids': data.get('changed_track_ids'),
+        'playlist': playlist,
+        'exclude': list(exclude),
+        'hyperparams': hp,
+        'unknown_track_ids': result.get('unknown_track_ids'),
+        'diagnostics': result.get('session_diagnostics'),
+        'suggestions': [
+            {'track_id': s['track_id'], 'final_score': s['final_score'], 'components': s['components']}
+            for s in result['suggestions']
+        ],
+    })
+
+    return jsonify(result)
 
 @app.route('/api/create_playlist', methods=['POST'])
 def create_playlist():

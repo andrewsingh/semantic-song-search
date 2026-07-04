@@ -954,6 +954,46 @@ class MusicSearchEngine:
         return embedding_lookup[track_id]
     
 
+    def build_song_result(self, song: Dict, index: int, *, song_similarity: float = None,
+                          artist_similarity: float = None, final_score: float = None,
+                          components: Dict = None) -> Dict:
+        """Build a card-compatible result object from a song.
+
+        Score-related fields (song_similarity, artist_similarity, final_score,
+        components) are optional so this can also shape *unscored* songs — e.g.
+        the current playlist in the playlist builder.
+        """
+        artists_list = song.get('artists', [])
+        primary_artist = artists_list[0]['name'] if artists_list else ''
+        all_artists = [artist['name'] for artist in artists_list] if artists_list else []
+
+        album_images = song.get('album', {}).get('images', [])
+        cover_url = album_images[-1]['url'] if album_images else ''  # smallest image (last)
+
+        track_id = song.get('track_id') or song.get('id')
+
+        return {
+            'index': index,
+            'song_idx': index,
+            'song': song.get('name', ''),
+            'artist': primary_artist,
+            'artists': all_artists,
+            'all_artists': all_artists,
+            'album': song.get('album', {}).get('name', '') if song.get('album') else '',
+            'cover_url': cover_url,
+            'track_id': track_id,
+            'spotify_id': track_id,
+            'uri': song.get('uri', ''),
+            'popularity': song.get('popularity', 0),
+            'song_similarity': song_similarity,
+            'artist_similarity': artist_similarity,
+            'final_score': final_score,
+            'components': components,
+            'scoring_components': components,
+            'tags': self.tags_lookup.get(track_id, []),
+            'genres': self.genres_lookup.get(track_id, []),
+        }
+
     def similarity_search(self, query_embedding: np.ndarray, k: int, offset: int = 0,
                          query_track_id: str = None, ranking_engine=None,
                          **advanced_params) -> Tuple[List[Dict], int]:
@@ -1138,44 +1178,16 @@ class MusicSearchEngine:
         paginated_candidates = candidates_data[offset:offset + k]
         
         # Build results
-        results = []
-        for candidate in paginated_candidates:
-            song = candidate['song']
-            
-            # Extract artists info
-            artists_list = song.get('artists', [])
-            primary_artist = artists_list[0]['name'] if artists_list else ''
-            all_artists = [artist['name'] for artist in artists_list] if artists_list else []
-            
-            # Extract cover art from album images
-            album_images = song.get('album', {}).get('images', [])
-            cover_url = album_images[-1]['url'] if album_images else ''  # Use smallest image (last in list)
-            
-            # Get track_id for tags/genres lookup
-            track_id = song.get('track_id') or song.get('id')
-
-            result = {
-                'index': candidate['index'],
-                'song_idx': candidate['index'],  # For consistency with suggestions
-                'song': song.get('name', ''),  # Frontend expects 'song' not 'song_name'
-                'artist': primary_artist,  # Primary artist
-                'artists': all_artists,  # All artists array
-                'all_artists': all_artists,  # For frontend compatibility
-                'album': song.get('album', {}).get('name', '') if song.get('album') else '',
-                'cover_url': cover_url,  # Cover art URL
-                'track_id': track_id,
-                'spotify_id': track_id,  # For Spotify playback
-                'uri': song.get('uri', ''),
-                'popularity': song.get('popularity', 0),
-                'song_similarity': candidate['song_similarity'],
-                'artist_similarity': candidate['artist_similarity'],
-                'final_score': candidate['final_score'],
-                'components': candidate['components'],
-                'scoring_components': candidate['components'],  # For frontend compatibility
-                'tags': self.tags_lookup.get(track_id, []),  # Add tags from profiles
-                'genres': self.genres_lookup.get(track_id, [])  # Add genres from profiles
-            }
-            results.append(result)
+        results = [
+            self.build_song_result(
+                candidate['song'], candidate['index'],
+                song_similarity=candidate['song_similarity'],
+                artist_similarity=candidate['artist_similarity'],
+                final_score=candidate['final_score'],
+                components=candidate['components'],
+            )
+            for candidate in paginated_candidates
+        ]
         
         t_similarity_search_end = time.time()
         logger.info(f"Similarity search completed in {t_similarity_search_end - t_similarity_search_start:.2f}s")

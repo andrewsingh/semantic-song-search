@@ -50,3 +50,50 @@ DEFAULT_SUGGESTION_LIMIT = 20
 # Spotify Configuration
 SPOTIFY_REDIRECT_URI_LOCAL = "http://127.0.0.1:5000/callback"
 SPOTIFY_SCOPES = "user-read-private user-read-email user-top-read playlist-modify-public playlist-modify-private user-read-playback-state user-modify-playback-state streaming"
+
+
+# ---------------------------------------------------------------------------
+# Playlist-builder session model (see docs/session_model_v2.md)
+# Single backend source of truth for the session-model defaults. The
+# /api/playlist/suggest endpoint falls back to these per-request, and the
+# frontend reads them (injected into playlist.html) instead of hardcoding, so
+# backend and frontend defaults cannot drift.
+# ---------------------------------------------------------------------------
+SESSION_DEFAULTS = {
+    # Top-level component weights (omega). Sum to 1. Era (a4) given a small
+    # nonzero default so it is actually exercised in the testbed.
+    "top_level_weights": {
+        "a0_song_sim": 0.55,
+        "a1_artist_sim": 0.30,
+        "a2_total_streams": 0.05,
+        "a3_daily_streams": 0.05,
+        "a4_release_date": 0.05,
+    },
+    # Song descriptor (aspect) preset weights (alpha^pref). Sum to 1.
+    "song_weights": {
+        "genres": 0.30,
+        "vocal_style": 0.15,
+        "production_sound_design": 0.15,
+        "lyrical_meaning": 0.10,
+        "mood_atmosphere": 0.20,
+        "tags": 0.10,
+    },
+    # Artist descriptor preset weights (beta^pref), keyed by artist aspect. Sum to 1.
+    "artist_weights": {
+        "genres": 0.375,
+        "vocal_style": 0.15,
+        "production_sound_design": 0.15,
+        "lyrical_themes": 0.075,
+        "mood_atmosphere": 0.125,
+        "cultural_context_scene": 0.125,
+    },
+    # Sampler + shrinkage hyperparameters (live-editable in the dev panel).
+    "kappa": 3.0,          # shrinkage pseudo-count: lambda_n = (n-1)/(n-1+kappa)
+    "tau": 0.08,           # softmax temperature
+    "k_pool": 50,          # top-K candidate pool for sampling
+    "n": 5,                # number of suggestions per slate
+    "seed_anchor_weight": 3.0,   # per-track weight for the seed / anchored songs
+    "normal_weight": 1.0,        # per-track weight for ordinary selections
+    "max_per_artist": 1,   # artist dedup cap per slate; 0/None = unlimited
+    "release_date_decay_constant": 10950.0,  # era exp-decay (days)
+}

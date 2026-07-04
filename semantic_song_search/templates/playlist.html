@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en" data-debug-mode="{% if debug_mode %}true{% else %}false{% endif %}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1280, initial-scale=0.3, user-scalable=yes">
+    <title>SongMatch — Playlist Builder</title>
+    <!-- Reused CSS modules -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/header-search.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/results-songcard.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/player.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/responsive.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/playlist.css') }}">
+    <script src="https://sdk.scdn.co/spotify-player.js"></script>
+    <!-- No-op analytics stub so the reused utils/player run without Mixpanel -->
+    <script>
+    window.mixpanel = { track(){}, init(){}, identify(){}, register(){}, time_event(){},
+                        people: { set(){}, increment(){} } };
+    // Session-model defaults from the backend (single source of truth).
+    window.SESSION_DEFAULTS = {{ session_defaults | tojson }};
+    </script>
+</head>
+<body>
+    <div class="app-container pb-app" data-debug-mode="{% if debug_mode %}true{% else %}false{% endif %}">
+        <header class="pb-header">
+            <div class="pb-header-left">
+                <h1 class="pb-title">Playlist Builder</h1>
+                <span class="pb-subtitle">session model v2 · set-as-evidence testbed</span>
+            </div>
+            <a href="/" class="pb-back-link">← Search</a>
+        </header>
+
+        <!-- Seed / manual-add search -->
+        <div class="pb-search-wrap">
+            <input type="text" id="pb-search-input" class="search-input"
+                   placeholder="Search a song to seed the playlist…" autocomplete="off">
+            <div id="pb-suggestions" class="suggestions" style="display:none;"></div>
+        </div>
+
+        <main class="pb-main">
+            <!-- The playlist = the selected set S -->
+            <section class="pb-section pb-playlist-section">
+                <div class="pb-section-header">
+                    <h2>Your Playlist <span id="pb-playlist-count" class="pb-count">(0)</span></h2>
+                    <div class="pb-export">
+                        <input type="text" id="pb-playlist-name" class="pb-name-input" placeholder="Playlist name">
+                        <button id="pb-export-btn" class="pb-btn pb-btn-primary">Export to Spotify</button>
+                    </div>
+                </div>
+                <div id="pb-export-status" class="pb-export-status"></div>
+                <div id="pb-playlist-grid" class="pb-grid pb-playlist-grid">
+                    <div class="pb-empty">Search for a song above to start your playlist.</div>
+                </div>
+            </section>
+
+            <!-- Suggestions from the session model -->
+            <section class="pb-section pb-suggestions-section">
+                <div class="pb-section-header">
+                    <h2>Suggestions</h2>
+                    <button id="pb-reroll-btn" class="pb-btn" disabled>↻ Reroll</button>
+                </div>
+                <div id="pb-suggestions-grid" class="pb-grid pb-suggestions-grid">
+                    <div class="pb-empty">Suggestions appear once you add a seed song.</div>
+                </div>
+            </section>
+
+            <!-- Developer panel: diagnostics + live hyperparameter controls -->
+            <section class="pb-section pb-dev-section">
+                <button id="pb-dev-toggle" class="pb-dev-toggle" aria-expanded="true">
+                    Dev panel <span class="pb-dev-caret">▾</span>
+                </button>
+                <div id="pb-dev-panel" class="pb-dev-panel">
+                    <div class="pb-dev-controls">
+                        <label>κ (kappa) <input type="number" id="pb-ctl-kappa" step="0.5" min="0"></label>
+                        <label>τ (tau) <input type="number" id="pb-ctl-tau" step="0.01" min="0.01"></label>
+                        <label>N <input type="number" id="pb-ctl-n" step="1" min="1" max="20"></label>
+                        <label>max/artist <input type="number" id="pb-ctl-maxartist" step="1" min="0"
+                               title="0 = unlimited"></label>
+                        <button id="pb-ctl-apply" class="pb-btn">Apply</button>
+                    </div>
+                    <div id="pb-dev-diagnostics" class="pb-dev-diagnostics">
+                        <div class="pb-empty">Diagnostics appear after the first suggestion.</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Reused Spotify Web Player -->
+        <footer class="player-footer">
+            <div id="spotify-player" class="spotify-player">
+                <div class="player-content">
+                    <div class="track-info">
+                        <img id="player-cover" class="player-cover" src="" alt="Album Cover">
+                        <div class="track-details">
+                            <div id="player-title" class="player-title">No track selected</div>
+                            <div id="player-artist" class="player-artist">Click a card to preview it</div>
+                        </div>
+                    </div>
+                    <div class="player-controls">
+                        <button id="prev-btn" class="control-btn">⏮</button>
+                        <button id="play-btn" class="control-btn play-btn">▶</button>
+                        <button id="next-btn" class="control-btn">⏭</button>
+                    </div>
+                    <div class="progress-container">
+                        <span id="current-time" class="time-label">0:00</span>
+                        <div class="progress-bar-container">
+                            <div id="progress-bar" class="progress-bar">
+                                <div id="progress-filled" class="progress-filled"></div>
+                            </div>
+                        </div>
+                        <span id="total-time" class="time-label">0:00</span>
+                    </div>
+                    <div class="auth-status">
+                        <span id="auth-indicator" class="auth-indicator">○</span>
+                        <span id="auth-text">Not connected to Spotify</span>
+                        <button id="login-btn" class="login-btn" style="display:none;">Login to Spotify</button>
+                        <button id="logout-btn" class="logout-btn" style="display:none;">Logout</button>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Reused utilities + player, then the playlist-builder app -->
+    <script src="{{ url_for('static', filename='utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='spotify-player.js') }}"></script>
+    <script src="{{ url_for('static', filename='results-ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='playlist-builder.js') }}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => { window.app = new PlaylistBuilder(); });
+    </script>
+</body>
+</html>
