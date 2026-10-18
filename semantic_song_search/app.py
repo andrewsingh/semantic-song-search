@@ -10,6 +10,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_session import Session
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 from openai import OpenAI
 from typing import List, Dict, Tuple
 import logging
@@ -461,12 +462,16 @@ def get_spotify_oauth():
     
     logger.info(f"Using OAuth redirect URI: {redirect_uri}")
     
+    # In-memory cache: cache_path=None still falls back to a shared on-disk .cache,
+    # and tokens live in the Flask session. show_dialog avoids Spotify's
+    # server_error on silent re-auth after a revoked grant.
     return SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=redirect_uri,
         scope=constants.SPOTIFY_SCOPES,
-        cache_path=None
+        cache_handler=MemoryCacheHandler(),
+        show_dialog=True
     )
 
 # Additional API routes
@@ -571,14 +576,8 @@ def create_playlist():
         # Create Spotify client
         sp = spotipy.Spotify(auth=token_info['access_token'])
         
-        # Get current user info
-        user = sp.current_user()
-        user_id = user['id']
-        
-        # Create playlist
-        playlist = sp.user_playlist_create(
-            user_id, 
-            playlist_name, 
+        playlist = sp.current_user_playlist_create(
+            playlist_name,
             public=False, 
             description=f"Created by SongMatch - {len(valid_songs)} songs"
         )
@@ -642,10 +641,23 @@ def login():
 @app.route('/callback')
 def callback():
     """Spotify OAuth callback."""
+    # Spotify reports failures as ?error= with no code; handle before the token exchange.
+    spotify_error = request.args.get('error')
+    if spotify_error:
+        track_event('Authentication Failed', {
+            'auth_provider': 'spotify',
+            'error_message': f'spotify_error: {spotify_error}'[:200]
+        })
+        logger.error(f"Spotify authorization failed: {spotify_error}")
+        return redirect(url_for('index', auth_error=spotify_error))
+
     try:
         sp_oauth = get_spotify_oauth()
         code = request.args.get('code')
-        token_info = sp_oauth.get_access_token(code)
+        if not code:
+            raise ValueError("Spotify callback returned no authorization code")
+        # check_cache=False: only ever exchange the code we were just handed.
+        token_info = sp_oauth.get_access_token(code, check_cache=False)
         session['token_info'] = token_info
         session['user_id'] = str(uuid.uuid4())  # Generate session user ID
         
