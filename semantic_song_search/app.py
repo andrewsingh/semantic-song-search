@@ -10,6 +10,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_session import Session
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 from openai import OpenAI
 from typing import List, Dict, Tuple
 import logging
@@ -80,21 +81,36 @@ def get_session_scorer():
     return session_scorer
 
 
+def _log_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+
+
 def _playlist_log_path():
-    default = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'playlist_experiments.jsonl')
-    return os.environ.get('PLAYLIST_LOG_PATH', default)
+    return os.environ.get('PLAYLIST_LOG_PATH', os.path.join(_log_dir(), 'playlist_experiments.jsonl'))
 
 
-def log_playlist_event(record: dict):
-    """Append one JSON line per suggest call (the experiment record / data-lake seed)."""
-    path = _playlist_log_path()
+def _playlist_export_log_path():
+    return os.environ.get('PLAYLIST_EXPORT_LOG_PATH', os.path.join(_log_dir(), 'playlist_exports.jsonl'))
+
+
+def _append_jsonl(path: str, record: dict):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with _playlist_log_lock:
             with open(path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(record, default=str) + '\n')
     except Exception as e:
-        logger.warning(f"Failed to write playlist experiment log: {e}")
+        logger.warning(f"Failed to write log {path}: {e}")
+
+
+def log_playlist_event(record: dict):
+    """Append one JSON line per suggest call (the experiment record / data-lake seed)."""
+    _append_jsonl(_playlist_log_path(), record)
+
+
+def log_playlist_export(record: dict):
+    """Append one JSON line per successful 'Export to Spotify' (full builder state snapshot)."""
+    _append_jsonl(_playlist_export_log_path(), record)
 
 def init_search_engine(songs_file: str = None, embeddings_file: str = None, history_path: str = None, artist_embeddings_file: str = None, shared_genre_store_file: str = None, profiles_file: str = None):
     """Initialize the search engine with data files."""
@@ -500,12 +516,16 @@ def get_spotify_oauth():
     
     logger.info(f"Using OAuth redirect URI: {redirect_uri}")
     
+    # In-memory cache: cache_path=None still falls back to a shared on-disk .cache,
+    # and tokens live in the Flask session. show_dialog avoids Spotify's
+    # server_error on silent re-auth after a revoked grant.
     return SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=redirect_uri,
         scope=constants.SPOTIFY_SCOPES,
-        cache_path=None
+        cache_handler=MemoryCacheHandler(),
+        show_dialog=True
     )
 
 # Additional API routes
@@ -632,6 +652,21 @@ def playlist_suggest():
 
     return jsonify(result)
 
+@app.route('/api/playlist/log_export', methods=['POST'])
+def playlist_log_export():
+    """Record the full playlist-builder state at 'Export to Spotify' time.
+
+    One line per successful export, in a separate file from the per-suggest log.
+    """
+    data = request.get_json(silent=True) or {}
+    record = {
+        'ts': datetime.now(timezone.utc).isoformat(),
+        'session_defaults': constants.SESSION_DEFAULTS,  # full preset context (a/b/c weights + knobs)
+        **data,
+    }
+    log_playlist_export(record)
+    return jsonify({'ok': True})
+
 @app.route('/api/create_playlist', methods=['POST'])
 def create_playlist():
     """Create a Spotify playlist with selected songs."""
@@ -681,14 +716,8 @@ def create_playlist():
         # Create Spotify client
         sp = spotipy.Spotify(auth=token_info['access_token'])
         
-        # Get current user info
-        user = sp.current_user()
-        user_id = user['id']
-        
-        # Create playlist
-        playlist = sp.user_playlist_create(
-            user_id, 
-            playlist_name, 
+        playlist = sp.current_user_playlist_create(
+            playlist_name,
             public=False, 
             description=f"Created by SongMatch - {len(valid_songs)} songs"
         )
@@ -752,10 +781,23 @@ def login():
 @app.route('/callback')
 def callback():
     """Spotify OAuth callback."""
+    # Spotify reports failures as ?error= with no code; handle before the token exchange.
+    spotify_error = request.args.get('error')
+    if spotify_error:
+        track_event('Authentication Failed', {
+            'auth_provider': 'spotify',
+            'error_message': f'spotify_error: {spotify_error}'[:200]
+        })
+        logger.error(f"Spotify authorization failed: {spotify_error}")
+        return redirect(url_for('index', auth_error=spotify_error))
+
     try:
         sp_oauth = get_spotify_oauth()
         code = request.args.get('code')
-        token_info = sp_oauth.get_access_token(code)
+        if not code:
+            raise ValueError("Spotify callback returned no authorization code")
+        # check_cache=False: only ever exchange the code we were just handed.
+        token_info = sp_oauth.get_access_token(code, check_cache=False)
         session['token_info'] = token_info
         session['user_id'] = str(uuid.uuid4())  # Generate session user ID
         

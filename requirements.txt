@@ -1,6 +1,6 @@
 flask>=3.0.0
 flask-session>=0.8.0
-spotipy>=2.24.0
+spotipy>=2.26.0  # 2.26 moved playlist items to /playlists/{id}/items (Feb 2026 API change)
 scikit-learn>=1.5.0
 numpy>=1.24.0
 openai>=1.50.0

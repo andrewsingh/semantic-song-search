@@ -57,7 +57,12 @@
             <section class="pb-section pb-suggestions-section">
                 <div class="pb-section-header">
                     <h2>Suggestions</h2>
-                    <button id="pb-reroll-btn" class="pb-btn" disabled>↻ Reroll</button>
+                    <div class="pb-slate-nav">
+                        <button id="pb-back-btn" class="pb-btn pb-nav-btn" title="Previous slate" disabled>◀</button>
+                        <span id="pb-slate-pos" class="pb-slate-pos"></span>
+                        <button id="pb-fwd-btn" class="pb-btn pb-nav-btn" title="Next slate" disabled>▶</button>
+                        <button id="pb-reroll-btn" class="pb-btn" disabled>↻ Reroll</button>
+                    </div>
                 </div>
                 <div id="pb-suggestions-grid" class="pb-grid pb-suggestions-grid">
                     <div class="pb-empty">Suggestions appear once you add a seed song.</div>

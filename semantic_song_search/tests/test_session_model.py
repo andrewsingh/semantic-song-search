@@ -283,6 +283,45 @@ class RefactorParityTests(unittest.TestCase):
         self.assertEqual(withscore["components"], {"a": 1})
 
 
+class BaselineNormalizationTests(unittest.TestCase):
+    def test_rbar_closed_form_and_noops(self):
+        eng, scorer = standard_fixture()
+        scorer._rho_squared = {"genres": 0.6}
+        # n=1 is always a no-op (the (1 - 1/n) term vanishes), even with a baseline.
+        self.assertAlmostEqual(scorer._rbar("genres", 1), 1.0, places=6)
+        # closed form at n=3.
+        self.assertAlmostEqual(scorer._rbar("genres", 3),
+                               math.sqrt(1.0 / 3 + (1.0 - 1.0 / 3) * 0.6), places=6)
+        # aspects without a baseline are un-normalized (R_bar = 1).
+        self.assertEqual(scorer._rbar("tags", 5), 1.0)
+
+    def test_r_hat_applied_in_state(self):
+        eng, scorer = standard_fixture()
+        scorer._rho_squared = {"genres": 0.6}  # only genres gets a baseline
+        resolved = [
+            {"index": 0, "track_id": "t0", "weight": 1.0, "song": eng.songs[0], "artist": "Artist A"},
+            {"index": 1, "track_id": "t1", "weight": 1.0, "song": eng.songs[1], "artist": "Artist A"},
+        ]
+        state = scorer.build_session_state(resolved, default_hp())
+        n_g = state["usable_counts"]["genres"]
+        rbar = math.sqrt(1.0 / n_g + (1.0 - 1.0 / n_g) * 0.6)
+        self.assertAlmostEqual(state["coherence_baseline"]["genres"], rbar, places=6)
+        self.assertAlmostEqual(state["coherence_normalized"]["genres"],
+                               state["coherence"]["genres"] / rbar, places=6)
+        # tags has no baseline -> R_hat == raw R
+        self.assertAlmostEqual(state["coherence_normalized"]["tags"],
+                               state["coherence"]["tags"], places=6)
+
+    def test_n1_still_preset_with_baseline(self):
+        eng, scorer = standard_fixture()
+        scorer._rho_squared = {a: 0.6 for a in SONG_ASPECTS}
+        state = scorer.build_session_state([{"index": 0, "track_id": "t0", "weight": 3.0,
+                                             "song": eng.songs[0], "artist": "Artist A"}], default_hp())
+        preset = constants.SESSION_DEFAULTS["song_weights"]
+        for asp in SONG_ASPECTS:
+            self.assertAlmostEqual(state["session_song_weights"][asp], preset[asp], places=6)
+
+
 class EndpointValidationTests(unittest.TestCase):
     """Exercise the /api/playlist/suggest validation branches with a stub scorer (no engine load)."""
 
@@ -322,6 +361,32 @@ class EndpointValidationTests(unittest.TestCase):
         r = self.post({"playlist": [{"track_id": "t0", "weight": 1}]})
         self.assertEqual(r.status_code, 200)
         self.assertIn("slate_id", r.get_json())
+
+    def test_log_export_writes_snapshot(self):
+        import json as _json
+        import tempfile
+        tmp = os.path.join(tempfile.mkdtemp(), "exports.jsonl")
+        os.environ["PLAYLIST_EXPORT_LOG_PATH"] = tmp
+        try:
+            payload = {
+                "playlist_name": "My Test", "playlist_size": 2,
+                "songs": [{"track_id": "t0", "weight": 3}, {"track_id": "t2", "weight": 1}],
+                "hyperparams": {"kappa": 3, "tau": 0.08, "n": 5, "max_per_artist": 1},
+                "diagnostics": {"song_aspects": {"genres": {"R": 0.9}}, "n": 2},
+            }
+            r = self.client.post("/api/playlist/log_export", json=payload)
+            self.assertEqual(r.status_code, 200)
+            with open(tmp) as f:
+                lines = f.readlines()
+            self.assertEqual(len(lines), 1)  # exactly one line per export
+            rec = _json.loads(lines[0])
+            for key in ("ts", "session_defaults", "playlist_name", "playlist_size", "songs",
+                        "hyperparams", "diagnostics"):
+                self.assertIn(key, rec)
+            self.assertEqual(rec["playlist_name"], "My Test")
+            self.assertEqual(rec["diagnostics"]["song_aspects"]["genres"]["R"], 0.9)
+        finally:
+            os.environ.pop("PLAYLIST_EXPORT_LOG_PATH", None)
 
 
 if __name__ == "__main__":

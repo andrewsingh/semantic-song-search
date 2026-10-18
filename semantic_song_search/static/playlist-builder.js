@@ -24,8 +24,10 @@ class PlaylistBuilder {
         // Session state.
         this.playlistEntries = [];     // [{track_id, weight}] — request source of truth
         this.playlistSongs = [];       // hydrated song objects from the server
-        this.suggestions = [];         // hydrated suggestion objects
-        this.shownExclude = new Set(); // suggestion ids excluded across rerolls
+        this.suggestions = [];         // hydrated suggestion objects (current slate)
+        this.slateHistory = [];        // slates for the current playlist state; back/forward paginate rerolls
+        this.slateIndex = 0;
+        this.seen = new Set(); // suggestion ids the user passed on (by rerolling away) — always excluded so they don't resurface. Co-shown songs you didn't pick when adding are NOT excluded.
         this.prevSlateId = null;
         this.diagnostics = null;
 
@@ -58,6 +60,9 @@ class PlaylistBuilder {
             playlistCount: document.getElementById('pb-playlist-count'),
             suggestionsGrid: document.getElementById('pb-suggestions-grid'),
             rerollBtn: document.getElementById('pb-reroll-btn'),
+            backBtn: document.getElementById('pb-back-btn'),
+            fwdBtn: document.getElementById('pb-fwd-btn'),
+            slatePos: document.getElementById('pb-slate-pos'),
             devPanel: document.getElementById('pb-dev-panel'),
             devToggle: document.getElementById('pb-dev-toggle'),
             devDiagnostics: document.getElementById('pb-dev-diagnostics'),
@@ -87,6 +92,8 @@ class PlaylistBuilder {
         });
 
         this.el.rerollBtn.addEventListener('click', () => this.reroll());
+        this.el.backBtn.addEventListener('click', () => this.showSlate(this.slateIndex - 1));
+        this.el.fwdBtn.addEventListener('click', () => this.showSlate(this.slateIndex + 1));
         this.el.exportBtn.addEventListener('click', () => this.exportPlaylist());
         this.el.devToggle.addEventListener('click', () => this.toggleDevPanel());
         this.el.ctlApply.addEventListener('click', () => this.applyControls());
@@ -211,8 +218,10 @@ class PlaylistBuilder {
         if (this.playlistEntries.length === 0) {
             this.playlistSongs = [];
             this.suggestions = [];
+            this.slateHistory = [];
+            this.slateIndex = 0;
             this.diagnostics = null;
-            this.shownExclude.clear();
+            this.seen.clear();
             this.prevSlateId = null;
             this.renderAll();
             return;
@@ -240,14 +249,17 @@ class PlaylistBuilder {
         this.suggestBusy = true;
         this.el.rerollBtn.disabled = true;
 
-        // Reset the reroll-exclusion window on any non-reroll change.
-        if (trigger !== 'reroll') this.shownExclude.clear();
+        // Reroll = "not these, show me different ones": the slate currently on screen is passed on,
+        // so exclude it from here on. Adding a song does NOT exclude the songs shown alongside it.
+        if (trigger === 'reroll') {
+            this.suggestions.forEach((s) => this.seen.add(s.track_id));
+        }
 
         try {
             const body = {
                 playlist: this.playlistEntries.map((e) => ({ track_id: e.track_id, weight: e.weight })),
                 n: this.hyperparams.n,
-                exclude: Array.from(this.shownExclude),
+                exclude: Array.from(this.seen),
                 hyperparams: {
                     kappa: this.hyperparams.kappa,
                     tau: this.hyperparams.tau,
@@ -259,11 +271,20 @@ class PlaylistBuilder {
                 prev_slate_id: this.prevSlateId,
             };
             const res = await this.api.post('/api/playlist/suggest', body);
+            const slate = res.suggestions || [];
             this.playlistSongs = res.playlist || [];
-            this.suggestions = res.suggestions || [];
             this.diagnostics = res.session_diagnostics || null;
             this.prevSlateId = res.slate_id || null;
-            this.suggestions.forEach((s) => this.shownExclude.add(s.track_id));
+            // Reroll extends the current playlist state's slate history; any other change
+            // (seed/add/remove/anchor/manual_add) starts fresh history for the new set S.
+            if (trigger === 'reroll') {
+                this.slateHistory.push(slate);
+                this.slateIndex = this.slateHistory.length - 1;
+            } else {
+                this.slateHistory = [slate];
+                this.slateIndex = 0;
+            }
+            this.suggestions = slate;
             this.renderAll();
         } catch (e) {
             const msg = (e && e.message) ? e.message : 'Suggestion request failed.';
@@ -350,12 +371,29 @@ class PlaylistBuilder {
         const grid = this.el.suggestionsGrid;
         if (!this.suggestions.length) {
             grid.innerHTML = '<div class="pb-empty">Suggestions appear once you add a seed song.</div>';
-            return;
+        } else {
+            grid.innerHTML = '';
+            this.suggestions.forEach((song, i) => {
+                grid.appendChild(this.makeCard(song, { zone: 'suggestion', rank: i + 1 }));
+            });
         }
-        grid.innerHTML = '';
-        this.suggestions.forEach((song, i) => {
-            grid.appendChild(this.makeCard(song, { zone: 'suggestion', rank: i + 1 }));
-        });
+        this.updateSlateNav();
+    }
+
+    // Show a cached slate from the current playlist state's history (no API call).
+    showSlate(index) {
+        if (index < 0 || index >= this.slateHistory.length) return;
+        this.slateIndex = index;
+        this.suggestions = this.slateHistory[index];
+        this.renderSuggestions();
+    }
+
+    updateSlateNav() {
+        const n = this.slateHistory.length;
+        const i = this.slateIndex;
+        this.el.backBtn.disabled = i <= 0;
+        this.el.fwdBtn.disabled = i >= n - 1;
+        this.el.slatePos.textContent = n > 1 ? `${i + 1} / ${n}` : '';
     }
 
     renderDiagnostics() {
@@ -365,11 +403,17 @@ class PlaylistBuilder {
             return;
         }
         const d = this.diagnostics;
+        const HAT_CAP = 1.5;  // R̂ bar fills at 1.5; the neutral value 1.0 sits at ~67%
         const rows = Object.entries(d.song_aspects).map(([aspect, a]) => {
-            const rpct = Math.round(a.R * 100);
+            const hat = (a.R_hat !== undefined && a.R_hat !== null) ? a.R_hat : a.R;
+            const above = hat >= 1.0;
+            const hatpct = Math.max(0, Math.min(hat / HAT_CAP, 1)) * 100;
+            const baseline = (a.R_baseline ?? 0);
             return `<tr>
                 <td class="pb-aspect">${aspect}</td>
-                <td class="pb-barcell"><div class="pb-bar" style="width:${rpct}%"></div><span>${a.R.toFixed(3)}</span></td>
+                <td class="pb-barcell"><div class="pb-bar ${above ? '' : 'pb-below'}" style="width:${hatpct}%"></div><span class="${above ? 'pb-hat-hi' : 'pb-hat-lo'}">${hat.toFixed(3)}</span></td>
+                <td class="pb-num pb-muted">${a.R.toFixed(3)}</td>
+                <td class="pb-num pb-muted">${baseline.toFixed(3)}</td>
                 <td class="pb-num">${a.session_weight.toFixed(3)}</td>
                 <td class="pb-num pb-muted">${a.preset_weight}</td>
                 <td class="pb-num pb-muted">${a.usable_count}/${d.n}</td>
@@ -381,7 +425,9 @@ class PlaylistBuilder {
             <table class="pb-diag-table">
                 <thead><tr>
                     <th>aspect</th>
-                    <th>coherence R<sub>i</sub></th>
+                    <th title="Coherence normalized by the random-set baseline. >1 = more coherent than a random set of this size; ~1 = no signal. Bar fills at 1.5.">R&#770;<sub>i</sub> (norm.)</th>
+                    <th title="Raw resultant length of the selected set on this aspect.">raw R<sub>i</sub></th>
+                    <th title="Expected coherence of a random set of this size (the baseline R_i is divided by).">R&#772;<sub>i</sub></th>
                     <th>session weight</th>
                     <th>preset</th>
                     <th title="Playlist songs that have an embedding for this aspect, out of n. Aspects with 0 usable get weight 0.">usable</th>
@@ -432,6 +478,7 @@ class PlaylistBuilder {
                 search_context: { source: 'playlist_builder' },
             });
             if (res && res.success) {
+                this.logExport(name, res);
                 this.el.exportStatus.innerHTML =
                     `Created <a href="${res.playlist_url}" target="_blank" rel="noopener">${escapeHtml(res.playlist_name)}</a> (${res.songs_added} tracks).`;
                 this.el.exportStatus.className = 'pb-export-status pb-status-success';
@@ -441,6 +488,28 @@ class PlaylistBuilder {
         } catch (e) {
             this.setExportStatus((e && e.message) || 'Export failed.', 'error');
         }
+    }
+
+    // Record the full builder state at export time (separate log, one line per export).
+    logExport(name, spotifyRes) {
+        const record = {
+            playlist_name: name,
+            playlist_size: this.playlistSongs.length,
+            songs: this.playlistSongs.map((s) => ({
+                track_id: s.track_id, spotify_id: s.spotify_id,
+                song: s.song, artist: s.artist, all_artists: s.all_artists, weight: s.weight,
+            })),
+            hyperparams: { ...this.hyperparams },
+            // diagnostics carries per-aspect R_i, session weights, usable counts, n, lambda_n, era anchor.
+            diagnostics: this.diagnostics,
+            last_slate_id: this.prevSlateId,
+            spotify: spotifyRes ? {
+                playlist_id: spotifyRes.playlist_id,
+                playlist_url: spotifyRes.playlist_url,
+                songs_added: spotifyRes.songs_added,
+            } : null,
+        };
+        this.api.post('/api/playlist/log_export', record).catch(() => {});  // fire-and-forget
     }
 }
 

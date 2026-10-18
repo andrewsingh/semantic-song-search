@@ -35,6 +35,17 @@ class SpotifyPlayer {
         return this.app.searchResultsId;
     }
 
+    // Fetch a fresh Spotify access token from the backend (which refreshes it if expired)
+    // and update the app's cached token. Spotify access tokens expire (~1h), so a stale
+    // cached token is the usual cause of auth failures / "Failed to play song".
+    async fetchFreshToken() {
+        const res = await fetch('/api/token');
+        if (!res.ok) throw new Error(`token endpoint returned ${res.status}`);
+        const data = await res.json();
+        this.app.accessToken = data.access_token;
+        return data.access_token;
+    }
+
     async initSpotifyPlayer() {
         console.log('🎧 initSpotifyPlayer called');
         console.log('🎧 Access token available?', this.accessToken ? 'Yes' : 'No');
@@ -62,9 +73,16 @@ class SpotifyPlayer {
         this.playerInitPromise = new Promise((resolve, reject) => {
             const player = new window.Spotify.Player({
                 name: 'SongMatch',
-                getOAuthToken: cb => { 
+                getOAuthToken: cb => {
                     console.log('🔑 Token requested by Spotify SDK');
-                    cb(this.accessToken); 
+                    // Always hand the SDK a freshly-refreshed token; fall back to the cached
+                    // one only if the refresh call fails.
+                    this.fetchFreshToken()
+                        .then(token => cb(token))
+                        .catch(err => {
+                            console.error('🔑 Token refresh failed, using cached token:', err);
+                            cb(this.accessToken);
+                        });
                 },
                 volume: 0.5
             });
@@ -173,8 +191,16 @@ class SpotifyPlayer {
         }
         
         this.isPlayingSong = true;
-        
+
         try {
+            // Refresh the access token first — a stale (expired) token is the usual cause of
+            // "Failed to play song" once a session has been open for ~an hour.
+            try {
+                await this.fetchFreshToken();
+            } catch (e) {
+                console.warn('⚠️ Could not refresh access token, using cached token:', e);
+            }
+
             // Initialize player if not ready
             if (!this.isPlayerReady) {
                 console.log('🎧 Player not ready, initializing...');

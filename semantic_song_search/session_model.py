@@ -14,7 +14,9 @@ untouched and there is no shared-state race.
 from __future__ import annotations
 
 import logging
+import json
 import math
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -71,8 +73,43 @@ class PlaylistSessionScorer:
         # Per-aspect artist embedding lookups (name -> unit vector), built from the
         # correct path engine.artist_data['embeddings'][aspect].
         self._artist_lookups = self._build_artist_lookups()
+        # Per-song-aspect rho^2 for baseline normalization (Refinement 1); empty if unavailable.
+        self._rho_squared = self._load_coherence_baselines()
 
     # ---- data access -----------------------------------------------------
+
+    def _load_coherence_baselines(self) -> Dict[str, float]:
+        """Load per-song-aspect rho^2 (global concentration) for baseline normalization.
+
+        Baseline R_bar_i^(n) = sqrt(1/n + (1 - 1/n) * rho_i^2). Missing file -> {} (no
+        normalization; the scorer falls back to raw R_i).
+        """
+        path = os.environ.get("COHERENCE_BASELINES_PATH")
+        if not path:
+            emb = getattr(self.engine, "embeddings_file", None)
+            if emb:
+                path = os.path.join(os.path.dirname(str(emb).rstrip("/")),
+                                    "library_v4_coherence_baselines.json")
+        if not path or not os.path.exists(path):
+            logger.info("No coherence baselines found; using raw R_i (no normalization).")
+            return {}
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            rho_sq = {aspect: float(v["rho_squared"])
+                      for aspect, v in data.get("song_aspects", {}).items()}
+            logger.info(f"Loaded coherence baselines for {len(rho_sq)} song aspects from {path}")
+            return rho_sq
+        except Exception as e:
+            logger.warning(f"Failed to load coherence baselines from {path}: {e}")
+            return {}
+
+    def _rbar(self, aspect: str, n: int) -> float:
+        """Closed-form baseline R_bar_i^(n); returns 1.0 (no-op) when no baseline is available."""
+        rho_sq = self._rho_squared.get(aspect)
+        if rho_sq is None or n < 1:
+            return 1.0
+        return math.sqrt(1.0 / n + (1.0 - 1.0 / n) * rho_sq)
 
     def _build_artist_lookups(self) -> Dict[str, Dict[str, np.ndarray]]:
         lookups: Dict[str, Dict[str, np.ndarray]] = {}
@@ -154,11 +191,23 @@ class PlaylistSessionScorer:
                 coherence[aspect] = 0.0
 
         effective: Dict[str, float] = {}
+        r_hat: Dict[str, float] = {}
+        r_baseline: Dict[str, float] = {}
         for aspect in constants.SONG_EMBEDDING_TYPES:
             if usable_counts[aspect] == 0:
                 effective[aspect] = 0.0
+                r_hat[aspect] = 0.0
+                r_baseline[aspect] = 0.0
                 continue
-            r_tilde = (1.0 - lam) + lam * coherence[aspect]  # Phase 1: raw R (no baseline)
+            # Refinement 1: normalize coherence by the random-subset baseline so aspects are
+            # comparable (R_hat ~= 1 means "no more coherent than random"). R_bar = 1 when no
+            # baseline is loaded, so this reduces to raw R_i.
+            rbar = self._rbar(aspect, usable_counts[aspect])
+            r_baseline[aspect] = rbar
+            r_hat_i = coherence[aspect] / rbar if rbar > 0 else coherence[aspect]
+            r_hat[aspect] = r_hat_i
+            # Refinement 2: shrink toward the neutral value 1 by evidence.
+            r_tilde = (1.0 - lam) + lam * r_hat_i
             effective[aspect] = preset_song.get(aspect, 0.0) * r_tilde
         total_eff = sum(effective.values())
         session_song_weights = {
@@ -212,6 +261,8 @@ class PlaylistSessionScorer:
             "lambda_n": lam,
             "centroids": centroids,
             "coherence": coherence,
+            "coherence_normalized": r_hat,
+            "coherence_baseline": r_baseline,
             "usable_counts": usable_counts,
             "session_song_weights": session_song_weights,
             "artist_centroids": artist_centroids,
@@ -410,6 +461,8 @@ class PlaylistSessionScorer:
         for aspect in constants.SONG_EMBEDDING_TYPES:
             aspects[aspect] = {
                 "R": round(state["coherence"].get(aspect, 0.0), 4),
+                "R_hat": round(state["coherence_normalized"].get(aspect, 0.0), 4),
+                "R_baseline": round(state["coherence_baseline"].get(aspect, 0.0), 4),
                 "session_weight": round(state["session_song_weights"].get(aspect, 0.0), 4),
                 "preset_weight": preset_song.get(aspect, 0.0),
                 "usable_count": state["usable_counts"].get(aspect, 0),

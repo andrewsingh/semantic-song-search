@@ -84,6 +84,14 @@
     box-shadow: 0 6px 20px var(--color-primary-alpha-40);
 }
 
+/* Slate back/forward pagination (left of Reroll) */
+.pb-slate-nav { display: flex; align-items: center; gap: var(--space-sm); }
+.pb-nav-btn { padding: 0.5rem 0.7rem; min-width: 0; line-height: 1; }
+.pb-slate-pos {
+    color: var(--color-text-secondary); font-size: 0.85rem;
+    font-variant-numeric: tabular-nums; min-width: 2.8em; text-align: center;
+}
+
 /* Export */
 .pb-export { display: flex; gap: var(--space-sm); align-items: center; }
 .pb-name-input {
@@ -123,4 +131,7 @@
 .pb-muted { color: var(--color-text-secondary); }
 .pb-barcell { position: relative; min-width: 140px; }
 .pb-barcell .pb-bar { height: 8px; background: var(--color-primary); border-radius: var(--radius-sm); display: inline-block; vertical-align: middle; margin-right: 6px; }
+.pb-barcell .pb-bar.pb-below { background: var(--color-text-secondary); opacity: 0.55; }
 .pb-barcell span { font-variant-numeric: tabular-nums; color: var(--color-text-secondary); }
+.pb-barcell span.pb-hat-hi { color: var(--color-primary-bright); font-weight: 600; }
+.pb-barcell span.pb-hat-lo { color: var(--color-text-secondary); }
