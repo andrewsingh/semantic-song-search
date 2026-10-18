@@ -462,19 +462,15 @@ def get_spotify_oauth():
     
     logger.info(f"Using OAuth redirect URI: {redirect_uri}")
     
+    # In-memory cache: cache_path=None still falls back to a shared on-disk .cache,
+    # and tokens live in the Flask session. show_dialog avoids Spotify's
+    # server_error on silent re-auth after a revoked grant.
     return SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=redirect_uri,
         scope=constants.SPOTIFY_SCOPES,
-        # NOTE: cache_path=None does NOT disable caching -- spotipy falls back to
-        # CacheFileHandler(".cache") in the CWD, which is a single shared token
-        # file for every user of this server. We keep tokens in the Flask session
-        # instead, so hand it a throwaway in-memory cache.
         cache_handler=MemoryCacheHandler(),
-        # Force the consent screen. Spotify's silent re-authorize returns
-        # error=server_error when a previous grant was revoked; prompting fixes
-        # that and lets users switch accounts.
         show_dialog=True
     )
 
@@ -580,8 +576,7 @@ def create_playlist():
         # Create Spotify client
         sp = spotipy.Spotify(auth=token_info['access_token'])
         
-        # Create playlist. Spotify removed POST /users/{id}/playlists for
-        # Development Mode apps (Feb 2026); POST /me/playlists replaces it.
+        # POST /me/playlists (POST /users/{id}/playlists was removed in Feb 2026)
         playlist = sp.current_user_playlist_create(
             playlist_name,
             public=False, 
@@ -647,9 +642,7 @@ def login():
 @app.route('/callback')
 def callback():
     """Spotify OAuth callback."""
-    # Spotify reports authorization failures as ?error=..., with no code. Handle
-    # it up front: falling through would call get_access_token(None), which hits
-    # spotipy's cache/interactive-prompt path and masks the real error.
+    # Spotify reports failures as ?error= with no code; handle before the token exchange.
     spotify_error = request.args.get('error')
     if spotify_error:
         track_event('Authentication Failed', {
