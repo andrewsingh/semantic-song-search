@@ -576,7 +576,6 @@ def create_playlist():
         # Create Spotify client
         sp = spotipy.Spotify(auth=token_info['access_token'])
         
-        # POST /me/playlists (POST /users/{id}/playlists was removed in Feb 2026)
         playlist = sp.current_user_playlist_create(
             playlist_name,
             public=False, 
